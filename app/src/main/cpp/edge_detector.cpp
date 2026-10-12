@@ -3,215 +3,6 @@
 #include <numeric>
 #include <cmath>
 
-DetectionResult EdgeDetector::detectDocument(const cv::Mat& grayFrame, bool curvedMode, float touchX, float touchY) {
-    DetectionResult result;
-    result.found = false;
-    result.isCurved = curvedMode;
-
-    if (grayFrame.empty()) return result;
-
-    // 1. 降采样至适中尺寸 (长边 ~640px)，减少高频纹理噪点，保证 60 FPS 极速处理
-    int maxDim = std::max(grayFrame.cols, grayFrame.rows);
-    float scale = (maxDim > 640) ? 640.0f / maxDim : 1.0f;
-    cv::Mat smallFrame;
-    if (scale < 1.0f) {
-        cv::resize(grayFrame, smallFrame, cv::Size(), scale, scale, cv::INTER_AREA);
-    } else {
-        smallFrame = grayFrame;
-    }
-
-    // 计算高频笔画/文本能量密度图 (Sobel 梯度图) 与积分图，用于 MS Lens 风格的图文显著度判定
-    cv::Mat gradX, gradY;
-    cv::Sobel(smallFrame, gradX, CV_16S, 1, 0, 3);
-    cv::Sobel(smallFrame, gradY, CV_16S, 0, 1, 3);
-    cv::convertScaleAbs(gradX, gradX);
-    cv::convertScaleAbs(gradY, gradY);
-    cv::Mat gradMag;
-    cv::addWeighted(gradX, 0.5, gradY, 0.5, 0, gradMag);
-    cv::Mat intGrad;
-    cv::integral(gradMag, intGrad, CV_64F);
-
-    // 2. 对比度受限自适应直方图均衡化 (CLAHE) - 彻底解决白墙+浅色告示弱对比度问题 (SPEC_01 §2.2)
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-    cv::Mat claheFrame;
-    clahe->apply(smallFrame, claheFrame);
-
-    // 3. 高斯滤波平滑微小噪点
-    cv::Mat blurred;
-    cv::GaussianBlur(claheFrame, blurred, cv::Size(5, 5), 1.0);
-
-    // 4. 敏感双阈值 Canny (T_low=25.0, T_high=70.0)，废弃全局 Otsu 避免大面积暗物拉高阈值
-    cv::Mat edges;
-    cv::Canny(blurred, edges, 25.0, 70.0);
-
-    // 5. 形态学闭运算连接微小断裂边缘
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-    cv::morphologyEx(edges, edges, cv::MORPH_CLOSE, kernel);
-
-    // 6. 寻找轮廓
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(edges, contours, cv::RETR_LIST, cv::CHAIN_APPROX_SIMPLE);
-
-    if (contours.empty()) return result;
-
-    // 按轮廓面积降序排列
-    std::sort(contours.begin(), contours.end(), [](const std::vector<cv::Point>& a, const std::vector<cv::Point>& b) {
-        return cv::contourArea(a) > cv::contourArea(b);
-    });
-
-    double frameArea = smallFrame.cols * smallFrame.rows;
-    // SPEC_01 §2.2: 放宽最小面积门限至 0.005 * frameArea (0.5% of frame)，捕获远距离告示牌
-    double minArea = 0.005 * frameArea;
-    double maxArea = 0.95 * frameArea; // 排除摄像头最外边框
-
-    int marginX = static_cast<int>(smallFrame.cols * 0.015);
-    int marginY = static_cast<int>(smallFrame.rows * 0.015);
-
-    cv::Point2f frameCenter(smallFrame.cols * 0.5f, smallFrame.rows * 0.5f);
-    float frameDiag = std::hypot(smallFrame.cols, smallFrame.rows);
-
-    double bestScore = -1.0;
-    std::vector<cv::Point> bestApprox;
-
-    for (const auto& contour : contours) {
-        double area = cv::contourArea(contour);
-        if (area < minArea) break;
-        if (area > maxArea) continue;
-
-        cv::Rect bRect = cv::boundingRect(contour);
-        // 排除刚好贴在屏幕边缘的虚假大框
-        if (bRect.x <= marginX && bRect.y <= marginY &&
-            bRect.x + bRect.width >= smallFrame.cols - marginX &&
-            bRect.y + bRect.height >= smallFrame.rows - marginY) {
-            continue;
-        }
-
-        double perimeter = cv::arcLength(contour, true);
-        std::vector<cv::Point> approx;
-
-        // 尝试多阶自适应多边形拟合
-        for (double epsFactor : {0.02, 0.025, 0.03, 0.035, 0.04}) {
-            cv::approxPolyDP(contour, approx, epsFactor * perimeter, true);
-            if (approx.size() == 4) break;
-        }
-
-        // 如果直接拟合不是4边形，尝试凸包拟合 (应对带折角、圆角或手指轻压的文档)
-        if (approx.size() != 4) {
-            std::vector<cv::Point> hull;
-            cv::convexHull(contour, hull);
-            double hullPerimeter = cv::arcLength(hull, true);
-            for (double epsFactor : {0.02, 0.03, 0.04, 0.05}) {
-                cv::approxPolyDP(hull, approx, epsFactor * hullPerimeter, true);
-                if (approx.size() == 4) break;
-            }
-        }
-
-        if (approx.size() == 4 && cv::isContourConvex(approx)) {
-            // 校验内角：放宽至 40° ~ 140°，完美宽容现实生活中的大角度俯视视角
-            bool validAngles = true;
-            for (int i = 0; i < 4; ++i) {
-                cv::Point p0 = approx[i];
-                cv::Point p1 = approx[(i + 1) % 4];
-                cv::Point p2 = approx[(i + 2) % 4];
-
-                cv::Point2f v1(static_cast<float>(p0.x - p1.x), static_cast<float>(p0.y - p1.y));
-                cv::Point2f v2(static_cast<float>(p2.x - p1.x), static_cast<float>(p2.y - p1.y));
-
-                double dot = v1.x * v2.x + v1.y * v2.y;
-                double norm = std::hypot(v1.x, v1.y) * std::hypot(v2.x, v2.y);
-                if (norm > 0) {
-                    double cosVal = dot / norm;
-                    // cos(40°) ≈ 0.766, cos(140°) ≈ -0.766
-                    if (std::abs(cosVal) > 0.77) {
-                        validAngles = false;
-                        break;
-                    }
-                }
-            }
-
-            if (validAngles) {
-                // 长宽比校验 (放宽至 12.0f，支持地铁站牌、条幅、横幅与长收据)
-                cv::RotatedRect r = cv::minAreaRect(approx);
-                float w = r.size.width;
-                float h = r.size.height;
-                if (w <= 0.0f || h <= 0.0f) continue;
-                float ratio = std::max(w, h) / std::min(w, h);
-
-                if (ratio <= 12.0f) {
-                    double rectArea = w * h;
-                    double rectangularity = (rectArea > 0) ? (area / rectArea) : 0.0;
-                    if (rectangularity < 0.65) continue; // 矩形度门限
-
-                    // 计算多边形质心及画面中心偏好
-                    cv::Point2f polyCenter(0.0f, 0.0f);
-                    for (const auto& pt : approx) {
-                        polyCenter.x += pt.x;
-                        polyCenter.y += pt.y;
-                    }
-                    polyCenter.x /= 4.0f;
-                    polyCenter.y /= 4.0f;
-
-                    float distToCenter = std::hypot(polyCenter.x - frameCenter.x, polyCenter.y - frameCenter.y);
-                    float centerPreference = 1.0f - 0.35f * (distToCenter / (frameDiag * 0.5f));
-                    centerPreference = std::max(0.35f, std::min(1.0f, centerPreference));
-
-                    // MS Lens 核心原理：内部文本与笔画能量密度评估 (Text & Stroke Saliency)
-                    // 空白玻璃车门内部几乎平坦 (meanGrad < 3.0)，而写满车站名与线路的标牌内部充满高频笔画 (meanGrad 15~60)
-                    cv::Rect polyBound = cv::boundingRect(approx);
-                    int insetX = static_cast<int>(polyBound.width * 0.12f);
-                    int insetY = static_cast<int>(polyBound.height * 0.12f);
-                    int innerX = std::max(0, polyBound.x + insetX);
-                    int innerY = std::max(0, polyBound.y + insetY);
-                    int innerW = std::max(1, polyBound.width - 2 * insetX);
-                    int innerH = std::max(1, polyBound.height - 2 * insetY);
-                    if (innerX + innerW > smallFrame.cols) innerW = smallFrame.cols - innerX;
-                    if (innerY + innerH > smallFrame.rows) innerH = smallFrame.rows - innerY;
-
-                    double sumGrad = intGrad.at<double>(innerY + innerH, innerX + innerW)
-                                   - intGrad.at<double>(innerY, innerX + innerW)
-                                   - intGrad.at<double>(innerY + innerH, innerX)
-                                   + intGrad.at<double>(innerY, innerX);
-                    double meanGrad = sumGrad / std::max(1, innerW * innerH);
-
-                    // 显著度增益：文本密度越大，显著度权重越高（从 1.0x 最高提升至 4.0x）
-                    float textSaliency = 1.0f + 3.0f * std::clamp(static_cast<float>(meanGrad - 3.5) / 16.0f, 0.0f, 1.0f);
-
-                    // 触控焦点偏好 (如果传入了触摸坐标，大幅提权包含触控点的四边形)
-                    float touchBonus = 1.0f;
-                    if (touchX >= 0.0f && touchY >= 0.0f) {
-                        cv::Point2f touchPt(touchX * smallFrame.cols, touchY * smallFrame.rows);
-                        if (cv::pointPolygonTest(approx, touchPt, false) >= 0) {
-                            touchBonus = 3.0f;
-                        }
-                    }
-
-                    float areaRatio = static_cast<float>(area / frameArea);
-                    // 综合评分：矩形度 * 中心偏好 * (面积自适应平滑) * 文本显著度 * 触控加权
-                    double score = rectangularity * centerPreference * (std::sqrt(areaRatio) + 0.18) * textSaliency * touchBonus;
-
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestApprox = approx;
-                    }
-                }
-            }
-        }
-    }
-
-    if (bestScore > 0.0 && bestApprox.size() == 4) {
-        std::vector<cv::Point2f> approxFloat;
-        float invScale = (scale < 1.0f) ? (1.0f / scale) : 1.0f;
-        for (const auto& pt : bestApprox) {
-            approxFloat.emplace_back(pt.x * invScale, pt.y * invScale);
-        }
-
-        result.found = true;
-        result.corners = sortCorners(approxFloat);
-    }
-
-    return result;
-}
-
 std::vector<cv::Point2f> EdgeDetector::sortCorners(const std::vector<cv::Point2f>& points) {
     if (points.size() != 4) return points;
 
@@ -542,7 +333,7 @@ EdgeDetector::StructuralLinesResult EdgeDetector::detectStructuralLines(const cv
     float origW = (origWidth > 0.0f) ? origWidth : static_cast<float>(grayImage.cols);
     float origH = (origHeight > 0.0f) ? origHeight : static_cast<float>(grayImage.rows);
 
-    float maxDim = std::max(origW, origH);
+    float maxDim = std::max(grayImage.cols, grayImage.rows);
     float scale = 1.0f;
     cv::Mat lsdInput;
 
@@ -557,19 +348,22 @@ EdgeDetector::StructuralLinesResult EdgeDetector::detectStructuralLines(const cv
     std::vector<cv::Vec4f> detectedLines;
     lsd->detect(lsdInput, detectedLines);
 
-    const float MIN_LENGTH = 25.0f;
+    // 将 lsdInput 坐标系统直接映射至原图坐标系 (origW, origH)
+    float scaleX = origW / static_cast<float>(lsdInput.cols);
+    float scaleY = origH / static_cast<float>(lsdInput.rows);
+    float minLength = 0.015f * std::min(origW, origH);
 
     for (const auto& line : detectedLines) {
-        float x1 = line[0] / scale;
-        float y1 = line[1] / scale;
-        float x2 = line[2] / scale;
-        float y2 = line[3] / scale;
+        float x1 = line[0] * scaleX;
+        float y1 = line[1] * scaleY;
+        float x2 = line[2] * scaleX;
+        float y2 = line[3] * scaleY;
 
         float dx = std::abs(x2 - x1);
         float dy = std::abs(y2 - y1);
         float len = std::hypot(dx, dy);
 
-        if (len < MIN_LENGTH) {
+        if (len < minLength) {
             continue;
         }
 

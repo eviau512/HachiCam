@@ -1,6 +1,7 @@
 #include "perspective_corrector.h"
 #include <cmath>
 #include <algorithm>
+#include "paper_math.h"
 
 cv::Mat PerspectiveCorrector::correctPerspective(const cv::Mat& src, const std::vector<cv::Point2f>& srcCorners, float targetAspectRatio) {
     if (src.empty() || srcCorners.size() != 4) {
@@ -66,180 +67,57 @@ cv::Mat PerspectiveCorrector::correctPerspective(const cv::Mat& src, const std::
     return warped;
 }
 
-cv::Mat PerspectiveCorrector::enhanceMagicColor(const cv::Mat& src) {
-    if (src.empty()) return src;
-
-    // 1. 色彩解耦：转换至 CIE-Lab 空间，仅处理 L 亮度通道，保护 a,b 色度 (红色印章/彩色笔迹)
-    cv::Mat lab;
-    cv::cvtColor(src, lab, cv::COLOR_BGR2Lab);
-
-    std::vector<cv::Mat> channels(3);
-    cv::split(lab, channels);
-    cv::Mat& L = channels[0];
-
-    // 2. 快速低频照度场估计 (Retinex 照度除法流水线):
-    // 降采样至 480px 长边估计全局平滑光照，避免在大图上进行数百毫秒的大核膨胀
-    int maxDim = std::max(L.cols, L.rows);
-    int targetSmall = 480;
-    float scale = (maxDim > targetSmall) ? (static_cast<float>(targetSmall) / maxDim) : 1.0f;
-
-    cv::Mat smallL;
-    if (scale < 1.0f) {
-        cv::resize(L, smallL, cv::Size(), scale, scale, cv::INTER_AREA);
-    } else {
-        smallL = L.clone();
-    }
-
-    int smallKernel = std::max(11, (std::max(smallL.cols, smallL.rows) / 25) | 1);
-    cv::Mat strElem = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(smallKernel, smallKernel));
-    cv::Mat smallDilated;
-    cv::dilate(smallL, smallDilated, strElem); // 快速吞噬文字笔画提取底色
-
-    cv::Mat smallBg;
-    int blurKernel = std::min(25, smallKernel | 1);
-    cv::medianBlur(smallDilated, smallBg, blurKernel);
-
-    cv::Mat bgIllumination;
-    if (scale < 1.0f) {
-        cv::resize(smallBg, bgIllumination, L.size(), 0, 0, cv::INTER_LINEAR);
-    } else {
-        bgIllumination = smallBg;
-    }
-
-    // 3. 照度除法：R = (S / L) * 255.0
-    cv::Mat L_f, bg_f;
-    L.convertTo(L_f, CV_32F);
-    bgIllumination.convertTo(bg_f, CV_32F);
-    cv::max(bg_f, 1.0f, bg_f); // 防除以零
-
-    cv::Mat corrected_f = (L_f / bg_f) * 255.0f;
-
-    // 4. 白底截断与动态对比度拉伸 (Background Pure-White Clamping)
-    float whiteThreshold = 225.0f;
-    float scaleFactor = 255.0f / whiteThreshold;
-
-    cv::Mat L_out(L.size(), CV_8UC1);
-    int rows = L.rows;
-    int cols = L.cols;
-
-    if (corrected_f.isContinuous() && L_out.isContinuous()) {
-        cols *= rows;
-        rows = 1;
-    }
-
-    for (int r = 0; r < rows; ++r) {
-        const float* pIn = corrected_f.ptr<float>(r);
-        uchar* pOut = L_out.ptr<uchar>(r);
-        for (int c = 0; c < cols; ++c) {
-            float val = pIn[c];
-            if (val >= whiteThreshold) {
-                pOut[c] = 255;
-            } else {
-                pOut[c] = static_cast<uchar>(std::clamp(val * scaleFactor, 0.0f, 255.0f));
+namespace {
+cv::Mat paperRendering(const cv::Mat& input, bool gentle) {
+    if (input.empty()) return {};
+    CV_Assert(input.depth() == CV_8U);
+    cv::Mat src;
+    if (input.channels() == 1) cv::cvtColor(input, src, cv::COLOR_GRAY2BGR);
+    else if (input.channels() == 4) cv::cvtColor(input, src, cv::COLOR_BGRA2BGR);
+    else { CV_Assert(input.channels() == 3); src = input; }
+    const double scale = std::min(1.0, 512.0 / std::max(src.cols, src.rows));
+    cv::Mat small, lab, luma, background;
+    cv::resize(src, small, cv::Size(std::max(1, int(std::round(src.cols * scale))),
+        std::max(1, int(std::round(src.rows * scale)))), 0, 0, cv::INTER_AREA);
+    cv::cvtColor(small, lab, cv::COLOR_BGR2Lab);
+    cv::extractChannel(lab, luma, 0);
+    const int kernel = std::max(3, (std::max(small.cols, small.rows) / 25) | 1);
+    cv::morphologyEx(luma, background, cv::MORPH_CLOSE,
+        cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernel, kernel)));
+    cv::GaussianBlur(background, background, cv::Size(0, 0), std::max(.6, kernel * .35), 0, cv::BORDER_REPLICATE);
+    cv::Mat result(src.size(), CV_8UC3);
+    // Tile conversion bounds scratch memory even for a 50 MP source. Sample the
+    // small illumination field directly; no full-size float/integral images.
+    for (int y = 0; y < src.rows; y += 256) {
+        for (int x = 0; x < src.cols; x += 512) {
+            const cv::Rect roi(x, y, std::min(512, src.cols - x), std::min(256, src.rows - y));
+            cv::Mat tile, rendered;
+            cv::cvtColor(src(roi), tile, cv::COLOR_BGR2Lab);
+            for (int ty = 0; ty < tile.rows; ++ty) {
+                auto* row = tile.ptr<cv::Vec3b>(ty);
+                const double sy = std::clamp((y + ty + .5) * background.rows / src.rows - .5, 0.0, double(background.rows - 1));
+                const int y0 = int(sy), y1 = std::min(y0 + 1, background.rows - 1);
+                const float fy = sy - y0;
+                for (int tx = 0; tx < tile.cols; ++tx) {
+                    const double sx = std::clamp((x + tx + .5) * background.cols / src.cols - .5, 0.0, double(background.cols - 1));
+                    const int x0 = int(sx), x1 = std::min(x0 + 1, background.cols - 1);
+                    const float fx = sx - x0;
+                    const float bg = (1 - fy) * ((1 - fx) * background.at<uchar>(y0, x0) + fx * background.at<uchar>(y0, x1)) +
+                        fy * ((1 - fx) * background.at<uchar>(y1, x0) + fx * background.at<uchar>(y1, x1));
+                    const float chroma = std::hypot(float(row[tx][1]) - 128, float(row[tx][2]) - 128);
+                    row[tx][0] = cv::saturate_cast<uchar>(paper::luminance(row[tx][0], bg, chroma, gentle));
+                }
             }
+            cv::cvtColor(tile, rendered, cv::COLOR_Lab2BGR);
+            rendered.copyTo(result(roi));
         }
     }
-
-    // 5. 轻度非局部锐化（增强文字边缘骨力）
-    cv::Mat blurred;
-    cv::GaussianBlur(L_out, blurred, cv::Size(0, 0), 1.2);
-    cv::addWeighted(L_out, 1.25, blurred, -0.25, 0, channels[0]);
-
-    // 6. 重组色彩空间并还原 BGR
-    cv::Mat resultLab, resultBGR;
-    cv::merge(channels, resultLab);
-    cv::cvtColor(resultLab, resultBGR, cv::COLOR_Lab2BGR);
-
-    return resultBGR;
+    return result;
+}
 }
 
-cv::Mat PerspectiveCorrector::enhanceSauvola(const cv::Mat& src, int windowSize, double k, double r, double darkenFactor) {
-    if (src.empty()) return src;
-
-    cv::Mat gray;
-    if (src.channels() == 3) {
-        cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
-    } else {
-        gray = src.clone();
-    }
-
-    int rows = gray.rows;
-    int cols = gray.cols;
-
-    // 自适应调整窗口尺寸（约占短边 3%~5%）
-    int maxDim = std::max(rows, cols);
-    int w = std::max(21, (maxDim / 40) | 1);
-    int halfW = w / 2;
-
-    // 利用积分图 (Integral Image) 实现 O(1) 极速局部均值与方差计算
-    cv::Mat sum, sqsum;
-    cv::integral(gray, sum, sqsum, CV_64F, CV_64F);
-
-    cv::Mat dst(rows, cols, CV_8UC1);
-
-    for (int y = 0; y < rows; ++y) {
-        int y1 = std::max(0, y - halfW);
-        int y2 = std::min(rows - 1, y + halfW);
-
-        const uchar* pGray = gray.ptr<uchar>(y);
-        uchar* pDst = dst.ptr<uchar>(y);
-
-        const double* pSumY1 = sum.ptr<double>(y1);
-        const double* pSumY2 = sum.ptr<double>(y2 + 1);
-        const double* pSqsumY1 = sqsum.ptr<double>(y1);
-        const double* pSqsumY2 = sqsum.ptr<double>(y2 + 1);
-
-        for (int x = 0; x < cols; ++x) {
-            int x1 = std::max(0, x - halfW);
-            int x2 = std::min(cols - 1, x + halfW);
-
-            int count = (x2 - x1 + 1) * (y2 - y1 + 1);
-
-            // 积分图采样矩形和 (修复 sqsum 差分中加回 sqsum(y1, x1) 的 bug)
-            double s = pSumY2[x2 + 1] - pSumY1[x2 + 1] - pSumY2[x1] + pSumY1[x1];
-            double sq = pSqsumY2[x2 + 1] - pSqsumY1[x2 + 1] - pSqsumY2[x1] + pSqsumY1[x1];
-
-            double mean = s / count;
-            double variance = std::max(0.0, (sq / count) - (mean * mean));
-            double stddev = std::sqrt(variance);
-
-            // Sauvola 阈值计算公式 (SPEC_02)
-            double threshold = mean * (1.0 + k * ((stddev / r) - 1.0));
-
-            uchar pixel = pGray[x];
-            if (pixel >= threshold) {
-                pDst[x] = 255; // 纸张纯白
-            } else {
-                // 文字加深
-                pDst[x] = static_cast<uchar>(std::clamp(pixel * darkenFactor, 0.0, 255.0));
-            }
-        }
-    }
-
-    cv::Mat resultBGR;
-    cv::cvtColor(dst, resultBGR, cv::COLOR_GRAY2BGR);
-    return resultBGR;
-}
-
-cv::Mat PerspectiveCorrector::enhanceGrayscale(const cv::Mat& src) {
-    if (src.empty()) return src;
-
-    cv::Mat gray;
-    if (src.channels() == 3) {
-        cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
-    } else {
-        gray = src.clone();
-    }
-
-    // 轻度 CLAHE 提升灰度文档对比度
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-    cv::Mat enhanced;
-    clahe->apply(gray, enhanced);
-
-    cv::Mat resultBGR;
-    cv::cvtColor(enhanced, resultBGR, cv::COLOR_GRAY2BGR);
-    return resultBGR;
-}
+cv::Mat PerspectiveCorrector::enhanceMagicColor(const cv::Mat& src) { return paperRendering(src, false); }
+cv::Mat PerspectiveCorrector::enhancePaper(const cv::Mat& src) { return paperRendering(src, true); }
 
 cv::Mat PerspectiveCorrector::processDocument(const cv::Mat& src, const std::vector<cv::Point2f>& srcCorners, FilterType filter, float targetAspectRatio) {
     cv::Mat warped = correctPerspective(src, srcCorners, targetAspectRatio);
@@ -248,10 +126,8 @@ cv::Mat PerspectiveCorrector::processDocument(const cv::Mat& src, const std::vec
     switch (filter) {
         case FilterType::MAGIC_COLOR:
             return enhanceMagicColor(warped);
-        case FilterType::BW_SAUVOLA:
-            return enhanceSauvola(warped);
-        case FilterType::GRAYSCALE:
-            return enhanceGrayscale(warped);
+        case FilterType::PAPER:
+            return enhancePaper(warped);
         case FilterType::ORIGINAL:
         default:
             return warped;

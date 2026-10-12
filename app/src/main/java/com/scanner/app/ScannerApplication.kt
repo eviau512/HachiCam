@@ -12,6 +12,7 @@ class ScannerApplication : Application() {
         super.onCreate()
         // Initialize OpenCV
         OpenCVLoader.initLocal()
+        com.scanner.app.data.util.DiagnosticAccess.initialize()
 
         // Initialize saved language if configured
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
@@ -23,6 +24,17 @@ class ScannerApplication : Application() {
             if (AppCompatDelegate.getApplicationLocales().isEmpty) {
                 AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(tag))
             }
+        }
+
+        // Clean legacy orphaned temp files in cacheDir on launch
+        try {
+            cacheDir.listFiles()?.forEach { file ->
+                if (file.isFile && (file.name.startsWith("hdr_") || file.name.endsWith(".jpg"))) {
+                    file.delete()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }

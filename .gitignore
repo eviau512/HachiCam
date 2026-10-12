@@ -58,6 +58,7 @@ build_apk_downloads/
 docs/build_logs/
 app/mipmap-backup/
 /tmp/
+.tools/
 
 # Sensitive reverse-engineering & decompiled references (DO NOT COMMIT)
 references/

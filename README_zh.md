@@ -1,6 +1,8 @@
 > [!NOTE]
 > 本项目的作者完全通过 Vibe Coding 构建了本项目，且并不完全清楚这个 Agent 到底偷偷写了些什么代码。 ¯\\\_(ツ)\_/¯
 
+> 当前实现、缺陷修复及未实装功能以 [2026-10-12 实现审计](specs/IMPLEMENTATION_AUDIT_2026-10-12.md) 为准。下方历史功能介绍中的固定 50MP、GPU/OEM 对等和矢量 PDF 描述不应视为已验收承诺。测试版构建入口：`scripts/build-test.ps1`。
+
 <div align="center">
 
 <img src="app/src/hachimi/res/mipmap-xxxhdpi/ic_launcher.png" width="128" height="128" style="border-radius: 28px;" alt="HachiCam Logo" />

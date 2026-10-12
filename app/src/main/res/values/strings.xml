@@ -9,8 +9,7 @@
     <string name="capture">Capture</string>
     <string name="filter_original">Original</string>
     <string name="filter_magic">Magic</string>
-    <string name="filter_bw">B&amp;W</string>
-    <string name="filter_grayscale">Gray</string>
+    <string name="filter_paper">Paper</string>
     <string name="confirm">Confirm</string>
     <string name="cancel">Cancel</string>
     <string name="close">Close</string>
@@ -46,8 +45,8 @@
     <string name="hold_steady">Hold Steady</string>
     <string name="burst_on">Burst ON (Anti-Glare)</string>
     <string name="burst_off">Burst Off</string>
-    <string name="curve_on">Curve On</string>
-    <string name="curve_off">Curve Off</string>
+    <string name="curve_on">Curve: not available</string>
+    <string name="curve_off">Curve: not available</string>
     <string name="processing">Processing&#8230;</string>
     <string name="fusing_burst">Aligning &amp; Fusing Burst&#8230;</string>
     <string name="re_crop">Adjust Boundary</string>
@@ -72,11 +71,11 @@
     <string name="fusing_super_res">Reconstructing 50MP Super-Res&#8230;</string>
     <string name="fusing_hdr">Synthesizing HDR Burst&#8230;</string>
     <string name="fusing_super_res_hdr">Synthesizing 50MP HDR Super-Res&#8230;</string>
-    <string name="fusing_full_hdr">Fusing Full HDR (1+3 Super-Res)&#8230;</string>
+    <string name="fusing_full_hdr">Capturing HDR frames&#8230;</string>
     <string name="full_hdr_title">Full HDR</string>
-    <string name="full_hdr_summary">Multi-frame 1+3 super-resolution with multi-EV highlight recovery. Outputs ~50MP.</string>
+    <string name="full_hdr_summary">Experimental multi-exposure HDR and multi-frame detail reconstruction. Output resolution depends on usable frames.</string>
     <string name="full_hdr_warning_title">Experimental Feature Warning</string>
-    <string name="full_hdr_warning_desc">Full HDR takes over the low-level Camera2 burst pipeline to capture 4 frames at different exposures and sub-pixel offsets. May increase capture time to ~3 s and consume more power.\n\nEnable anyway?</string>
+    <string name="full_hdr_warning_desc">Captures up to 7 JPEG frames. HDR requires supported manual exposure; detail reconstruction requires usable sub-pixel motion. Processing time and output size vary by device and scene.\n\nEnable?</string>
     <string name="confirm_enable">Enable</string>
     <string name="export_logs_title">Export Diagnostic Logs</string>
     <string name="export_logs_summary">Package app logs &amp; device diagnostics for feedback</string>
@@ -94,4 +93,12 @@
     <string name="export_as">Export As</string>
     <string name="delete_selected_title">Delete Pages</string>
     <string name="delete_selected_confirm">Delete %d selected pages?</string>
+    <string name="capture_queue_full">Please wait for a photo to finish processing.</string>
+    <string name="capture_failed">The photo could not be saved. Please try again.</string>
+    <string name="fusion_fallback">HDR processing failed. The reference photo was saved.</string>
+    <string name="import_failed">A selected image could not be imported.</string>
+    <string name="export_not_ready">Wait for all selected photos to finish processing before exporting.</string>
+    <string name="boundary_partial">Edges incomplete · adjust after capture</string>
+    <string name="boundary_found">Edges found</string>
+    <string name="boundary_missing">No clear edges · crop manually</string>
 </resources>

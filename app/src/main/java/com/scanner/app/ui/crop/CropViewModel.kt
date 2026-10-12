@@ -59,6 +59,11 @@ class CropViewModel : ViewModel() {
     private val _detectedQuad = MutableStateFlow<DocumentQuad?>(null)
     val detectedQuad: StateFlow<DocumentQuad?> = _detectedQuad.asStateFlow()
 
+    private val _isProcessing = MutableStateFlow(false)
+    val isProcessing: StateFlow<Boolean> = _isProcessing.asStateFlow()
+
+    private var pageObserveJob: Job? = null
+
     private var grayMat: Mat? = null
     private var edgeMat: Mat? = null
     private var edgeJob: Job? = null
@@ -76,12 +81,12 @@ class CropViewModel : ViewModel() {
 
     private var lsdJob: Job? = null
 
-    fun onBitmapLoaded(bitmap: Bitmap) {
+    fun onBitmapLoaded(bitmap: Bitmap, origW: Float = 0f, origH: Float = 0f) {
         lsdJob?.cancel()
         lsdJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 val detector = com.scanner.app.engine.NativeEdgeDetector()
-                val (hLines, vLines) = detector.detectStructuralLines(bitmap)
+                val (hLines, vLines) = detector.detectStructuralLines(bitmap, origW, origH)
                 _horizontalLines.value = hLines
                 _verticalLines.value = vLines
             } catch (e: Exception) {
@@ -145,14 +150,16 @@ class CropViewModel : ViewModel() {
     }
 
     fun tapToSnap(touchX: Float, touchY: Float) {
-        val addr = _grayMatAddr.value
-        if (addr != 0L) {
+        // Retain a ref-counted Mat header while holding the same lock as release.
+        // A coroutine capturing only the raw address can otherwise use freed memory.
+        val snapshot = synchronized(this) { grayMat?.let { Mat(it, org.opencv.core.Range.all()) } }
+        if (snapshot != null) {
             viewModelScope.launch(Dispatchers.Default) {
-                val detector = com.scanner.app.engine.NativeEdgeDetector()
-                val quad = detector.findContourAtPointAddr(addr, touchX, touchY)
-                if (quad != null) {
-                    _currentQuad.value = quad
-                }
+                try {
+                    val detector = com.scanner.app.engine.NativeEdgeDetector()
+                    val quad = detector.findContourAtPoint(snapshot, touchX, touchY)
+                    if (quad != null) _currentQuad.value = quad
+                } finally { snapshot.release() }
             }
         }
     }
@@ -160,6 +167,28 @@ class CropViewModel : ViewModel() {
     fun loadPage(pageId: String) {
         currentPageId = pageId
         val page = PageRepository.getPage(pageId) ?: return
+
+        if (page.status == com.scanner.app.domain.model.PageStatus.PROCESSING) {
+            _isProcessing.value = true
+            pageObserveJob?.cancel()
+            pageObserveJob = viewModelScope.launch {
+                PageRepository.pages.collect { pages ->
+                    val updated = pages.find { it.id == pageId }
+                    if (updated != null && updated.status != com.scanner.app.domain.model.PageStatus.PROCESSING) {
+                        _isProcessing.value = false
+                        applyPage(updated)
+                        pageObserveJob?.cancel()
+                    }
+                }
+            }
+            return
+        }
+
+        _isProcessing.value = false
+        applyPage(page)
+    }
+
+    private fun applyPage(page: ScannedPage) {
         val savedRatio = page.targetAspectRatio
         val matchedPreset = AspectRatioPreset.fromRatio(savedRatio)
         _selectedRatio.value = matchedPreset
@@ -316,7 +345,7 @@ class CropViewModel : ViewModel() {
                 Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
                 val detector = com.scanner.app.engine.NativeEdgeDetector()
                 val result = detector.detectDocument(gray, false)
-                if (result.found && result.quad != null) {
+                if (result.found && !result.partial && result.quad != null) {
                     _currentQuad.value = result.quad
                     _detectedQuad.value = result.quad
                 }
@@ -340,6 +369,7 @@ class CropViewModel : ViewModel() {
     fun confirmCrop(onDone: () -> Unit = {}) {
         val id = currentPageId ?: run { onDone(); return }
         val page = PageRepository.getPage(id) ?: run { onDone(); return }
+        if (page.status != com.scanner.app.domain.model.PageStatus.READY) { onDone(); return }
         val rawQuad = _currentQuad.value
         val filter = _selectedFilter.value
         val effectiveRatio = if (_selectedRatio.value == AspectRatioPreset.CUSTOM) {
@@ -371,6 +401,7 @@ class CropViewModel : ViewModel() {
 
                     val updatedPage = page.copy(
                         processedImagePath = croppedFile.absolutePath,
+                        rotation = 0,
                         quad = rawQuad,
                         filter = filter,
                         targetAspectRatio = effectiveRatio

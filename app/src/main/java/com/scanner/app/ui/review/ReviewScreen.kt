@@ -64,6 +64,7 @@ import com.scanner.app.domain.model.ImageFilter
 import com.scanner.app.ui.components.AspectRatioBanner
 import com.scanner.app.ui.export.ExportDialog
 import com.scanner.app.ui.theme.PrismCyan
+import com.scanner.app.ui.theme.SteadyEmerald
 import java.io.File
 import kotlinx.coroutines.launch
 
@@ -287,16 +288,10 @@ fun ReviewScreen(
                                         onClick = { viewModel.setBatchFilter(selectedPageIds.toList(), ImageFilter.MAGIC_COLOR) }
                                     )
                                     FilterOptionChip(
-                                        label = stringResource(R.string.filter_bw),
+                                        label = stringResource(R.string.filter_paper),
                                         icon = Icons.Default.Contrast,
                                         isSelected = false,
-                                        onClick = { viewModel.setBatchFilter(selectedPageIds.toList(), ImageFilter.BW) }
-                                    )
-                                    FilterOptionChip(
-                                        label = stringResource(R.string.filter_grayscale),
-                                        icon = Icons.Default.FilterBAndW,
-                                        isSelected = false,
-                                        onClick = { viewModel.setBatchFilter(selectedPageIds.toList(), ImageFilter.GRAYSCALE) }
+                                        onClick = { viewModel.setBatchFilter(selectedPageIds.toList(), ImageFilter.PAPER) }
                                     )
                                 }
                             }
@@ -482,8 +477,9 @@ fun ReviewScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                itemsIndexed(pages) { index, page ->
-                    val bitmap = remember(page.imagePath, imageVersion) {
+                itemsIndexed(pages, key = { _, page -> page.id }) { index, page ->
+                    val bitmap = remember(page.imagePath, imageVersion, page.status) {
+                        if (page.status != com.scanner.app.domain.model.PageStatus.READY) return@remember null
                         val path = page.thumbnailPath ?: page.imagePath
                         val file = File(path)
                         if (file.exists()) {
@@ -515,7 +511,7 @@ fun ReviewScreen(
                         elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 6.dp else 2.dp)
                     ) {
                         Box(modifier = Modifier.fillMaxSize()) {
-                            if (bitmap != null) {
+                            if (bitmap != null && page.status != com.scanner.app.domain.model.PageStatus.PROCESSING) {
                                 Image(
                                     bitmap = bitmap.asImageBitmap(),
                                     contentDescription = "Page ${index + 1}",
@@ -527,10 +523,21 @@ fun ReviewScreen(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(28.dp),
-                                        strokeWidth = 2.5.dp
-                                    )
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        if (page.status == com.scanner.app.domain.model.PageStatus.PROCESSING) CircularProgressIndicator(
+                                            modifier = Modifier.size(28.dp),
+                                            color = SteadyEmerald,
+                                            strokeWidth = 2.5.dp
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = if (page.status == com.scanner.app.domain.model.PageStatus.PROCESSING)
+                                                stringResource(R.string.processing) else stringResource(R.string.capture_failed),
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
 
@@ -620,7 +627,8 @@ fun ReviewScreen(
             rotationAngle.snapTo(0.0f)
         }
 
-        val detailBitmap = remember(page.imagePath, imageVersion) {
+        val detailBitmap = remember(page.imagePath, imageVersion, page.status) {
+            if (page.status == com.scanner.app.domain.model.PageStatus.PROCESSING) return@remember null
             val file = File(page.imagePath)
             if (file.exists()) {
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -902,16 +910,10 @@ fun ReviewScreen(
                             onClick = { viewModel.setPageFilter(page.id, ImageFilter.MAGIC_COLOR) }
                         )
                         FilterOptionChip(
-                            label = stringResource(R.string.filter_bw),
+                            label = stringResource(R.string.filter_paper),
                             icon = Icons.Default.Contrast,
-                            isSelected = page.filter == ImageFilter.BW,
-                            onClick = { viewModel.setPageFilter(page.id, ImageFilter.BW) }
-                        )
-                        FilterOptionChip(
-                            label = stringResource(R.string.filter_grayscale),
-                            icon = Icons.Default.FilterBAndW,
-                            isSelected = page.filter == ImageFilter.GRAYSCALE,
-                            onClick = { viewModel.setPageFilter(page.id, ImageFilter.GRAYSCALE) }
+                            isSelected = page.filter == ImageFilter.PAPER,
+                            onClick = { viewModel.setPageFilter(page.id, ImageFilter.PAPER) }
                         )
                     }
                 }

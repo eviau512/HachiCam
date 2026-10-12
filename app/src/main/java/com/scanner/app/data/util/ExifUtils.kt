@@ -27,6 +27,7 @@ object ExifUtils {
     fun extractMode(exif: ExifInterface): String? {
         val desc = exif.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION)
         if (!desc.isNullOrBlank()) {
+            if (desc.startsWith("Capture Mode: ")) return desc.removePrefix("Capture Mode: ")
             if (desc.contains("Full HDR", ignoreCase = true)) return "Full HDR"
             if (desc.contains("50MP HDR", ignoreCase = true)) return "50MP HDR"
             if (desc.contains("50MP", ignoreCase = true)) return "50MP"
@@ -58,17 +59,17 @@ object ExifUtils {
             val modeSuffix = if (!resolvedMode.isNullOrBlank()) " [$resolvedMode]" else ""
             dstExif.setAttribute(
                 ExifInterface.TAG_SOFTWARE,
-                "HachiCam v0.1.1 (${BuildConfig.GIT_HASH})$modeSuffix"
+                "HachiCam v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_HASH})$modeSuffix"
             )
             dstExif.setAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID, BuildConfig.GIT_HASH)
             dstExif.setAttribute(
                 ExifInterface.TAG_USER_COMMENT,
-                "HachiCam v0.1.1 (Build: ${BuildConfig.GIT_HASH}, ${BuildConfig.BUILD_TIME})${if (!resolvedMode.isNullOrBlank()) ", Mode: $resolvedMode" else ""}"
+                "HachiCam v${BuildConfig.VERSION_NAME} (Build: ${BuildConfig.GIT_HASH}, ${BuildConfig.BUILD_TIME})${if (!resolvedMode.isNullOrBlank()) ", Mode: $resolvedMode" else ""}"
             )
             if (!resolvedMode.isNullOrBlank()) {
                 dstExif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "Capture Mode: $resolvedMode")
             }
-            if (BuildConfig.DEBUG) {
+            if (BuildConfig.SENSITIVE_DIAGNOSTICS) {
                 if (dstExif.getAttribute(ExifInterface.TAG_MAKE).isNullOrBlank()) {
                     dstExif.setAttribute(ExifInterface.TAG_MAKE, Build.MANUFACTURER)
                 }
@@ -100,6 +101,7 @@ object ExifUtils {
         try {
             val srcExif = ExifInterface(srcFile.absolutePath)
             for (tag in CAMERA_TAGS) {
+                if (!BuildConfig.SENSITIVE_DIAGNOSTICS && (tag == ExifInterface.TAG_MAKE || tag == ExifInterface.TAG_MODEL)) continue
                 val value = srcExif.getAttribute(tag)
                 if (value != null) {
                     dstExif.setAttribute(tag, value)
@@ -129,6 +131,29 @@ object ExifUtils {
         try {
             val dstExif = ExifInterface(dstFd)
             copyAndStampExif(srcFile, dstExif, mode)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun copyAndStampExif(srcBytes: ByteArray, dstFile: File, mode: String? = null) {
+        if (!dstFile.exists()) return
+        try {
+            val dstExif = ExifInterface(dstFile.absolutePath)
+            java.io.ByteArrayInputStream(srcBytes).use { inStream ->
+                val srcExif = ExifInterface(inStream)
+                for (tag in CAMERA_TAGS) {
+                    if (!BuildConfig.SENSITIVE_DIAGNOSTICS && (tag == ExifInterface.TAG_MAKE || tag == ExifInterface.TAG_MODEL)) continue
+                    val value = srcExif.getAttribute(tag)
+                    if (value != null) {
+                        dstExif.setAttribute(tag, value)
+                    }
+                }
+                dstExif.setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
+                val effectiveMode = mode ?: extractMode(srcExif)
+                stampSignature(dstExif, effectiveMode)
+                dstExif.saveAttributes()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }

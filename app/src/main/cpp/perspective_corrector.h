@@ -7,8 +7,7 @@
 enum class FilterType {
     ORIGINAL = 0,
     MAGIC_COLOR = 1,
-    BW_SAUVOLA = 2,
-    GRAYSCALE = 3
+    PAPER = 2
 };
 
 class PerspectiveCorrector {
@@ -19,11 +18,8 @@ public:
     // Retinex 照度除法 + Lab 色彩空间保护 (公章/印记保留)
     cv::Mat enhanceMagicColor(const cv::Mat& src);
 
-    // Sauvola 局部自适应二值化 (保留文字笔迹与抑制背景噪点)
-    cv::Mat enhanceSauvola(const cv::Mat& src, int windowSize = 41, double k = 0.2, double r = 128.0, double darkenFactor = 0.5);
-
-    // 平滑灰阶增强
-    cv::Mat enhanceGrayscale(const cv::Mat& src);
+    // Continuous-tone paper rendering with protected faint strokes and color.
+    cv::Mat enhancePaper(const cv::Mat& src);
 
     // 统一处理接口：透视校正 + 滤镜增强一步到位
     cv::Mat processDocument(const cv::Mat& src, const std::vector<cv::Point2f>& srcCorners, FilterType filter, float targetAspectRatio = 0.0f);

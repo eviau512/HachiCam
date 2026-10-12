@@ -5,8 +5,19 @@
 #include "perspective_corrector.h"
 #include "curve_dewarper.h"
 #include "burst_fusion.h"
+#include <cstring>
+#include "vulkan_compute_engine.h"
+#include <android/log.h>
+
+#define TAG "HachiCam-JNI"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 extern "C" {
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    LOGI("HachiCam Native Engine loaded: CPU fusion; experimental Vulkan pipeline inactive");
+    return JNI_VERSION_1_6;
+}
 
 JNIEXPORT jfloatArray JNICALL
 Java_com_scanner_app_engine_NativeEdgeDetector_nativeDetectDocument(JNIEnv* env, jobject /* this */, jlong matAddr, jboolean curvedMode, jfloat touchX, jfloat touchY) {
@@ -34,6 +45,9 @@ Java_com_scanner_app_engine_NativeEdgeDetector_nativeDetectDocument(JNIEnv* env,
         }
     }
 
+    // Tail metadata follows the variable-length point list, including misses.
+    outData.insert(outData.end(), {result.partial ? 1.f : 0.f, float(result.method),
+        float(result.candidates), result.sideSupport});
     jfloatArray retArray = env->NewFloatArray(outData.size());
     env->SetFloatArrayRegion(retArray, 0, outData.size(), outData.data());
     return retArray;
@@ -92,11 +106,8 @@ Java_com_scanner_app_engine_NativePerspective_nativeApplyFilter(JNIEnv* /* env *
         case FilterType::MAGIC_COLOR:
             out = corrector.enhanceMagicColor(*src);
             break;
-        case FilterType::BW_SAUVOLA:
-            out = corrector.enhanceSauvola(*src);
-            break;
-        case FilterType::GRAYSCALE:
-            out = corrector.enhanceGrayscale(*src);
+        case FilterType::PAPER:
+            out = corrector.enhancePaper(*src);
             break;
         case FilterType::ORIGINAL:
         default:
@@ -108,12 +119,16 @@ Java_com_scanner_app_engine_NativePerspective_nativeApplyFilter(JNIEnv* /* env *
     return reinterpret_cast<jlong>(result);
 }
 
-JNIEXPORT jlong JNICALL
-Java_com_scanner_app_engine_NativeBurstFusion_nativeFuseBurstFrames(JNIEnv* env, jobject /* this */, jlongArray matAddrs, jboolean removeGlare, jboolean isScreenMode, jboolean superResolution) {
-    if (!matAddrs) return 0;
+JNIEXPORT jlongArray JNICALL
+Java_com_scanner_app_engine_NativeBurstFusion_nativeFuseBurstFrames(JNIEnv* env, jobject /* this */, jlongArray matAddrs, jboolean removeGlare, jboolean isScreenMode, jboolean superResolution, jintArray tierArray, jdoubleArray exposureArray) {
+    if (!matAddrs) return nullptr;
 
     jsize len = env->GetArrayLength(matAddrs);
-    if (len == 0) return 0;
+    if (len == 0) return nullptr;
+    if (!tierArray || !exposureArray || env->GetArrayLength(tierArray) != len || env->GetArrayLength(exposureArray) != len) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"), "Frame metadata length mismatch");
+        return nullptr;
+    }
 
     jlong* addrs = env->GetLongArrayElements(matAddrs, nullptr);
     std::vector<cv::Mat> frames;
@@ -121,19 +136,32 @@ Java_com_scanner_app_engine_NativeBurstFusion_nativeFuseBurstFrames(JNIEnv* env,
 
     for (int i = 0; i < len; ++i) {
         cv::Mat* pMat = reinterpret_cast<cv::Mat*>(addrs[i]);
-        if (pMat && !pMat->empty()) {
-            frames.push_back(*pMat);
-        }
+        frames.push_back(pMat ? *pMat : cv::Mat());
     }
     env->ReleaseLongArrayElements(matAddrs, addrs, JNI_ABORT);
 
-    if (frames.empty()) return 0;
-
-    BurstFusionEngine engine;
-    cv::Mat fused = engine.fuseBurstFrames(frames, removeGlare, isScreenMode, superResolution);
-
-    cv::Mat* result = new cv::Mat(fused);
-    return reinterpret_cast<jlong>(result);
+    std::vector<int> tiers(len);
+    std::vector<double> exposures(len);
+    env->GetIntArrayRegion(tierArray, 0, len, tiers.data());
+    env->GetDoubleArrayRegion(exposureArray, 0, len, exposures.data());
+    try {
+        BurstFusionEngine engine;
+        BurstFusionEngine::Report report;
+        cv::Mat fused = engine.fuseBurstFrames(frames, removeGlare, isScreenMode, superResolution, tiers, exposures, &report);
+        jlongArray result = env->NewLongArray(21);
+        if (!result) return nullptr;
+        jlong values[21] = {reinterpret_cast<jlong>(new cv::Mat(fused)), report.anchors, report.highlights, report.scale,
+            report.reference, report.crop.x, report.crop.y, report.crop.width, report.crop.height,
+            report.sourceSize.width, report.sourceSize.height};
+        static_assert(sizeof(double) == sizeof(jlong));
+        for (int i = 0; i < 9; ++i) std::memcpy(&values[11 + i], &report.firstToReference.val[i], sizeof(double));
+        values[20] = report.geometryKnown ? 1 : 0;
+        env->SetLongArrayRegion(result, 0, 21, values);
+        return result;
+    } catch (const std::exception& error) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), error.what());
+        return nullptr;
+    }
 }
 
 JNIEXPORT jlong JNICALL
@@ -245,7 +273,9 @@ Java_com_scanner_app_engine_NativeEdgeDetector_nativeFindContourAtPoint(
 JNIEXPORT jobjectArray JNICALL
 Java_com_scanner_app_engine_NativeEdgeDetector_nativeDetectStructuralLines(
     JNIEnv* env, jobject /* this */,
-    jobject bitmap
+    jobject bitmap,
+    jfloat origWidth,
+    jfloat origHeight
 ) {
     jclass floatArrayClass = env->FindClass("[F");
     if (!bitmap) {
@@ -300,11 +330,14 @@ Java_com_scanner_app_engine_NativeEdgeDetector_nativeDetectStructuralLines(
         return result;
     }
 
+    float effectiveW = (origWidth > 0.0f) ? origWidth : static_cast<float>(info.width);
+    float effectiveH = (origHeight > 0.0f) ? origHeight : static_cast<float>(info.height);
+
     EdgeDetector detector;
     EdgeDetector::StructuralLinesResult linesResult = detector.detectStructuralLines(
         gray,
-        static_cast<float>(info.width),
-        static_cast<float>(info.height)
+        effectiveW,
+        effectiveH
     );
 
     jobjectArray result = env->NewObjectArray(2, floatArrayClass, nullptr);

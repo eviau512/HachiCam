@@ -9,7 +9,14 @@ data class DetectionResult(
     val isCurved: Boolean = false,
     val frameWidth: Int = 0,
     val frameHeight: Int = 0,
-    val isStable: Boolean = false
+    val isStable: Boolean = false,
+    val rotationDegrees: Int = 0,
+    val observedAtMs: Long = 0,
+    val partial: Boolean = false,
+    val method: Int = 0,
+    val candidates: Int = 0,
+    val sideSupport: Float = 0f,
+    val analysisDurationMs: Long = 0
 ) {
     val points: List<PointF>
         get() = quad?.toPointList() ?: boundaryPoints ?: emptyList()
