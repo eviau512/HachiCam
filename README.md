@@ -1,6 +1,8 @@
 > [!NOTE]
 > The owner of this repo built this entirely via vibe coding, and isn't quite sure what this Agent actually does. ¯\\\_(ツ)\_/¯
 
+> See the [2026-10-12 implementation audit](specs/IMPLEMENTATION_AUDIT_2026-10-12.md) for verified behavior and missing features. Historical fixed 50MP, GPU/OEM parity and vector PDF claims below are not acceptance results. Build the test APK with `scripts/build-test.ps1`.
+
 <div align="center">
 
 <img src="app/src/hachimi/res/mipmap-xxxhdpi/ic_launcher.png" width="128" height="128" style="border-radius: 28px;" alt="HachiCam Logo" />

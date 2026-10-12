@@ -1,0 +1,52 @@
+# Fusion math regression
+
+This test includes the production `fusion_math.h`. It verifies highlight response,
+color recovery, clipping guards, pixel centers and a synthetic multi-phase sampling
+case. It does not exercise CameraX, registration or the complete JNI pipeline.
+
+Run from the repository root with a C++17 compiler:
+
+```powershell
+g++ -std=c++17 -O2 -I app/src/main/cpp tests/native/fusion_math_test.cpp -o .tools/fusion_math_test.exe
+.\.tools\fusion_math_test.exe
+```
+
+The current synthetic squared-error ratio is approximately 0.226 relative to
+single-frame bilinear interpolation. Camera quality still requires real samples.
+
+## Continuous paper and phase coverage math
+
+Compile `paper_math_test.cpp` with the same include path. This checks the actual
+production luminance function for bounded monotonic output, pale mark contrast,
+dark/color protection and independent two-dimensional sampling phases.
+
+## Production image pipeline regression
+
+Run `scripts/test-quality-native.ps1` from PowerShell. It compiles the production
+registration, fusion, paper and edge-detection C++ sources, substituting only
+Android logging with a console stub. It generates owned synthetic text/page
+fixtures in memory: two depth motions, occlusion, a blurred first arrival,
+independent/identical phases, excessive source border loss, colored/faint ink,
+blank paper and an internal table. Outputs are in `.tools/native-quality-tests.log`.
+The launcher suppresses Windows modal loader/error dialogs and captures failures.
+
+The current host dependency is MSYS2 OpenCV 5.0.0-5, isolated under
+`.tools/opencv-host/ucrt64`. `opencv_compat.h` includes declarations split into the
+OpenCV 5 geometry module. **Android still builds/ships OpenCV 4.10.0**; a host pass
+is not an Android runtime, camera, memory or device-quality pass. No host test
+runtime is packaged in the APK. Compiler/Python/OpenCV paths are overridable.
+
+Verified official package checksums used for this workspace:
+
+| Package | SHA256 |
+| --- | --- |
+| opencv 5.0.0-5 | 62ebea12f642a97d799cecf6103aa8ca2d8418f25972608e6b04ee6b0b1913a7 |
+| tbb 2023.1.0-1 | 1dcd85163ef30c1ce313d72a9f8df90188da2a1b74effa5bb291250d3f7b0f67 |
+| abseil-cpp 20260526.0-1 | 89803dbb88b7e1a18169fd2ecefa2b85de3d99fcd5d6899b737e4451532b691f |
+| protobuf 36.2-1 | 39446eb547ad14187dc6f126ea978ec49c9648db340e14c244da033a030502eb |
+| libstdc++ 16.2.0-5 | 9025eb0c238f1c6093bb7561d9be64523159a8cac212b9c221853ac88c0d341a |
+| libgcc 16.2.0-5 | 5b7efca9a27ce7504a931d92bac39a8009d8347dade0d905d0588aecdf68cb4b |
+
+Packages were obtained from the [official MSYS2 repository](https://repo.msys2.org/mingw/ucrt64/)
+and compared with its package metadata. Existing compiler/threading/zlib runtimes
+supply other dependencies; the project does not replace the system installation.

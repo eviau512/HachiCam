@@ -9,8 +9,7 @@
     <string name="capture">拍摄</string>
     <string name="filter_original">原图</string>
     <string name="filter_magic">增亮</string>
-    <string name="filter_bw">黑白</string>
-    <string name="filter_grayscale">灰度</string>
+    <string name="filter_paper">类纸</string>
     <string name="confirm">确认</string>
     <string name="cancel">取消</string>
     <string name="close">关闭</string>
@@ -46,8 +45,8 @@
     <string name="hold_steady">请保持稳定</string>
     <string name="burst_on">连拍去反光 开</string>
     <string name="burst_off">连拍去反光 关</string>
-    <string name="curve_on">曲面展平 开</string>
-    <string name="curve_off">曲面展平 关</string>
+    <string name="curve_on">曲面：暂不可用</string>
+    <string name="curve_off">曲面：暂不可用</string>
     <string name="processing">正在处理&#8230;</string>
     <string name="fusing_burst">正在多帧对齐与融合&#8230;</string>
     <string name="re_crop">调整边界</string>
@@ -72,11 +71,11 @@
     <string name="fusing_super_res">正在进行 50MP 多帧超分融合&#8230;</string>
     <string name="fusing_hdr">正在进行 HDR 多曝光合成&#8230;</string>
     <string name="fusing_super_res_hdr">正在进行 50MP HDR 超分合成&#8230;</string>
-    <string name="fusing_full_hdr">Full HDR 合成中（1主3辅超分）&#8230;</string>
+    <string name="fusing_full_hdr">正在拍摄 HDR 帧&#8230;</string>
     <string name="full_hdr_title">Full HDR</string>
-    <string name="full_hdr_summary">多帧亚像素超分（1主3辅）+ 多重曝光高光恢复，输出约 50MP 画质。</string>
+    <string name="full_hdr_summary">实验性多曝光 HDR 与多帧细节重建。输出分辨率取决于有效帧。</string>
     <string name="full_hdr_warning_title">⚠️ 实验性功能警告</string>
-    <string name="full_hdr_warning_desc">Full HDR 将接管底层 Camera2 连拍管线，拍摄 4 帧（不同曝光与亚像素偏移）用于超分与高动态范围合成。拍摄时间约 3 秒，耗电相对较高。\n\n是否确认开启？</string>
+    <string name="full_hdr_warning_desc">最多拍摄 7 帧 JPEG。HDR 需要设备支持手动曝光，细节重建需要有效的亚像素位移。处理耗时和输出尺寸因设备及场景而异。\n\n是否启用？</string>
     <string name="confirm_enable">确认开启</string>
     <string name="export_logs_title">导出诊断日志</string>
     <string name="export_logs_summary">打包 App 运行日志与硬件环境信息以供排障</string>
@@ -94,4 +93,12 @@
     <string name="export_as">导出为</string>
     <string name="delete_selected_title">删除页面</string>
     <string name="delete_selected_confirm">确定要删除选中的 %d 个页面吗？</string>
+    <string name="capture_queue_full">照片正在处理中，请稍后再拍。</string>
+    <string name="capture_failed">照片保存失败，请重试。</string>
+    <string name="fusion_fallback">HDR 处理失败，已保存基准照片。</string>
+    <string name="import_failed">部分所选照片无法导入。</string>
+    <string name="export_not_ready">请等待所选照片处理完成后再导出。</string>
+    <string name="boundary_partial">边缘不完整 · 拍后调整</string>
+    <string name="boundary_found">已找到边缘</string>
+    <string name="boundary_missing">未找到清晰边缘 · 可手动裁切</string>
 </resources>

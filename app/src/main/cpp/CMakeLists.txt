@@ -12,9 +12,12 @@ add_library(
         doc_scanner_engine
         SHARED
         edge_detector.cpp
+        document_boundary.cpp
         perspective_corrector.cpp
         curve_dewarper.cpp
         burst_fusion.cpp
+        fusion_pipeline.cpp
+        local_registration.cpp
         vulkan_compute_engine.cpp
         jni_bridge.cpp
 )
@@ -29,5 +32,5 @@ target_link_libraries(
         ${vulkan-lib}
 )
 
-target_compile_options(doc_scanner_engine PRIVATE -O3 -ffast-math -fopenmp)
+target_compile_options(doc_scanner_engine PRIVATE -O3 -fopenmp)
 target_link_options(doc_scanner_engine PRIVATE -fopenmp -static-openmp)

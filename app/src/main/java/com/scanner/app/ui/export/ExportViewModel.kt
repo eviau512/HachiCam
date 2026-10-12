@@ -29,6 +29,9 @@ class ExportViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             _exportState.value = ExportState.Exporting
             try {
+                check(pages.isNotEmpty() && pages.all { it.status == com.scanner.app.domain.model.PageStatus.READY }) {
+                    context.getString(com.scanner.app.R.string.export_not_ready)
+                }
                 val exportedFile = when (config.exportMode) {
                     ExportMode.FOLDER -> {
                         val exporter = FolderExporter(context)

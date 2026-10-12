@@ -3,36 +3,50 @@ package com.scanner.app.engine
 import org.opencv.core.Mat
 
 class NativeBurstFusion {
+    data class Report(val anchors: Int = 1, val highlights: Int = 0, val scale: Int = 1,
+        val reference: Int = 0, val left: Int = 0, val top: Int = 0, val cropW: Int = 0,
+        val cropH: Int = 0, val sourceW: Int = 0, val sourceH: Int = 0,
+        val firstToReference: DoubleArray = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+        val geometryKnown: Boolean = true)
+    var lastReport = Report()
+        private set
 
     init {
         System.loadLibrary("doc_scanner_engine")
     }
 
     /**
-     * 将多帧连拍图像进行单应性配准、时域中值降噪、屏幕防过曝与曝光融合 (SPEC_08)
-     * @param burstFrames 2~5 帧连拍输入 Mat 列表
-     * @param removeGlare 是否开启智能反光擦除 (Anti-Glare)
-     * @param isScreenMode 是否开启屏幕特化防过曝增强与 Mertens 曝光融合
-     * @return 融合后的高清纯净基准 Mat
+     * CPU JPEG fusion with explicit exposure tiers and conditional 2x phase reconstruction.
+     * Tiers: 0 = reference exposure, 1/2 = shorter exposures; products are ISO * ns.
+     * [lastReport] describes accepted plates and actual output scale, including degradation.
      */
     fun fuseBurstFrames(
         burstFrames: List<Mat>,
         removeGlare: Boolean = true,
         isScreenMode: Boolean = true,
-        superResolution: Boolean = false
+        superResolution: Boolean = false,
+        tiers: IntArray = IntArray(burstFrames.size),
+        exposureProducts: DoubleArray = DoubleArray(burstFrames.size)
     ): Mat {
         if (burstFrames.isEmpty()) return Mat()
         if (burstFrames.size == 1 && !superResolution) return burstFrames[0].clone()
 
         val addrs = burstFrames.map { it.nativeObjAddr }.toLongArray()
-        val resultAddr = nativeFuseBurstFrames(addrs, removeGlare, isScreenMode, superResolution)
-        return Mat(resultAddr)
+        require(tiers.size == burstFrames.size && exposureProducts.size == burstFrames.size)
+        val result = nativeFuseBurstFrames(addrs, removeGlare, isScreenMode, superResolution, tiers, exposureProducts)
+        if (result.size < 21 || result[0] == 0L) return Mat()
+        lastReport = Report(result[1].toInt(), result[2].toInt(), result[3].toInt(), result[4].toInt(),
+            result[5].toInt(), result[6].toInt(), result[7].toInt(), result[8].toInt(), result[9].toInt(), result[10].toInt(),
+            DoubleArray(9) { Double.fromBits(result[11 + it]) }, result[20] == 1L)
+        return Mat(result[0])
     }
 
     private external fun nativeFuseBurstFrames(
         matAddrs: LongArray,
         removeGlare: Boolean,
         isScreenMode: Boolean,
-        superResolution: Boolean
-    ): Long
+        superResolution: Boolean,
+        tiers: IntArray,
+        exposureProducts: DoubleArray
+    ): LongArray
 }

@@ -10,7 +10,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.dp
 import com.scanner.app.domain.model.DetectionResult
 
@@ -34,8 +36,10 @@ fun EdgeOverlay(
     var targetP1 by remember { mutableStateOf(Offset.Zero) }
     var targetP2 by remember { mutableStateOf(Offset.Zero) }
     var targetP3 by remember { mutableStateOf(Offset.Zero) }
+    var targetPartial by remember { mutableStateOf(false) }
 
     if (isFound && points.size >= 4) {
+        targetPartial = detectionResult.partial
         targetP0 = Offset(points[0].x, points[0].y)
         targetP1 = Offset(points[1].x, points[1].y)
         targetP2 = Offset(points[2].x, points[2].y)
@@ -49,20 +53,21 @@ fun EdgeOverlay(
 
     if (animatedAlpha <= 0.01f) return
 
-    val strokeColor = if (isCurvedMode) Color(0xFF00B0FF) else Color(0xFF00E676)
+    val strokeColor = if (targetPartial) Color(0xFFFFBB44) else if (isCurvedMode) Color(0xFF00B0FF) else Color(0xFF00E676)
     val cornerColor = Color.White
 
     Canvas(modifier = modifier.fillMaxSize()) {
         val frameW = if (detectionResult.frameWidth > 0) detectionResult.frameWidth.toFloat() else size.width
         val frameH = if (detectionResult.frameHeight > 0) detectionResult.frameHeight.toFloat() else size.height
 
-        val scale = maxOf(size.width / frameW, size.height / frameH)
+        val scale = minOf(size.width / frameW, size.height / frameH)
         val offsetX = (size.width - frameW * scale) / 2f
         val offsetY = (size.height - frameH * scale) / 2f
 
         fun mapX(x: Float) = x * scale + offsetX
         fun mapY(y: Float) = y * scale + offsetY
 
+        clipRect(offsetX, offsetY, offsetX + frameW * scale, offsetY + frameH * scale) {
         if (!isCurvedMode) {
             val s0 = Offset(mapX(animP0.x), mapY(animP0.y))
             val s1 = Offset(mapX(animP1.x), mapY(animP1.y))
@@ -81,7 +86,8 @@ fun EdgeOverlay(
             drawPath(
                 path = path,
                 color = strokeColor.copy(alpha = animatedAlpha),
-                style = Stroke(width = 2.5.dp.toPx())
+                style = Stroke(width = 2.5.dp.toPx(), pathEffect = if (targetPartial)
+                    PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 7.dp.toPx())) else null)
             )
 
             // Sleek corner markers
@@ -120,6 +126,7 @@ fun EdgeOverlay(
                     style = Stroke(width = 2.5.dp.toPx())
                 )
             }
+        }
         }
     }
 }

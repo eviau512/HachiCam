@@ -14,13 +14,16 @@ class NativeEdgeDetector {
 
     fun detectDocument(grayMat: Mat, curvedMode: Boolean, touchX: Float = -1.0f, touchY: Float = -1.0f): DetectionResult {
         val resultArr = nativeDetectDocument(grayMat.nativeObjAddr, curvedMode, touchX, touchY)
+        val tail = 3 + (resultArr.getOrNull(2)?.toInt() ?: 0).coerceAtLeast(0) * 2
+        val base = DetectionResult(
+            found = false, frameWidth = grayMat.cols(), frameHeight = grayMat.rows(),
+            partial = resultArr.getOrNull(tail) == 1f,
+            method = resultArr.getOrNull(tail + 1)?.toInt() ?: 0,
+            candidates = resultArr.getOrNull(tail + 2)?.toInt() ?: 0,
+            sideSupport = resultArr.getOrNull(tail + 3) ?: 0f
+        )
         if (resultArr.isEmpty() || resultArr[0] == 0.0f) {
-            return DetectionResult(
-                found = false,
-                isCurved = curvedMode,
-                frameWidth = grayMat.cols(),
-                frameHeight = grayMat.rows()
-            )
+            return base
         }
         
         val isCurved = resultArr[1] == 1.0f
@@ -33,7 +36,7 @@ class NativeEdgeDetector {
                 bottomRight = PointF(resultArr[7], resultArr[8]),
                 bottomLeft = PointF(resultArr[9], resultArr[10])
             )
-            return DetectionResult(
+            return base.copy(
                 found = true,
                 quad = quad,
                 isCurved = false,
@@ -49,7 +52,7 @@ class NativeEdgeDetector {
                 pts.add(PointF(resultArr[offset], resultArr[offset + 1]))
                 offset += 2
             }
-            return DetectionResult(
+            return base.copy(
                 found = true,
                 boundaryPoints = pts,
                 isCurved = true,
@@ -58,12 +61,7 @@ class NativeEdgeDetector {
             )
         }
         
-        return DetectionResult(
-            found = false,
-            isCurved = curvedMode,
-            frameWidth = grayMat.cols(),
-            frameHeight = grayMat.rows()
-        )
+        return base
     }
 
     fun findSnapPoint(edgeMat: Mat, touchX: Float, touchY: Float, radius: Float): PointF? {

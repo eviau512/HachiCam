@@ -9,6 +9,10 @@ struct DetectionResult {
     std::vector<cv::Point2f> corners; // 顺序恒为: Top-Left, Top-Right, Bottom-Right, Bottom-Left
     bool isCurved;
     std::vector<cv::Point2f> boundaryPoints;
+    bool partial = false; // Extrapolated suggestion; NEVER an automatic crop.
+    int method = 0;       // 0 none, 1 contour, 2 line assembly.
+    int candidates = 0;
+    float sideSupport = 0; // Weakest observed side, not a probability.
 };
 
 class EdgeDetector {

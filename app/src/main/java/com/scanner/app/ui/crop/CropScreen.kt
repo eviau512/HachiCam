@@ -209,16 +209,10 @@ fun CropScreen(
                                 onClick = { viewModel.setFilter(ImageFilter.MAGIC_COLOR) }
                             )
                             CropFilterChip(
-                                label = stringResource(R.string.filter_bw),
+                                label = stringResource(R.string.filter_paper),
                                 icon = Icons.Default.Contrast,
-                                isSelected = selectedFilter == ImageFilter.BW,
-                                onClick = { viewModel.setFilter(ImageFilter.BW) }
-                            )
-                            CropFilterChip(
-                                label = stringResource(R.string.filter_grayscale),
-                                icon = Icons.Default.FilterBAndW,
-                                isSelected = selectedFilter == ImageFilter.GRAYSCALE,
-                                onClick = { viewModel.setFilter(ImageFilter.GRAYSCALE) }
+                                isSelected = selectedFilter == ImageFilter.PAPER,
+                                onClick = { viewModel.setFilter(ImageFilter.PAPER) }
                             )
                         }
 

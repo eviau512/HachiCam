@@ -150,14 +150,16 @@ class CropViewModel : ViewModel() {
     }
 
     fun tapToSnap(touchX: Float, touchY: Float) {
-        val addr = _grayMatAddr.value
-        if (addr != 0L) {
+        // Retain a ref-counted Mat header while holding the same lock as release.
+        // A coroutine capturing only the raw address can otherwise use freed memory.
+        val snapshot = synchronized(this) { grayMat?.let { Mat(it, org.opencv.core.Range.all()) } }
+        if (snapshot != null) {
             viewModelScope.launch(Dispatchers.Default) {
-                val detector = com.scanner.app.engine.NativeEdgeDetector()
-                val quad = detector.findContourAtPointAddr(addr, touchX, touchY)
-                if (quad != null) {
-                    _currentQuad.value = quad
-                }
+                try {
+                    val detector = com.scanner.app.engine.NativeEdgeDetector()
+                    val quad = detector.findContourAtPoint(snapshot, touchX, touchY)
+                    if (quad != null) _currentQuad.value = quad
+                } finally { snapshot.release() }
             }
         }
     }
@@ -343,7 +345,7 @@ class CropViewModel : ViewModel() {
                 Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
                 val detector = com.scanner.app.engine.NativeEdgeDetector()
                 val result = detector.detectDocument(gray, false)
-                if (result.found && result.quad != null) {
+                if (result.found && !result.partial && result.quad != null) {
                     _currentQuad.value = result.quad
                     _detectedQuad.value = result.quad
                 }
@@ -367,6 +369,7 @@ class CropViewModel : ViewModel() {
     fun confirmCrop(onDone: () -> Unit = {}) {
         val id = currentPageId ?: run { onDone(); return }
         val page = PageRepository.getPage(id) ?: run { onDone(); return }
+        if (page.status != com.scanner.app.domain.model.PageStatus.READY) { onDone(); return }
         val rawQuad = _currentQuad.value
         val filter = _selectedFilter.value
         val effectiveRatio = if (_selectedRatio.value == AspectRatioPreset.CUSTOM) {
@@ -398,6 +401,7 @@ class CropViewModel : ViewModel() {
 
                     val updatedPage = page.copy(
                         processedImagePath = croppedFile.absolutePath,
+                        rotation = 0,
                         quad = rawQuad,
                         filter = filter,
                         targetAspectRatio = effectiveRatio

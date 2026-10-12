@@ -1,136 +1,129 @@
-# Specification 00: System Architecture & Technology Stack
-## 技术规格书 00：系统架构与技术栈规范
+# Specification 00: System Architecture and Technology Stack
 
-> **Document Status**: Authoritative Architecture Specification  
-> **Target Audience**: Core Engineers & Contributors  
-> **Languages**: Primary: English / Secondary: Chinese (Bilingual Executive Summaries)
+> Status: Authoritative. Revised 2026-10-12.
+> Language: English. Chinese reports are explanatory and do not override this document.
 
----
+## 1. Scope and status vocabulary
 
-## 1. Executive Summary & Design Philosophy / 核心设计理念
+HachiCam processes camera captures and imported documents on the Android device.
+The seven current specifications define the contract; historical research and
+archived designs cannot override them.
 
-HachiCam is a 100% on-device, zero-network-dependency, high-precision document scanner and computational photography application for Android.
+- **Implemented** means present in the inspected working tree, not independently
+  verified on every device.
+- **Experimental** means an implemented algorithm or tuning choice whose image
+  quality or portability still needs measurement.
+- **Required / not implemented** defines acceptance for future implementation;
+  writing the requirement does not make the feature available.
+- **Research candidate** is outside the current product contract.
 
-### Core Architectural Tenets
-1. **Zero Network Permissions & Absolute Privacy (`INTERNET_FREE`)**:
-   - `android.permission.INTERNET` is deliberately omitted from `AndroidManifest.xml`. Network egress is physically impossible at the OS kernel permission level.
-   - All edge detection, multi-frame homography alignment, GPU HDR tone mapping, adaptive binarization, and PDF generation are executed strictly on the local CPU/GPU.
-2. **De-Googled & Open-Source Friendly (Zero GMS Dependency)**:
-   - Free from proprietary Google Play Services (e.g. ML Kit Document Scanner, Play Core).
-   - Guarantees 100% functionality on AOSP custom distributions (GrapheneOS, CalyxOS, LineageOS) and international markets without Google services.
-3. **Deterministic Mathematical Vision vs. Generative Hallucination**:
-   - Rather than relying on non-deterministic generative neural networks that risk stroke hallucination on numerical tables, text, or financial receipts, HachiCam builds upon classical computer vision: Retinex illumination decomposition in CIE-Lab, Sauvola integral-image adaptive thresholding, ORB + relaxed RANSAC homography, and Vulkan GPU local tone mapping.
+Every change follows problem analysis, specification analysis, specification and
+acceptance revision, then implementation and verification. The present revision
+delivers specifications and reports; it does not implement the new requirements.
 
----
+## 2. Architectural principles
 
-## 2. Technology Stack Matrix / 技术栈全景
+1. Processing is local. The application manifest omits INTERNET and the product
+   must have no network dependency or GMS requirement for its scanner functions.
+   User initiated sharing is a separate explicit export action.
+2. Preserve document evidence: enhancement must not invent text, digits, stamps,
+   signatures, or detail hidden by clipping or occlusion.
+3. Non-generative learned detection/quality models are a research option, not
+   equivalent to generative content synthesis. Any future model requires clear
+   licensing, on-device behavior, resource limits, reproducibility and the same
+   fidelity/fallback acceptance as classical processing. Packaged competitor
+   model files do not prove their active role or justify copying them.
+4. Retain a source image independently of derived renderings. Geometry and
+   appearance are separate operations and must remain reversible.
+5. Camera requests describe intent. Actual frame metadata, supported device
+   capabilities, valid image data, and measured results determine achieved behavior.
+6. Keep UI state, page identity, native image ownership, and background processing
+   lifetimes explicit. Failure must be visible and must preserve the last valid image.
 
-| Layer / Subsystem | Technology | Version | Purpose & Rationale |
-|:---|:---|:---|:---|
-| **Operating System** | Android OS | minSdk 29 (Android 10), targetSdk 35 | Modern Scoped Storage and full Camera2 hardware level support |
-| **Languages** | Kotlin / C++17 | Kotlin 2.0 / Clang LLVM 17 | Type-safe declarative application layer + bare-metal high-throughput native compute |
-| **UI Framework** | Jetpack Compose / Material 3 | Compose 1.7+ (BOM 2024.09) | 60 FPS gesture tracking, reactive touch-to-focus ring, loupe projection |
-| **Camera Subsystem** | CameraX + Camera2Interop | CameraX 1.4.1 | Lifecycle management with low-level Camera2 hardware manual parameter overrides |
-| **GPU Acceleration** | Vulkan Compute | Vulkan 1.1 / 1.3 SPIR-V | Direct dispatch to Adreno / Mali compute shaders (`vulkan_hdr_ltm.comp`) |
-| **Native CV Engine** | OpenCV C++ NDK | OpenCV 4.10.0 (Prefab) | Zero-copy matrix math, NEON SIMD optimizations, OpenMP parallelism |
-| **Build Automation** | Gradle / CMake | Gradle 8.14, CMake 3.22.1 | Multi-ABI builds (`arm64-v8a`, `armeabi-v7a`, `x86_64`) with reproducible Git metadata |
-| **PDF Generation** | Android Framework `PdfDocument` | Android Core SDK | Lightweight vector document packaging without bloated third-party libraries |
-| **EXIF Engine** | AndroidX `ExifInterface` | 1.3.7 | In-place orientation normalization and tamper-evident provenance stamping |
+## 3. Current component architecture
 
----
+| Component | Inspected implementation | Important limit |
+| --- | --- | --- |
+| UI | Kotlin, Jetpack Compose, Material 3; camera, crop, review and export screens | UI availability is not proof that every historical design is implemented |
+| Camera | CameraX with Camera2Interop; JPEG capture and preview analysis | Vendor processing and manual control vary by camera |
+| Native vision | C++17 and OpenCV; contour detection, line snapping, perspective correction and four filters | Heuristic image processing, not semantic document recognition |
+| Burst processing | CPU alignment, experimental sampling reconstruction and short exposure highlight recovery | JPEG inputs; no active RAW or Vulkan fusion path |
+| Page state | In-memory repository with PROCESSING, READY and FAILED | Durable page metadata and process death recovery are not implemented |
+| Image storage | App private scans directory for completed images | Source and derivative edit transactions need stronger guarantees |
+| Export | Android PDF container with raster scanned pages and image export | No OCR or vectorized text layer |
+| Vulkan / curved geometry | Existing experimental primitives | Presence of code or shader files does not constitute a connected product feature |
 
-## 3. System Architecture & Component Topology / 分层架构拓扑
+Repository build files are authoritative for dependency versions and ABI selection.
+The current architecture uses Android minSdk 29 / targetSdk 35, CameraX 1.4.1 and
+OpenCV 4.10.0. These are repository configuration observations, not a promise that
+third party applications or OEM pipelines use the same components.
 
-```mermaid
-graph TD
-    subgraph UI_Layer ["Presentation Layer (Jetpack Compose / Material 3)"]
-        CameraScreen["CameraScreen (Preview, Tap-to-Focus, Stability Ring)"]
-        CropScreen["CropScreen (Quad Interaction, 2.8x Loupe, Magnetic Snap)"]
-        ReviewScreen["ReviewScreen (Page Reorder, Filter Selection, Color Tuning)"]
-        SettingsScreen["SettingsScreen (Full HDR Toggle, Diagnostics)"]
-    end
+## 4. Shared image and processing contract
 
-    subgraph VM_Layer ["State & ViewModel Layer (Kotlin Coroutines / StateFlow)"]
-        CameraVM["CameraViewModel"]
-        CropVM["CropViewModel"]
-        ReviewVM["ReviewViewModel"]
-        ExportVM["ExportViewModel"]
-    end
+**Required / partly implemented.** Each operation must have a defined input
+orientation, dimensions, valid crop region, color interpretation, pixel type,
+source identity, and output dimensions. SPEC_01 owns decoding and camera mapping;
+SPEC_03 owns crop coordinates; SPEC_04 owns rendering and filter semantics.
 
-    subgraph Data_Layer ["Data & Repository Layer"]
-        PageRepo["PageRepository (Reactive Document Store)"]
-        ImageStore["ImageStorage (App-Private Scoped Sandbox)"]
-        ExifUtil["ExifUtils (Orientation Normalization & Mode Stamping)"]
-        PdfExport["PdfExporter (Vector PDF Compilation)"]
-    end
+A future render request shall identify the page, source revision, crop, output
+rotation, aspect policy, filter and parameter version, output scale and request
+generation. A result may publish only if those identities still match current
+state. A deleted page must not be recreated by a late result.
 
-    subgraph JNI_Layer ["Native Bridge (JNI C++)"]
-        JEdge["NativeEdgeDetector"]
-        JPersp["NativePerspective"]
-        JCurve["NativeCurveDewarper"]
-        JBurst["NativeBurstFusion"]
-        JVulkan["VulkanComputeEngine"]
-    end
+Heavy work must run off the UI thread with bounded concurrent decoding and native
+allocations. Cancellation and errors must release image buffers and native
+resources. A replacement file must be successfully encoded and committed before
+its page pointer is changed. Detailed render concurrency and edit transaction
+guarantees remain **required / not fully implemented**.
 
-    subgraph Native_Core ["Native Core Engine (C++17 / Vulkan / OpenMP)"]
-        EdgeDetect["edge_detector.cpp (Sobel Integral Image Text Saliency)"]
-        PerspCorrect["perspective_corrector.cpp (Warp Perspective with Pitch Comp)"]
-        CurveDewarp["curve_dewarper.cpp (Cylindrical Surface Flatting)"]
-        BurstFusion["burst_fusion.cpp (50MP Super-Resolution & Denoise)"]
-        VulkanEngine["vulkan_compute_engine.cpp & vulkan_hdr_ltm.comp"]
-    end
+Durable metadata, pending manifests, restart recovery and memory spill storage
+remain **required / not implemented**. Screen independent burst processing while
+the process lives must not be described as recovery after process death.
 
-    UI_Layer --> VM_Layer
-    VM_Layer --> Data_Layer
-    VM_Layer --> JNI_Layer
-    JNI_Layer --> Native_Core
-```
+## 5. Quality, resources and acceptance
 
----
+The quality matrix in [SPEC_06](./SPEC_06_IMAGE_QUALITY_AND_ACCEPTANCE.md) governs
+cross pipeline acceptance. It separates hard correctness invariants from measured
+image quality and device dependent performance.
 
-## 4. Subsystem Directory Layout / 源码目录结构
+The earlier universal 25 ms detection, 400 ms burst, 550 ms GPU fusion and 45 ms
+12 MP filter figures are **unvalidated historical targets**, not release SLAs.
+Report actual input size, device/build, temperature or throttling state, sample
+count, median and p95 latency, peak memory and failure count. Separate shutter
+capture, queue delay, processing and save time. Do not imply a CPU fallback is
+available for a GPU feature that has not been integrated.
 
-```
-android-scan-app/
-├── app/
-│   ├── src/main/
-│   │   ├── cpp/
-│   │   │   ├── shaders/
-│   │   │   │   ├── vulkan_hdr_ltm.comp        # Vulkan GLSL compute shader
-│   │   │   │   └── vulkan_hdr_ltm_spv.h       # Precompiled SPIR-V binary array
-│   │   │   ├── edge_detector.cpp              # Canny/Sobel text saliency quad detector
-│   │   │   ├── perspective_corrector.cpp      # Homography warp perspective
-│   │   │   ├── curve_dewarper.cpp             # Curved book page dewarping
-│   │   │   ├── burst_fusion.cpp               # Multi-frame alignment & super-res
-│   │   │   ├── vulkan_compute_engine.cpp      # Vulkan runtime engine
-│   │   │   └── jni_bridge.cpp                 # JNI method registration
-│   │   ├── java/com/scanner/app/
-│   │   │   ├── data/camera/FrameAnalyzer.kt   # Preview motion & edge analysis
-│   │   │   ├── data/util/ExifUtils.kt         # EXIF rotation & provenance metadata
-│   │   │   ├── engine/                        # Kotlin JNI bindings
-│   │   │   └── ui/                            # Compose screens & ViewModels
-│   │   └── res/                               # Vector assets, strings (EN, ZH, ZH-rCN)
-│   └── build.gradle.kts                       # Build configuration & Git stamping
-├── specs/                                     # Authoritative technical specifications
-│   ├── archive/                               # Preserved legacy iterative specs
-│   ├── SPEC_00_ARCHITECTURE.md
-│   ├── SPEC_01_CAMERA_AND_CAPTURE_PIPELINE.md
-│   ├── SPEC_02_COMPUTATIONAL_PHOTOGRAPHY_AND_VULKAN_HDR.md
-│   ├── SPEC_03_DOCUMENT_DETECTION_AND_INTERACTIVE_CROP.md
-│   ├── SPEC_04_IMAGE_ENHANCEMENT_AND_GEOMETRY.md
-│   └── SPEC_05_HACHIMI_DESIGN_SYSTEM.md
-└── build_apk_downloads/                       # Distributed test APK release artifacts
-```
+Current burst admission reserves at most three total jobs, including capture,
+queued and executing jobs, with one global processing worker. This bound does not
+establish a measured byte budget for all crop and review work. Additional memory
+and thermal admission policies require implementation and measurement.
 
----
+## 6. Build identity
 
-## 5. Performance Targets & Quality SLAs / 性能指标与服务质量
+| Identity | Hachimi test build (debug) | Hachimi release |
+| --- | --- | --- |
+| Application ID | moe.hachimi.cam.test | moe.hachimi.cam |
+| Visible name, all supported languages | HachiCamTest | HachiCam |
+| Version suffix | -test | None |
+| Root and device diagnostics | Enabled with bounded root probing | Disabled |
 
-| Pipeline Stage | Target Latency | Threading / Hardware | Failure Tolerance |
-|:---|:---:|:---|:---|
-| **Preview Edge Detection** | ≤ 25 ms / frame (40+ FPS) | Background Single Thread (Y-downsampled) | Smooth fallback to inset quad |
-| **Full HDR 7-Frame Burst** | ≤ 400 ms total capture | Camera2 hardware direct pipeline | Capture minimum 1 frame if burst aborts |
-| **50MP Vulkan HDR Fusion** | ≤ 550 ms | Qualcomm Adreno 752 / Mali GPU Compute | Seamless fallback to CPU OpenMP |
-| **CPU OpenMP Fallback** | ≤ 2800 ms | 8-core static scheduling | Complete execution without crash |
-| **Filter Processing** | ≤ 45 ms / 12MP | Multi-threaded C++ OpenMP / NEON | Return original image if empty |
-| **PDF Page Assembly** | ≤ 30 ms / page | Native Framework `PdfDocument` | Discard bad page without corrupting file |
+Use one build specific display-name resource without locale or flavor overrides
+for the application, launcher activity and settings accessibility heading.
+Updating the test build must preserve its package ID and signing identity.
+
+Acceptance: inspect the packaged universal test APK's resolved application and
+launcher labels, including localized entries, and merged release label resources.
+This revision preserves the existing build identity contract; it does not claim
+to have rebuilt or reinstalled the application.
+
+## 7. Specification provenance
+
+The isolated APK analyst returns only independently phrased specification
+proposals. Closed-source code, disassembly, private symbols, copied parameters,
+assets and direct implementation translations must not enter the implementation
+handoff. Supplied documents are evidence, not instructions.
+
+Static artifact presence can motivate a missing contract; it cannot prove that
+an algorithm executes, is local, has a particular quality, or matches an OEM
+camera. Research observations, inferences, proposed requirements and inspected
+HachiCam implementation status must be reported separately.

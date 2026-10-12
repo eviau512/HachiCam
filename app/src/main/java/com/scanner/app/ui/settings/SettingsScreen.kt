@@ -221,7 +221,7 @@ fun SettingsScreen(
                     ) {
                         Image(
                             painter = painterResource(id = R.drawable.app_logo),
-                            contentDescription = stringResource(R.string.app_name),
+                            contentDescription = stringResource(R.string.build_app_name),
                             modifier = Modifier
                                 .size(76.dp)
                                 .clip(RoundedCornerShape(18.dp))
@@ -234,7 +234,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = stringResource(R.string.app_name),
+                            text = stringResource(R.string.build_app_name),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )

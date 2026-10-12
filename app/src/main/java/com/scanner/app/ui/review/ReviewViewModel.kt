@@ -65,24 +65,16 @@ class ReviewViewModel : ViewModel() {
                 withContext(Dispatchers.Main) { onComplete() }
                 return@launch
             }
-            val path = page.processedImagePath ?: page.imagePath
-            val file = File(path)
-            if (file.exists()) {
-                val bmp = BitmapFactory.decodeFile(path)
-                if (bmp != null) {
-                    val matrix = Matrix().apply { postRotate(90f) }
-                    val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
-                    FileOutputStream(file).use { out ->
-                        rotated.compress(Bitmap.CompressFormat.JPEG, 100, out)
-                    }
-                    if (rotated != bmp) rotated.recycle()
-                    bmp.recycle()
-                    val origFile = File(page.originalImagePath)
-                    ExifUtils.copyAndStampExif(origFile, file)
-                }
+            if (page.status != com.scanner.app.domain.model.PageStatus.READY) {
+                withContext(Dispatchers.Main) { onComplete() }
+                return@launch
             }
-            val newRotation = (page.rotation + 90) % 360
-            PageRepository.updatePage(page.copy(rotation = newRotation))
+            try {
+                val rotatedPage = page.copy(rotation = (page.rotation + 90) % 360)
+                applyAspectRatioToPage(rotatedPage, page.targetAspectRatio)
+            } catch (error: Exception) {
+                android.util.Log.e("HachiCam-Review", "Rotation failed", error)
+            }
             withContext(Dispatchers.Main) {
                 _imageVersion.value++
                 onComplete()
@@ -91,6 +83,7 @@ class ReviewViewModel : ViewModel() {
     }
 
     private fun applyFilterToPage(page: ScannedPage, newFilter: ImageFilter) {
+        if (page.status != com.scanner.app.domain.model.PageStatus.READY) return
         val origPath = page.originalImagePath
         val srcMat = Imgcodecs.imread(origPath)
         if (!srcMat.empty()) {
@@ -202,6 +195,7 @@ class ReviewViewModel : ViewModel() {
     }
 
     private fun applyAspectRatioToPage(page: ScannedPage, targetRatio: Float?) {
+        if (page.status != com.scanner.app.domain.model.PageStatus.READY) return
         val origPath = page.originalImagePath
         val srcMat = Imgcodecs.imread(origPath)
         if (!srcMat.empty()) {

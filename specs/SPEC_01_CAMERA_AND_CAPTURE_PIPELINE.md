@@ -1,170 +1,239 @@
-# Specification 01: Camera Subsystem & Capture Pipeline
-## 技术规格书 01：相机子系统与拍摄管线规范
+# Specification 01: Camera Subsystem and Capture Pipeline
 
-> **Document Status**: Authoritative Subsystem Specification  
-> **Consolidates**: Legacy SPEC_11 (ISP Tuning), SPEC_14 (EXIF Provenance), and SPEC_16 (Full HDR Pipeline)  
-> **Target Audience**: Camera Engineers & Runtime Developers  
-> **Languages**: Primary: English / Secondary: Chinese (Bilingual Executive Summaries)
+> Status: Authoritative. Revised 2026-10-12.
+> Language: English.
 
----
+## 1. Modes and achieved outcome
 
-## 1. Subsystem Overview / 概述
+**Implemented:** Normal requests one JPEG; experimental HDR requests up to four
+base frames, two shorter target frames and one deeper target frame. Frame loss,
+unsupported manual exposure, invalid metadata or failed alignment may reduce
+the usable set. Neither seven valid frames nor a fixed 50 MP result is guaranteed.
 
-The camera subsystem coordinates device optical sensors, hardware Image Signal Processors (ISP), Optical Image Stabilization (OIS), and user metering interactions. It exposes two deterministic capture modes:
-1. **Normal Mode**: Single-shot low-latency capture with hardware ISP high-quality enhancement and OIS enabled.
-2. **Full HDR Unified Mode**: A 7-frame multi-tier exposure pyramid burst (4 EV 0 + 2 EV -2.5 + 1 EV -6.0) capturing high-frequency scene radiance and micro-motion for 50MP super-resolution fusion, highlight recovery, and cinema-grade tone mapping.
+The current pipeline is CameraX plus Camera2Interop and CPU JPEG processing.
+It is not a direct Camera2 captureBurst, a RAW pipeline, or a commercial camera
+algorithm. SPEC_02 owns reconstruction and achieved-output quality.
 
----
+## 2. Capability-driven camera controls
 
-## 2. Hardware ISP Configuration via Camera2Interop / 硬件 ISP 参数调优
+**Implemented / hardware dependent:** prefer supported FAST noise reduction,
+retain camera-default sharpening and tonemapping, request optical stabilization
+where available, and disabled video stabilization for
+still capture. Check camera capabilities, ISO/exposure ranges and AE/AWB lock
+availability. Unsupported or ignored controls require graceful fallback.
 
-CameraX binds high-level lifecycle use cases (`Preview`, `ImageCapture`, `ImageAnalysis`). To bypass generic vendor down-tuning, low-level Camera2 keys are explicitly injected via `Camera2Interop.Extender`:
+The rc4 policy supersedes forced HIGH_QUALITY processing; the aim is to avoid
+unconditionally strong ISP processing before text fusion. FAST and camera
+defaults are device-selected processing requests, not guarantees of a particular
+vendor temporal denoiser, multi-frame count, detail improvement or proprietary engine.
+Do not infer ISP internals from a request key or a library name. See the
+[Android noise reduction contract](https://developer.android.com/reference/android/hardware/camera2/CaptureRequest#NOISE_REDUCTION_MODE).
 
-```kotlin
-val camera2Extender = Camera2Interop.Extender(imageCaptureBuilder)
-camera2Extender.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-camera2Extender.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-camera2Extender.setCaptureRequestOption(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY)
-camera2Extender.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
-camera2Extender.setCaptureRequestOption(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_HIGH_QUALITY)
-camera2Extender.setCaptureRequestOption(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY)
-camera2Extender.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
-camera2Extender.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)
+**Required / not fully implemented:** inspect request/result support consistently
+for every injected option, document lens/device fallback, and distinguish
+requested settings from achieved frame metadata.
 
-// Optical stabilization enabled; Electronic video stabilization disabled to prevent warping artifacts
-camera2Extender.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
-camera2Extender.setCaptureRequestOption(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-```
+## 3. Focus, exposure and document readiness
 
----
+**Implemented:** a valid preview tap maps through the preview metering point
+factory to AF and AE, with a three-second automatic cancel. The visible tap ring
+acknowledges the request; it is not proof of successful focus.
 
-## 3. Tap-to-Focus & Auto-Exposure Metering (AF / AE) / 点按对焦与测光契约
+**Required / not implemented as an integrated readiness profile:** separately
+evaluate usable document boundary, focus/sharpness, motion/blur risk, clipping
+and exposure usability. Unknown evidence must remain unknown. Low light may
+trade shorter shutter against noise; this is a measured document-quality policy,
+not a universal ISO or shutter constant. Evaluate usable detail in spatially
+separated document regions; a sharp center cannot certify sharp tilted corners,
+and noise energy cannot substitute for sharp text. Retain the capture and offer
+a retake or continued manual review after a quality warning.
 
-When the user taps the viewfinder preview:
-1. **Metering Point Transformation**:
-   The tap offset $(x_{\text{view}}, y_{\text{view}})$ is projected into the sensor coordinate space using `PreviewView.meteringPointFactory.createPoint(x, y)`.
-2. **Action Dispatch**:
-   A `FocusMeteringAction` is submitted with flags `FLAG_AF or FLAG_AE`, setting an auto-cancel timeout of 3.0 seconds.
-3. **Visual Feedback Overlay**:
-   A $72 \times 72\,\text{dp}$ square focus ring (1.5 dp solid border with rounded corners) appears immediately at the touch coordinates, animating an entry scale from $1.2\times$ to $1.0\times$ and fading out after 1.5 seconds.
+Flicker/banding under mains lamps and emissive screens must be included in
+device tests. Where supported, anti-banding policy must be capability driven;
+a still frame or a stable quad does not prove flicker-free exposure. Manual
+capture remains available even when quality guidance is uncertain.
 
----
+## 4. Viewfinder Stability Detection
 
-## 4. Viewfinder Stability Detection / 取景稳定性检测
+### 4.1 Problem and superseded contract (2026-10-12)
 
-To ensure that burst captures occur when hand jitter is minimal:
-1. `FrameAnalyzer` evaluates the temporal variance of detected document corner positions across 5 consecutive preview frames:
-   $$\sigma_{\text{pos}}^2 = \frac{1}{5} \sum_{i=1}^{5} \|P_i - \bar{P}\|^2$$
-2. **Stability State Transition**:
-   - If $\sigma_{\text{pos}} < 3.5\,\text{pixels}$, the system transitions to `isStable = true`.
-   - The shutter button indicator displays an animated green ring.
-3. **Burst Synchronization**:
-   When the user initiates a Full HDR capture, the pipeline waits up to 400 ms (`withTimeoutOrNull(400L)`) for `isStable == true` before latching the first frame, ensuring instant tactile responsiveness without shutter lag.
+The user's `screen-20261012-153541-1791790535386.mp4` shows brief `Steady`
+followed by repeated `Hold Steady`, while the selected contour changes from an
+inner table to the paper boundary. The exact per-frame analyzer measurements are
+not present in the recording. Code inspection establishes that the rc1 state
+uses the largest consecutive displacement of any detected corner in a five-frame
+window, a `0.005 × diagonal` threshold and a 300 ms timer; it does **not** implement
+the previous five-frame variance/3.5 px formula.
 
----
+Both corner-based contracts confound contour selection and corner jitter with
+camera motion. Smoothing the visible overlay cannot correct the separate raw
+corner test. This section supersedes the variance/3.5 px contract and the rc1
+corner-displacement implementation.
 
-## 5. Apple Deep Fusion / Smart HDR 7-Frame Unified Capture Pipeline / 7帧曝光金字塔连拍管线
+### 4.2 Scene-motion measurement
 
-### 5.1 The Frame Sequence & Exposure Contract
-To achieve wide dynamic range and super-resolution without severe exposure cliffs or AE hunting oscillation, the pipeline implements an **Apple Deep Fusion / Smart HDR 7-frame capture pyramid** structured into 3 exposure tiers:
+`isStable` describes motion of the observed scene, independently of whether a
+document quad is found. Document detection, contour selection and IIR corner
+smoothing must not reset this state.
 
-| Frame Range | Tier & Exposure | Camera Control Mode | Exposure Parameter Formula | Functional Purpose |
-|:---:|:---:|:---:|:---|:---|
-| **Frames 0–3** | **Tier 1 (EV 0 Base)** | Active AE Locked (No 3A reset) | Camera Auto-Exposure (`baseIso`, `baseExpSec`) | Sub-pixel super-resolution anchors, temporal denoise ($1/\sqrt{4}$ SNR boost), geometric reference. |
-| **Frames 4–5** | **Tier 2 (EV -2.5 Mid)** | Manual (`CONTROL_AE_MODE_OFF`) | $\text{midIso} = \text{clamp}(\text{baseIso}/4,\ 100,\ 3200)$<br>$\text{midExpSec} = \text{clamp}(\text{baseExpSec}/3,\ 1/2000,\ 1/30)$ | Smooth midtone transition, prevents glare blowout, preserves room and wall illumination tones. |
-| **Frame 6** | **Tier 3 (EV -6.0 Short)** | Manual (`CONTROL_AE_MODE_OFF`) | $\text{shortIso} = \text{clamp}(\text{midIso}/8,\ 100,\ 800)$<br>$\text{shortExpSec} = \text{clamp}(\text{midExpSec}/4,\ 1/4000,\ 1/250)$ | Extreme highlight recovery: lamp filaments, lightbulb markings, and specular un-saturation. |
+1. Analyze upright preview luminance, with the long edge reduced to at most
+   480 px. No captured-photo or user-identity data is needed.
+2. Track up to 100 scene corners using pyramidal sparse Lucas–Kanade flow.
+   Reject tracks with failed forward/backward status, forward error ≥30,
+   round-trip error ≥1 px or coordinates outside the image.
+3. Fit a partial affine transform with RANSAC (1 px reprojection threshold).
+   Require at least 12 inliers, at least 55% of the initially selected features,
+   and feature coverage spanning at least 15% of image width and height.
+   Insufficient texture or unreliable fitting yields **unknown**, not zero motion.
+4. Evaluate transform displacement on a 3×3 grid at normalized coordinates
+   `{0.1, 0.5, 0.9}`. Let `d` be the largest displacement divided by the analysis
+   image diagonal. Normalize by consecutive camera frame timestamps:
+   `speed = d / elapsedSeconds`. Rotation and zoom therefore count as motion.
+5. Keep only one reduced previous frame. Reset on orientation/size changes,
+   non-monotonic timestamps, gaps over 250 ms, capture reset and analyzer closure.
+   Release native resources on every path. Do not introduce a second unbounded
+   analysis queue.
+6. Isolate motion-estimation and document-detection errors: an exception in the
+   detector cannot invalidate a reliable motion result, and a tracking exception
+   cannot suppress document detection. Test builds may log normalized speed,
+   confidence and state at most once per second; release omits this debug trace.
 
-### 5.2 7-Frame Exposure Sequence Diagram
-```mermaid
-sequenceDiagram
-    participant VM as CameraViewModel
-    participant C2 as Camera2CameraControl
-    participant S as CMOS Sensor & ISP
-    participant Storage as Cache Storage
+This is sparse preview motion estimation, not the unimplemented dense motion
+compensation/RAW fusion in SPEC_02. It indicates visual steadiness, not proof of
+physical handset immobility or a guarantee of blur-free photos.
 
-    Note over VM,S: Tier 1: 4 Frames at EV 0 (Base AE Locked)
-    VM->>S: 1. takeSinglePicture() x 4 (Frames 0, 1, 2, 3)
-    S-->>Storage: Tier 1 JPEGs (Base ISO, Base Exp)
-    VM->>VM: Inspect Frame 0 EXIF (baseIso, baseExpSec)
+### 4.3 State transition and initial tuning parameters
 
-    Note over VM,S: Tier 2: 2 Frames at EV -2.5 (Midtone Transition)
-    VM->>C2: setCaptureRequestOptions(midExpNanos, midIso)
-    VM->>VM: delay(40ms) for sensor register latching
-    VM->>S: 2. takeSinglePicture() x 2 (Frames 4, 5)
-    S-->>Storage: Tier 2 JPEGs
+Thresholds below are initial experimental defaults, expressed in image diagonals
+per second, rather than fixed pixels or frame counts alone:
 
-    Note over VM,S: Tier 3: 1 Frame at EV -6.0 (Deep Highlight Recovery)
-    VM->>C2: setCaptureRequestOptions(shortExpNanos, shortIso)
-    VM->>VM: delay(40ms) for sensor register latching
-    VM->>S: 3. takeSinglePicture() x 1 (Frame 6)
-    S-->>Storage: Tier 3 JPEGs
+| Situation | Required behavior |
+| --- | --- |
+| Reliable speed ≤0.04 | Accumulate quiet time, capped at 120 ms per sample. |
+| Acquiring, speed >0.04 and <0.25 | Subtract elapsed time from quiet time, floored at zero; decrease observation count by one. |
+| Acquiring | Enter `Steady` after ≥350 ms accumulated quiet time and ≥4 reliable quiet observations. |
+| Already steady, speed >0.08 | Leave after ≥100 ms continuous movement; lower speed clears that movement timer. |
+| Speed ≥0.25 | Leave immediately and clear acquisition history. |
+| Unknown/unreliable sample | Hold an existing steady state for at most 150 ms since the last reliable sample; after that clear state/history. Unknown samples cannot acquire steadiness. |
+| Timestamp gap >250 ms, orientation/size change or analyzer closure | Clear state immediately. |
 
-    VM->>C2: clearCaptureRequestOptions() (Restores AE)
-    VM->>VM: NativeBurstFusion.fuseBurstFrames(mats, isScreenMode=true, superResolution=true)
-```
+`Hold Steady` remains guidance, never a shutter lock. HDR may wait up to 400 ms
+for `isStable`, then proceeds even if the wait expires. That upper bound does not
+guarantee the scene has become steady or that the complete burst takes 400 ms.
 
----
+### 4.4 Acceptance and verification limits
 
-## 6. EXIF Provenance & Image Normalization / EXIF 旋转与防伪签名
+- Repeatedly switching between inner/outer document contours, or losing the quad
+  while textured scene content remains static, must not reset motion stability.
+- Static textured content should acquire steadiness in roughly 0.35–0.8 s at
+  ordinary analysis rates; brief uncertainty and modest jitter must not flicker
+  the label. Sustained panning/rotation must clear it promptly.
+- Featureless/occluded scenes, invalid values and stale frames must not keep a
+  steady indication indefinitely. Timestamp normalization must work at different
+  analysis rates. Unit regressions must cover these temporal state rules.
+- Replay of the preview crop from the supplied recording may guide tuning, but
+  contains compression and the old overlay; it cannot replace a real camera test.
+- Sparse LK API reference: [OpenCV 4.10 tracking](https://docs.opencv.org/4.10.0/dc/d6b/group__video__track.html).
 
-### 6.1 Fast OpenCV SIMD Rotation
-To prevent expensive intermediate Java `Bitmap` re-decoding and re-compression:
-1. `ExifInterface` extracts orientation tag (`ORIENTATION_ROTATE_90/180/270`).
-2. The fused 50MP native `Mat` is rotated in-place using OpenCV SIMD `Core.rotate`.
-3. The rotated image is written directly to disk via `Imgcodecs.imwrite` with JPEG Quality 95.
+## 5. Bracket planning and capture metadata
 
-### 6.2 Tamper-Evident Provenance Stamping
-Every saved image is inscribed with hardware and pipeline metadata:
-- **`TAG_SOFTWARE`**: `HachiCam v<versionName> (<gitCommit>) [<Mode>]` (e.g. `[Full HDR]`, `[Normal]`).
-- **`TAG_USER_COMMENT`**: `HachiCam v<versionName> (Build: <gitCommit>, <buildTime>), Mode: <Mode>`.
-- **`TAG_ORIENTATION`**: Normalized strictly to `ORIENTATION_NORMAL` (1).
+**Implemented with experimental targets:**
 
----
+| Tier | Maximum requested count | Relative target |
+| --- | --- | --- |
+| Base | 4 in HDR, 1 in Normal | Current automatic exposure |
+| Shorter | 2 | -2.5 EV |
+| Deep short | 1 | -6 EV |
 
-## 7. [v24 REQUIRED] Asynchronous Capture, RAM-First Pending Frames & Storage Policy / 异步拍摄、内存优先待处理帧与存储策略
+For planning only, let P = ISO * exposureTime and
+P_target = P_base / 2^stops. Solve within actual device ranges and omit a tier
+when no useful shorter exposure is possible. The former ISO/4 and time/3 rule
+is approximately -3.58 EV, not -2.5 EV; it is superseded.
 
-> Status: **specified, not yet implemented.** Motivated by user observations on v0.1.2-rc0 (Ace3V): (1) after a tap the shutter spinner stays on for a long time; (2) the app's "cache" (actually disk) grows large.
+Await control application and validate actual available frame exposure metadata.
+A control future succeeding does not prove the exact exposure was applied.
+The current acceptance gate requires an observed product below 75% of the base
+to retain a shorter tier; this is **experimental**, not exact target verification
+or calibrated radiometry. Missing metadata must not be invented.
 
-### 7.1 Current behaviour (code reading, `CameraViewModel.captureFullHdrPhoto`)
-- `_isCapturing` is set at tap and cleared only after **all** of: 7 `takePicture` calls (each writes a full JPEG file into `context.cacheDir`), two `delay(40)` sensor latches, JPEG decode of all frames, native fusion (≈ 5–6 s for 50 MP in the observed log), JPEG encode (q95) and page creation. The spinner therefore covers capture **and** processing.
-- Frames: 0.7–2.5 MB JPEG each; the temporary files are deleted after fusion, but the fused result (`<uuid>.jpg`, tens of MB at 50 MP) and single-shot captures are also written to `cacheDir` and are **never deleted** by the app (only `LogCollector` prunes logs). Android reports `cacheDir` as "cache", and it can be evicted by the system while pages still reference it.
-- Frame requests are issued through CameraX `ImageCapture`; CameraX serialises them, so the inter-frame gap is ISP/JPEG-pipeline latency + file write, not an artificial delay (except the two 40 ms latches).
+Carry bytes, orientation, intended tier and observed exposure together. Sensor
+timestamps, source crop and achieved capture-result consistency are **required /
+not fully carried end to end**. Tier switching must not rely on a fixed delay
+as proof that a setting has latched. Restore automatic controls on success,
+failure, cancellation and timeout.
 
-### 7.2 Capture phase vs processing phase
-1. **Capture phase** = from tap until the last burst frame has been received into memory. Only this phase shows the busy indicator / disables the shutter (~400–600 ms). The moment the last frame is in memory: clear AE overrides (`clearManualCaptureOptions`), set `_isCapturing=false`, reset stability, return to live preview; the UI **stays in the camera viewfinder** (MotoCam parity) and immediately accepts the next tap.
-2. **Processing phase** (decode → align → fuse → encode → page) runs on a background worker with FIFO ordering. The UI shows a lightweight indicator on the bottom-right gallery badge (thumbnail with progress ring or count badge) and **must not** block the camera viewfinder.
-3. **Page Lifecycle & Strict Anti-Frame-0 Guarantee**:
-   - A page is inserted into `PageRepository` at the end of the capture phase with `status = PageStatus.PROCESSING` and a temporary thumbnail from the first frame.
-   - On completion of background fusion, the page is updated in place with `status = PageStatus.READY` pointing to the 50MP fused image in `filesDir/scans/`. If fusion fails, fall back to the reference frame and mark `READY`.
-   - **CropScreen & ReviewScreen Observation**: If the user taps the gallery badge to open `CropScreen` or `ReviewScreen` while a page is still `PROCESSING`, the screen displays a progress indicator ("Processing HDR...") and reacts to the page becoming `READY`. Frame 0 is **never** loaded into memory, cropped, or exported as the final image before fusion finishes.
-4. **Worker policy**: one fusion at a time (native memory: decoded 50 MP BGR is ≈ 150 MB per frame), FIFO queue. Maximum queued bursts = 3; beyond that the shutter shows "busy" briefly instead of letting memory grow.
-5. The 400 ms stability wait of §4 is kept; it is part of the capture phase.
+## 6. Image orientation, mapping, decoding and provenance
 
-### 7.3 Frame interval ("~10 ms" request)
-- The achievable interval is bounded below by the sensor exposure + readout of each frame. The observed Tier 1 exposures are 58 ms at ISO ≈ 18000 in dim scenes, so a 10 ms gap cannot be reached there; in bright scenes (exposure ≤ 10 ms) it may.
-- Requirements (best-effort, no new artificial delay): (a) remove avoidable gaps — do not wait for file I/O between requests (frames are delivered in memory, see 7.4); issue the next request as soon as the previous *capture* (not save) completes; (b) set Tier 2/3 manual parameters while the Tier 1 requests are still in flight where CameraX allows it, and reduce the 40 ms latch to the minimum verified on device (log shows whether the first plate after the change actually has the requested exposure); (c) evaluate `CAPTURE_MODE_MINIMIZE_LATENCY` for burst frames against image quality; (d) if CameraX remains the limit, consider Camera2 interop `captureBurst` as a follow-up, not as part of this change.
-- Log per frame: request time, image timestamp, exposure, ISO, and the gap to the previous frame, so the real interval can be measured.
+**Implemented:** preview luma respects buffer position, row/pixel stride and
+camera rotation; memory JPEG decoding ignores EXIF auto-rotation and applies the
+CameraX rotation once before save. Imports use Android ImageDecoder to normalize
+supported formats and mirrored orientation before writing actual JPEG.
 
-### 7.4 RAM-first pending-frame store
-1. `ImageCapture.takePicture(executor, OnImageCapturedCallback)` (no file output). On `onCaptureSuccess(image)`: copy the JPEG plane bytes (`image.planes[0].buffer`) into the store and `image.close()` immediately; extract EXIF (ISO, exposure) from the bytes for the log/tier calculation (`ExifInterface(InputStream)`), no temporary file.
-2. Store holds **compressed JPEG bytes** (≈ 1–2.5 MB each, ≈ 10–15 MB per 7-frame burst), kept in **direct (off-Java-heap) buffers** or native memory to avoid pressuring the Java heap. Decoded Mats exist only inside the worker for the burst being processed.
-3. **Budget**: pending-store capacity = min(96 MB, 1/8 of device memory class) (≈ 6–8 bursts). If a new burst would exceed the budget, the oldest not-yet-started burst is spilled to disk (see 7.5) rather than rejecting the capture.
-4. Frames of a burst are tagged `burstId`, `index`, `tier`, `iso`, `exposureNs`, orientation (needed to fuse and to orient output).
+The camera returns an image with a rotation instruction; do not double-apply
+that instruction through both decoder and metadata paths. See the
+[CameraX capture callback](https://developer.android.com/reference/androidx/camera/core/ImageCapture.OnImageCapturedCallback#onCaptureSuccess(androidx.camera.core.ImageProxy)).
 
-### 7.5 Spill to disk only when needed
-- Pending bursts are written to `filesDir/pending/<burstId>/` (frames + a small JSON manifest) **only** when: (a) `onStop()` of the camera activity occurs while any burst is unprocessed (the app is leaving the foreground; `onDestroy` and process death have no reliable callback, so `onStop` is the hook), or (b) the RAM budget is exceeded.
-- Processing continues from RAM if the process stays alive; when a burst finishes, its `pending/<burstId>` directory (if any) is deleted.
-- On next launch (and on `onStart`), scan `filesDir/pending/`; resume unfinished bursts through the same worker, creating `PROCESSING` pages for them. A manifest older than 7 days or with a missing frame is discarded.
-- Optional follow-up (not required now): finish the current fusion in a short foreground service so that backgrounding does not stall it.
+**Required / partly implemented:** define source/crop/analysis/sensor/view/output
+spaces and transforms, including zoom, lens changes, mirror, letterboxing,
+negotiated dimensions and reconstruction scale. Current FIT_CENTER mapping
+excludes bar taps, and shutter geometry is transformed to actual upright output
+dimensions. The analyzer does not yet apply all valid cropRect/freshness cases.
+A whole-frame normalization assumption is not a universal camera-space contract.
+See [CameraX resolution and crop](https://developer.android.com/reference/androidx/camera/core/ResolutionInfo).
 
-### 7.6 Disk policy
-- Fused photos and single-shot photos live in **`filesDir/scans/`** (via `ImageStorage`), not in `cacheDir`, so the system cannot evict them while pages reference them. `cacheDir` is reserved for true temporaries (logs, thumbnails).
-- Cleanup: (a) on app start delete orphaned files in `cacheDir` matching `hdr_*` / `*.jpg` that no page references (leftovers of earlier versions and crashes); (b) when a page is deleted, delete its original and thumbnail; (c) after a document is exported/closed, original images may be deleted unless the user chooses to keep them (policy to be confirmed in settings).
-- Settings screen: show app storage in two lines — "Photos (kept)" for `filesDir/scans` and "Temporary" for cacheDir + pending — with a "Clear temporary files" button that never touches pages still in use.
-- JPEG quality of the fused output stays 95 until a size/quality trade-off is measured; do not change it silently.
+Imported-image budgets must be checked before full decode; unsupported/corrupt
+input returns a visible failure without a successful page. End-to-end explicit
+color profile conversion, alpha handling and HDR/gain-map policy remain
+**required / not fully implemented**. See
+[Android image decoding](https://developer.android.com/reference/android/graphics/ImageDecoder).
 
-### 7.7 Acceptance checks
-- Tap → live preview returns in ≈ (sum of exposures + pipeline latency) without waiting for fusion; a second burst can be started while the first is processing; both end up as `READY` pages.
-- No JPEG burst files are created in `cacheDir` during capture; `cacheDir` size after N captures stays ≈ constant; `filesDir/scans` grows only by fused photos.
-- Backgrounding the app during processing leaves `filesDir/pending/<id>/`; relaunching completes the fusion and removes the directory.
-- Log shows per-frame intervals and queue length.
+EXIF software/comment fields may record actual build identity and achieved
+processing outcome. Normalize orientation after baking rotation. These mutable
+strings are provenance descriptions, not cryptographic signatures or tamper
+evidence. Release output excludes device Make/Model; debug diagnostics follow
+SPEC_00 build policy.
+
+## 7. Capture, processing and storage lifecycle
+
+**Implemented:**
+
+1. Reserve one of at most three total in-flight job slots before acquisition.
+   The limit includes capture, waiting and executing work.
+2. Copy compressed JPEG bytes into Java byte arrays and close each ImageProxy
+   on every callback path. Do not retain camera-owned images while processing.
+3. Insert PROCESSING after acquisition and submit to one application-wide FIFO
+   worker. Restore controls and release capture busy state without waiting for
+   reconstruction. Subsequent capture depends on admission capacity.
+4. Keep PROCESSING pages out of final crop/export. Mark READY only after a valid
+   final or explicitly indicated fallback reference is saved. A failed fallback
+   save yields FAILED.
+5. Save completed captures under app private scans storage. Source frame data
+   remains RAM-resident while pending. Continuing after screen navigation only
+   holds while the process lives.
+
+**Required / not implemented:** direct/native pending buffers, a measured byte
+budget and spill policy, durable pending manifests, page metadata persistence
+and restart recovery. The historical 96 MB and seven-day values are unvalidated
+design proposals. Three admitted jobs do not prove bounded memory across all
+review/crop tasks, and onStop alone cannot guarantee survival of process death.
+
+**Required / partly implemented:** cancellation-safe resource release,
+transactional source/derivative writes, active-file-aware cleanup, and last-valid
+image preservation. Export or session closure must not implicitly delete source
+photos. Storage UI must distinguish kept scans from disposable temporaries.
+
+## 8. Timing and acceptance
+
+Frame intervals depend on exposure, sensor readout, ISP, encoding and scheduling.
+A fixed 10 ms interval or 400 ms complete burst is not guaranteed. The section 4
+stability wait is a separate bounded wait, not the total capture budget.
+
+Measure camera acquisition, queue time, processing and save separately, with
+observed exposure and accepted frame counts. Apply CAP-01 through CAP-03,
+GEO-01 and LIFE-01 through LIFE-03 in
+[SPEC_06](./SPEC_06_IMAGE_QUALITY_AND_ACCEPTANCE.md).
+
+Device acceptance must include unsupported manual control, ignored settings,
+missing EXIF, partial burst loss, all orientations, mirrored imports, zoom/crop,
+flicker lighting, navigation during processing, saturated queues and save
+failure. This specification-only revision does not rerun device or APK tests.

@@ -12,6 +12,7 @@ class ScannerApplication : Application() {
         super.onCreate()
         // Initialize OpenCV
         OpenCVLoader.initLocal()
+        com.scanner.app.data.util.DiagnosticAccess.initialize()
 
         // Initialize saved language if configured
         val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)

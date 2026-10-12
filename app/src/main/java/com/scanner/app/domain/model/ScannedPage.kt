@@ -53,6 +53,5 @@ data class ScannedPage(
 enum class ImageFilter {
     ORIGINAL,
     MAGIC_COLOR,
-    GRAYSCALE,
-    BW
+    PAPER
 }

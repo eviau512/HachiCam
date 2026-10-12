@@ -1,6 +1,8 @@
 package com.scanner.app.ui.camera
 
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CameraCharacteristics
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.AspectRatio
@@ -60,6 +62,8 @@ import android.net.Uri
 import android.view.ViewGroup
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import com.scanner.app.data.camera.ImageCoordinates
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -91,6 +95,20 @@ fun CameraScreen(
     val fullHdrEnabled by viewModel.fullHdrEnabled.collectAsState()
     val isStable by viewModel.isStable.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
+    val isImporting by viewModel.isImporting.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let { snackbar.showSnackbar(it); viewModel.clearError() }
+    }
+    val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.imageAnalysis?.clearAnalyzer()
+            analyzerExecutor.shutdown()
+            viewModel.frameAnalyzer?.close()
+        }
+    }
     val pageCount by viewModel.pageCount.collectAsState()
     val capturedPages by viewModel.capturedPages.collectAsState()
 
@@ -119,7 +137,7 @@ fun CameraScreen(
                     in 225 until 315 -> Surface.ROTATION_90
                     else -> Surface.ROTATION_0
                 }
-                viewModel.imageCapture?.targetRotation = rotation
+                if (!viewModel.isCapturing.value) viewModel.imageCapture?.targetRotation = rotation
 
                 val rawTarget = when (rotation) {
                     Surface.ROTATION_0 -> 0f
@@ -146,7 +164,7 @@ fun CameraScreen(
 
     val lastPage = capturedPages.lastOrNull()
     val vmThumbnailBitmap by viewModel.lastThumbnailBitmap.collectAsState()
-    val diskThumbnailBitmap = remember(lastPage?.id, lastPage?.thumbnailPath, lastPage?.imagePath) {
+    val diskThumbnailBitmap = remember(lastPage?.id, lastPage?.thumbnailPath, lastPage?.imagePath, lastPage?.status) {
         val path = lastPage?.thumbnailPath ?: lastPage?.imagePath
         if (path != null) {
             val file = File(path)
@@ -161,14 +179,16 @@ fun CameraScreen(
             } else null
         } else null
     }
-    val effectiveThumbnail = vmThumbnailBitmap ?: diskThumbnailBitmap
+    val effectiveThumbnail = diskThumbnailBitmap ?: vmThumbnailBitmap
     val hasProcessingPages = capturedPages.any { it.status == PageStatus.PROCESSING }
 
     val galleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            viewModel.importFromUri(context, uri) { pageId -> onNavigateToCrop(pageId) }
+        contract = ActivityResultContracts.PickMultipleVisualMedia(20)
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            viewModel.importFromUris(context, uris) { ids ->
+                if (ids.size == 1) onNavigateToCrop(ids.first()) else onNavigateToReview()
+            }
         }
     }
 
@@ -253,7 +273,7 @@ fun CameraScreen(
                     val cameraProvider = cameraProviderFuture.get()
 
                     val sensorResolutionSelector = ResolutionSelector.Builder()
-                        .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                        .setResolutionStrategy(ResolutionStrategy(android.util.Size(4096, 3072), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER))
                         .setAspectRatioStrategy(
                             AspectRatioStrategy(
                                 AspectRatio.RATIO_4_3,
@@ -263,7 +283,7 @@ fun CameraScreen(
                         .build()
 
                     val preview = Preview.Builder()
-                        .setResolutionSelector(sensorResolutionSelector)
+                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                         .build().also {
                             it.setSurfaceProvider(previewView.surfaceProvider)
                         }
@@ -275,16 +295,17 @@ fun CameraScreen(
                         .setResolutionSelector(sensorResolutionSelector)
 
                     val camera2Extender = Camera2Interop.Extender(imageCaptureBuilder)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_HIGH_QUALITY)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.SHADING_MODE, CaptureRequest.SHADING_MODE_HIGH_QUALITY)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_HIGH_QUALITY)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
+                    val selectedInfo = CameraSelector.DEFAULT_BACK_CAMERA.filter(cameraProvider.availableCameraInfos).first()
+                    val camera2Info = Camera2CameraInfo.from(selectedInfo)
+                    fun supports(key: CameraCharacteristics.Key<IntArray>, mode: Int) =
+                        camera2Info.getCameraCharacteristic(key)?.contains(mode) == true
+                    // Keep camera-default sharpening/tone. Strong ISP denoising can erase
+                    // small strokes before the JPEG burst reaches our reconstruction.
+                    if (supports(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES, CaptureRequest.NOISE_REDUCTION_MODE_FAST))
+                        camera2Extender.setCaptureRequestOption(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                    if (supports(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON))
+                        camera2Extender.setCaptureRequestOption(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
                     camera2Extender.setCaptureRequestOption(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-                    camera2Extender.setCaptureRequestOption(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_HIGH_QUALITY)
 
                     val imageCapture = imageCaptureBuilder.build()
                     viewModel.imageCapture = imageCapture
@@ -314,7 +335,6 @@ fun CameraScreen(
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                         .build()
                         .also {
-                            val analyzerExecutor = Executors.newSingleThreadExecutor()
                             it.setAnalyzer(analyzerExecutor, frameAnalyzer)
                         }
                     viewModel.imageAnalysis = imageAnalysis
@@ -342,6 +362,13 @@ fun CameraScreen(
                 .pointerInput(Unit) {
                     // Tap-to-focus: AF + AE at tap location (SPEC_16 §4)
                     detectTapGestures { offset ->
+                        if (viewModel.isCapturing.value) return@detectTapGestures
+                        val detection = viewModel.detectedQuad.value
+                        val normalized = ImageCoordinates.fitPoint(offset.x, offset.y,
+                            size.width.toFloat(), size.height.toFloat(),
+                            detection?.frameWidth?.toFloat() ?: 0f, detection?.frameHeight?.toFloat() ?: 0f)
+                        if ((detection?.frameWidth ?: 0) > 0 && normalized == null) return@detectTapGestures
+                        normalized?.let { viewModel.setTouchPoint(it.x, it.y) }
                         tapFocusOffset = offset
                         val pv = previewViewRef.value ?: return@detectTapGestures
                         val ctrl = cameraControl ?: return@detectTapGestures
@@ -516,23 +543,22 @@ fun CameraScreen(
                 .padding(bottom = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Mode capsule row: Curved Dewarp
+            // Boundary status is independent of scene steadiness.
             Row(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val curveBg = if (curvedModeEnabled) SteadyEmerald.copy(alpha = 0.22f) else Color(0x770A0F1D)
-                val curveBorder = if (curvedModeEnabled) SteadyEmerald else Color(0x2EFFFFFF)
-                val curveTextColor = if (curvedModeEnabled) SteadyEmerald else Color(0xFFE2E8F0)
+                val boundaryFound = detectedQuad?.found == true
+                val boundaryPartial = boundaryFound && detectedQuad?.partial == true
+                val boundaryColor = if (boundaryPartial) SteadyAmber else if (boundaryFound) SteadyEmerald else Color(0xFFE2E8F0)
 
                 Box(
                     modifier = Modifier
                         .graphicsLayer { rotationZ = uiRotation }
                         .clip(RoundedCornerShape(24.dp))
-                        .background(curveBg)
-                        .border(1.2.dp, curveBorder, RoundedCornerShape(24.dp))
-                        .clickable { viewModel.toggleCurvedMode() }
+                        .background(Color(0xAA0A0F1D))
+                        .border(1.2.dp, boundaryColor.copy(alpha = .4f), RoundedCornerShape(24.dp))
                         .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -540,14 +566,15 @@ fun CameraScreen(
                             imageVector = Icons.Default.CropFree,
                             contentDescription = null,
                             modifier = Modifier.size(15.dp),
-                            tint = if (curvedModeEnabled) SteadyEmerald else Color(0xFF94A3B8)
+                            tint = boundaryColor
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (curvedModeEnabled) stringResource(R.string.curve_on) else stringResource(R.string.curve_off),
+                            text = stringResource(if (boundaryPartial) R.string.boundary_partial
+                                else if (boundaryFound) R.string.boundary_found else R.string.boundary_missing),
                             fontSize = 12.sp,
-                            fontWeight = if (curvedModeEnabled) FontWeight.Bold else FontWeight.Medium,
-                            color = curveTextColor
+                            fontWeight = FontWeight.Medium,
+                            color = boundaryColor
                         )
                     }
                 }
@@ -575,7 +602,9 @@ fun CameraScreen(
                             .clip(RoundedCornerShape(16.dp))
                             .background(Color(0x990A0F1D))
                             .border(1.5.dp, Color(0x44FFFFFF), RoundedCornerShape(16.dp))
-                            .clickable { galleryLauncher.launch("image/*") },
+                            .clickable(enabled = !isImporting && !isCapturing) {
+                                galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -693,5 +722,6 @@ fun CameraScreen(
                 }
             }
         }
+        SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
     }
 }

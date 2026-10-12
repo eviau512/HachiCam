@@ -19,8 +19,7 @@ class NativePerspective {
         val filterId = when (filter) {
             ImageFilter.ORIGINAL -> 0
             ImageFilter.MAGIC_COLOR -> 1
-            ImageFilter.BW -> 2
-            ImageFilter.GRAYSCALE -> 3
+            ImageFilter.PAPER -> 2
         }
         val resultMatAddr = nativeProcessDocument(srcMat.nativeObjAddr, corners.toFloatArray(), filterId, targetAspectRatio)
         return Mat(resultMatAddr)
@@ -30,8 +29,7 @@ class NativePerspective {
         val filterId = when (filter) {
             ImageFilter.ORIGINAL -> 0
             ImageFilter.MAGIC_COLOR -> 1
-            ImageFilter.BW -> 2
-            ImageFilter.GRAYSCALE -> 3
+            ImageFilter.PAPER -> 2
         }
         val resultMatAddr = nativeApplyFilter(srcMat.nativeObjAddr, filterId)
         return Mat(resultMatAddr)

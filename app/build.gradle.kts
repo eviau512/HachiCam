@@ -15,7 +15,13 @@ val gitCommit = try {
         commandLine = listOf("git", "rev-parse", "--short", "HEAD")
         standardOutput = stdout
     }
-    stdout.toString().trim()
+    val hash = stdout.toString().trim()
+    val dirty = ByteArrayOutputStream()
+    project.exec {
+        commandLine = listOf("git", "status", "--porcelain", "--untracked-files=normal")
+        standardOutput = dirty
+    }
+    hash + if (dirty.size() > 0) "-dirty" else ""
 } catch (e: Exception) {
     "dev"
 }
@@ -31,8 +37,8 @@ android {
         applicationId = "moe.hachimi.cam"
         minSdk = 29
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.1.2-rc0"
+        versionCode = 29
+        versionName = "0.1.2-rc5"
 
         buildConfigField("String", "GIT_HASH", "\"$gitCommit\"")
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
@@ -93,9 +99,16 @@ android {
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("release")
+            // A test build must be installable even without the private release key.
+            signingConfig = signingConfigs.getByName("debug")
+            versionNameSuffix = "-test"
+            applicationIdSuffix = ".test"
+            resValue("string", "build_app_name", "HachiCamTest")
+            buildConfigField("boolean", "SENSITIVE_DIAGNOSTICS", "true")
         }
         release {
+            resValue("string", "build_app_name", "HachiCam")
+            buildConfigField("boolean", "SENSITIVE_DIAGNOSTICS", "false")
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
@@ -123,12 +136,13 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = providers.gradleProperty("scanner.cmakeVersion").getOrElse("3.22.1")
         }
     }
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
