@@ -158,6 +158,12 @@ rc9 follow-up ([contract](research/NIGHT_HDR_REVISION_2026-10-14.md)):
   aliases and noise on independent fixtures; include usable text with invalid
   background and invalid text with usable background. Unsupported regions retain
   a valid reference estimate. Centre phases and output MP alone are not passes.
+- CAP-09 (P1, target diagnostic evidence required / not implemented): record
+  selected shutter tap/centre, monotonic tap age and session identity separately
+  from AF acknowledgment/held distance. Test taps inside/outside the current
+  three-second validity window and after session reset; no unrecorded claim that
+  a confirmed user tap was reused or overwritten. Target-specific optical quality
+  remains a separate device check.
 - ARCH-01 (P0, rc10 implemented; helper tests passed, device pending): crop/review rotations and four
   rotations followed by cancel/reopen preserve master checksum and consistent
   geometry. Latest recipe generation wins across filter/aspect/rotation/batch

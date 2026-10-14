@@ -94,6 +94,16 @@ requested settings from achieved frame metadata.
 factory to AF and AE, with a three-second automatic cancel. The visible tap ring
 acknowledges the request; it is not proof of successful focus.
 
+**Current shutter selection:** reuse the stored PreviewView metering point only
+when its monotonic age is 0..3000 ms in the active session; otherwise use centre
+AF-only, bounded as specified above. Session reset clears the stored point.
+The 13:25 screen user confirmed tapping the screen, but its diagnostics lack tap
+age/coordinates and shutter-target selection. Neither focus acknowledgment nor
+held distance proves that the intended tap was reused. Recording selected
+tap/centre, age and session identity in test-only per-capture diagnostics remains
+required / not implemented; a target-lifetime policy change needs its own revision
+and device acceptance, not an assumption that this sample was overwritten.
+
 **Required / not implemented as an integrated readiness profile:** separately
 evaluate usable document boundary, focus/sharpness, motion/blur risk, clipping
 and exposure usability. Unknown evidence must remain unknown. Low light may
