@@ -124,6 +124,17 @@ double referenceQuality(const cv::Mat& image) {
     return detail * (1 - .5 * clipped);
 }
 
+bool LocalRegistration::hasDetail(double x, double y) const {
+    if(detail.empty() || !std::isfinite(x) || !std::isfinite(y)) return false;
+    const double gx=std::clamp(x/spacing,0.,double(detail.cols-1));
+    const double gy=std::clamp(y/spacing,0.,double(detail.rows-1));
+    const int x0=int(gx),y0=int(gy),x1=std::min(x0+1,detail.cols-1),y1=std::min(y0+1,detail.rows-1);
+    const float fx=gx-x0,fy=gy-y0;
+    return ((1-fx)*(1-fy)<=.001f || detail.at<uchar>(y0,x0)) &&
+           (fx*(1-fy)<=.001f || detail.at<uchar>(y0,x1)) &&
+           ((1-fx)*fy<=.001f || detail.at<uchar>(y1,x0)) &&
+           (fx*fy<=.001f || detail.at<uchar>(y1,x1));
+}
 bool LocalRegistration::offset(double x, double y, cv::Point2d& delta, float& confidence) const {
     if (field.empty()) { delta = {0, 0}; confidence = 1; return true; }
     if(patchSupport) {

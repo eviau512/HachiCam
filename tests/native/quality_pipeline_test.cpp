@@ -2,6 +2,7 @@
 #include "burst_fusion.h"
 #include "perspective_corrector.h"
 #include "edge_detector.h"
+void runRegionalTests();
 #include <iostream>
 #include <stdexcept>
 #include <limits>
@@ -133,6 +134,7 @@ int runTests() {
     check(rejectsGeometry(validCorners,20),"Expanded perspective output obeys pixel budget");
     check(rejectsGeometry(validCorners,std::numeric_limits<float>::infinity()),"Nonfinite aspect rejected");
     check(geometrySource.at<cv::Vec3b>(0,0)==cv::Vec3b(90,100,110),"Invalid edits preserve source pixels");
+    runRegionalTests();
     runBoundaryTests();
     runNoiseTests();
     runHighlightTests();

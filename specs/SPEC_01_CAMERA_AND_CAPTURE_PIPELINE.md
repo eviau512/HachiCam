@@ -94,15 +94,28 @@ requested settings from achieved frame metadata.
 factory to AF and AE, with a three-second automatic cancel. The visible tap ring
 acknowledges the request; it is not proof of successful focus.
 
-**Current shutter selection:** reuse the stored PreviewView metering point only
+**Historical rc10 shutter selection:** reuse the stored PreviewView metering point only
 when its monotonic age is 0..3000 ms in the active session; otherwise use centre
 AF-only, bounded as specified above. Session reset clears the stored point.
 The 13:25 screen user confirmed tapping the screen, but its diagnostics lack tap
 age/coordinates and shutter-target selection. Neither focus acknowledgment nor
 held distance proves that the intended tap was reused. Recording selected
 tap/centre, age and session identity in test-only per-capture diagnostics remains
-required / not implemented; a target-lifetime policy change needs its own revision
-and device acceptance, not an assumption that this sample was overwritten.
+implemented by rc11 below, with device acceptance pending. This does not establish
+that the earlier sample's target was overwritten.
+
+**rc11 revised target lifetime, specified before implementation and now implemented:** retain a valid
+user preview metering target independently of the 3-second preview AF/AE
+auto-cancel and 1.5-second ring. At shutter, refocus at that target until a new
+valid tap, session reset, zoom change, preview layout-size change or applied
+orientation change invalidates its geometry; then use centre. This is a position
+in the current view, not semantic object tracking. A failed tap AF does not
+silently select another subject. Snapshot/record target type, normalized point,
+monotonic age, capture/session identity and actual acknowledgment separately.
+Fixed-focus/missing AF support remains unknown, with manual capture available.
+Capture snapshots its control/info under the session identity; an obsolete
+session cannot refocus or clean up the subsequently bound camera. Actual device
+target selection and optical sharpness still need verification.
 
 **Required / not implemented as an integrated readiness profile:** separately
 evaluate usable document boundary, focus/sharpness, motion/blur risk, clipping

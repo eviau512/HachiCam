@@ -20,7 +20,13 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Latest implementation: [rc10 architecture refactor](reports/RC10_ARCHITECTURE_REFACTOR_2026-10-14.zh-CN.md)
+Latest implementation: [rc11 regional reconstruction and focus](reports/RC11_REGIONAL_RECONSTRUCTION_2026-10-14.zh-CN.md)
+replaces whole-image SR authority with distributed local evidence, bounded
+observation-driven correction, protected native HDR and persistent shutter tap
+intent. Structured decisions and model parameters accompany test-only paired
+diagnostics; device quality and resource/AF acceptance remain pending.
+
+Previous implementation: [rc10 architecture refactor](reports/RC10_ARCHITECTURE_REFACTOR_2026-10-14.zh-CN.md)
 connects immutable edit recipes, unique commits, export rollback/read leases,
 shared experimental memory admission, per-capture diagnostics and control recovery.
 Helper/native tests and APK verification are separate from pending device acceptance.

@@ -2,6 +2,7 @@
 #include "curve_dewarper.h"
 #include "edge_detector.h"
 #include "perspective_corrector.h"
+#include "regional_reconstruction.h"
 #include "vulkan_compute_engine.h"
 #include <android/bitmap.h>
 #include <android/log.h>
@@ -13,10 +14,10 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFusionEngine::Report &report) {
-    jlongArray result = env->NewLongArray(25);
+    jlongArray result = env->NewLongArray(42);
     if (!result)
         return nullptr;
-    jlong values[25] = {reinterpret_cast<jlong>(new cv::Mat(std::move(fused))),
+    jlong values[42] = {reinterpret_cast<jlong>(new cv::Mat(std::move(fused))),
                         report.anchors,
                         report.highlights,
                         report.scale,
@@ -35,13 +36,32 @@ static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFus
     std::memcpy(&values[22], &report.meanContributors, sizeof(double));
     std::memcpy(&values[23], &report.recoveredFraction, sizeof(double));
     std::memcpy(&values[24], &report.clippedFraction, sizeof(double));
-    env->SetLongArrayRegion(result, 0, 25, values);
+    values[25] = 1;
+    values[26] = report.srRequested;
+    values[27] = report.srDenied;
+    values[28] = report.regionTiles;
+    values[29] = report.qualifiedTiles;
+    std::memcpy(&values[30], &report.meanSupport, sizeof(double));
+    values[31] = report.centrePhases;
+    std::memcpy(&values[32], &report.regionFraction, sizeof(double));
+    std::memcpy(&values[33], &report.reconstructedFraction, sizeof(double));
+    values[34] = fusion::RegionalPlan::tileSize;
+    values[36] = fusion::RegionalPlan::minimumTiles;
+    const double minArea = fusion::RegionalPlan::minimumArea,
+                 minSupport = fusion::RegionalPlan::minimumSupport, phaseDet = .04;
+    std::memcpy(&values[35], &minArea, sizeof(double));
+    std::memcpy(&values[37], &minSupport, sizeof(double));
+    std::memcpy(&values[38], &phaseDet, sizeof(double));
+    values[39] = report.fittedTiles;
+    std::memcpy(&values[40], &report.initialFitError, sizeof(double));
+    std::memcpy(&values[41], &report.finalFitError, sizeof(double));
+    env->SetLongArrayRegion(result, 0, 42, values);
     return result;
 }
 
 #include <cmath>
-#include <limits>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 

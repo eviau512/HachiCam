@@ -16,6 +16,11 @@ public:
         bool geometryKnown = true;
         double multiFrameFraction = 0, meanContributors = 1;
         double recoveredFraction = 0, clippedFraction = 0;
+        bool srRequested=false,centrePhases=false;
+        int srDenied=32,regionTiles=0,qualifiedTiles=0;
+        double meanSupport=0,regionFraction=0,reconstructedFraction=0;
+        int fittedTiles=0;
+        double initialFitError=0,finalFitError=0;
     };
     // Experimental CPU JPEG fusion. Select a base reference, validate global
     // and sparse local registration, and sample accepted originals directly.

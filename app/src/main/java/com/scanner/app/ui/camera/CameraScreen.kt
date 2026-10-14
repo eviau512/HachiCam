@@ -148,16 +148,22 @@ fun CameraScreen(
     var deviceRotationDegrees by remember { mutableFloatStateOf(0f) }
     val windowView = androidx.compose.ui.platform.LocalView.current
     DisposableEffect(context) {
+        var orientationActive = true
         val orientationListener = object : OrientationEventListener(context) {
+            private var appliedRotation: Int? = null
             override fun onOrientationChanged(orientation: Int) {
-                if (orientation == ORIENTATION_UNKNOWN) return
+                if (!orientationActive || orientation == ORIENTATION_UNKNOWN) return
                 val rotation = when (orientation) {
                     in 45 until 135 -> Surface.ROTATION_270
                     in 135 until 225 -> Surface.ROTATION_180
                     in 225 until 315 -> Surface.ROTATION_90
                     else -> Surface.ROTATION_0
                 }
-                if (!viewModel.isCapturing.value) viewModel.imageCapture?.targetRotation = rotation
+                if (!viewModel.isCapturing.value) {
+                    if (appliedRotation != null && appliedRotation != rotation) viewModel.invalidateFocusTargetCurrentSession()
+                    viewModel.imageCapture?.targetRotation = rotation
+                    appliedRotation = rotation
+                }
 
                 val relativeRotation = (rotation - (windowView.display?.rotation ?: Surface.ROTATION_0) + 4) % 4
                 val rawTarget = when (relativeRotation) {
@@ -174,7 +180,7 @@ fun CameraScreen(
             }
         }
         if (orientationListener.canDetectOrientation()) orientationListener.enable()
-        onDispose { orientationListener.disable() }
+        onDispose { orientationActive = false; orientationListener.disable() }
     }
 
     val uiRotation by animateFloatAsState(
@@ -291,6 +297,9 @@ fun CameraScreen(
                     scaleType = PreviewView.ScaleType.FIT_CENTER
                 }
                 previewViewRef.value = previewView
+                previewView.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
+                    viewModel.previewGeometryChanged(generation, right - left, bottom - top)
+                }
 
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                 val executor = ContextCompat.getMainExecutor(ctx)
@@ -492,7 +501,7 @@ fun CameraScreen(
                         val ctrl = cameraControl ?: return@detectTapGestures
                         val factory = pv.meteringPointFactory
                         val point = factory.createPoint(offset.x, offset.y)
-                        viewModel.rememberFocusPoint(point)
+                        if (!viewModel.rememberFocusPoint(point, generation)) return@detectTapGestures
                         val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
                             .setAutoCancelDuration(3, TimeUnit.SECONDS)
                             .build()

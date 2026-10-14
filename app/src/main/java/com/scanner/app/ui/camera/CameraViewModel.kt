@@ -64,8 +64,9 @@ class CameraViewModel : ViewModel() {
     private val _lastOutputSize = MutableStateFlow<CapturePolicy.Size?>(null)
     val lastOutputSize = _lastOutputSize.asStateFlow()
     private val captureEvidence = CaptureEvidenceStore()
-    private var lastFocusPoint: MeteringPoint? = null
-    private var lastFocusPointAt = 0L
+    private val focusTarget = TapFocusTarget<MeteringPoint>()
+    private var previewWidth = 0
+    private var previewHeight = 0
     private var capturePixels = 0L
     private val evidenceLock = Any()
     @Volatile private var cameraGeneration = 0L
@@ -112,7 +113,7 @@ class CameraViewModel : ViewModel() {
             _highResolutionActive.value = false; capturePixels = 0; zoomPending = false; evidenceAfterMs = 0
             _captureSize.value = null; captureEvidence.clear()
             controlsReady = false
-            lastFocusPoint = null; lastFocusPointAt = 0
+            focusTarget.clear(); previewWidth = 0; previewHeight = 0
             cameraGeneration
         }
         // Never wait for the analyzer while holding the result-publication lock.
@@ -142,12 +143,25 @@ class CameraViewModel : ViewModel() {
             captureEvidence.record(sample)
         } }
     }
-    fun rememberFocusPoint(point: MeteringPoint) {
-        lastFocusPoint = point; lastFocusPointAt = android.os.SystemClock.elapsedRealtime()
+    fun rememberFocusPoint(point: MeteringPoint, generation: Long): Boolean {
+        if (!isCameraSession(generation)) return false
+        return focusTarget.remember(point, point.x, point.y, android.os.SystemClock.elapsedRealtime(), generation)
     }
-    private suspend fun focusForBurst(control: CameraControl?, info: Camera2CameraInfo?, context: Context): Boolean {
-        if (control == null || (info?.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) <= 0) return false
-        val point = lastFocusPoint?.takeIf { android.os.SystemClock.elapsedRealtime() - lastFocusPointAt in 0..3000 }
+    fun invalidateFocusTarget(generation: Long) { if (isCameraSession(generation)) focusTarget.clear() }
+    fun invalidateFocusTargetCurrentSession() { focusTarget.clear() }
+    fun previewGeometryChanged(generation: Long, width: Int, height: Int) {
+        if (!isCameraSession(generation) || width <= 0 || height <= 0) return
+        if (width != previewWidth || height != previewHeight) focusTarget.clear()
+        previewWidth = width; previewHeight = height
+    }
+    private suspend fun focusForBurst(control: CameraControl?, info: Camera2CameraInfo?, context: Context, id: String, generation: Long): Boolean {
+        if (!isCameraSession(generation)) { CameraDiagnostics.frame(id, "shutterTargetRejected=old_session"); return false }
+        val selected = focusTarget.select(android.os.SystemClock.elapsedRealtime(), generation)
+        CameraDiagnostics.frame(id, "shutterTarget=${if (selected != null) "tap" else "centre"} x=${selected?.x ?: .5f} y=${selected?.y ?: .5f} tapAgeMs=${selected?.ageMs ?: -1} session=$generation")
+        if (control == null || (info?.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) <= 0) {
+            CameraDiagnostics.frame(id, "shutterAFSupported=false"); return false
+        }
+        val point = selected?.point
             ?: SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(.5f, .5f)
         val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).disableAutoCancel().build()
         return withTimeoutOrNull(1500) {
@@ -164,16 +178,17 @@ class CameraViewModel : ViewModel() {
         } ?: false
     }
     fun setZoom(context: Context, ratio: Float, onChanged: () -> Unit) {
-        changeCameraControl(context, onChanged) { it.setZoomRatio(ratio) }
+        changeCameraControl(context, onChanged, geometryChange = true) { it.setZoomRatio(ratio) }
     }
     fun setExposure(context: Context, index: Int, onChanged: () -> Unit) {
         changeCameraControl(context, onChanged) { it.setExposureCompensationIndex(index) }
     }
-    private fun changeCameraControl(context: Context, onChanged: () -> Unit,
+    private fun changeCameraControl(context: Context, onChanged: () -> Unit, geometryChange: Boolean = false,
         apply: (CameraControl) -> com.google.common.util.concurrent.ListenableFuture<*>) {
         if (_isCapturing.value || zoomPending) return
         val control = cameraControl ?: return
         val generation = cameraGeneration
+        if (geometryChange) focusTarget.clear()
         val request = ++zoomGeneration
         synchronized(evidenceLock) {
             zoomPending = true; evidenceAfterMs = Long.MAX_VALUE
@@ -268,10 +283,12 @@ class CameraViewModel : ViewModel() {
         val app = context.applicationContext
         val hdr = _fullHdrEnabled.value
         val captureGeneration = cameraGeneration
+        val capturedControl = cameraControl
+        val capturedInfo = cameraInfo
         viewModelScope.launch {
             var submitted = false
             var restoreAttempted = false
-            val control = cameraControl
+            val control = capturedControl
             suspend fun restoreCaptureControls() {
                 if (restoreAttempted) return
                 restoreAttempted = true
@@ -294,8 +311,8 @@ class CameraViewModel : ViewModel() {
                     }
                     encodedBytes += frame.bytes.size; frames.add(frame)
                 }
-                val info = cameraInfo?.let { Camera2CameraInfo.from(it) }
-                val focusConfirmed = focusForBurst(control, info, app)
+                val info = capturedInfo?.let { Camera2CameraInfo.from(it) }
+                val focusConfirmed = focusForBurst(control, info, app, captureId, captureGeneration)
                 check(isCameraSession(captureGeneration)) { "Camera session changed during focus" }
                 val minimumFocus = info?.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
                 val supportsFocusOff = info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
@@ -497,13 +514,14 @@ class CameraViewModel : ViewModel() {
     }
 
     private fun retainBurstDiagnostics(context: Context, frames: List<Frame>, id: String, output: File,
-                                       w: Float, h: Float, mode: String, reference: Int, domain: String) {
+                                       w: Float, h: Float, mode: String, reference: Int, domain: String, reconstruction: JSONObject? = null) {
         if (!BuildConfig.SENSITIVE_DIAGNOSTICS) return
         runCatching {
             val metadata = JSONObject().put("captureId", id).put("version", BuildConfig.VERSION_NAME)
                 .put("build", BuildConfig.BUILD_TIME).put("source", BuildConfig.GIT_HASH)
                 .put("outputWidth", w.toInt()).put("outputHeight", h.toInt())
                 .put("exposureDomain", domain).put("result", mode).put("referenceIndex", reference)
+                .put("reconstruction", reconstruction ?: JSONObject.NULL)
                 .put("frames", JSONArray().apply { frames.forEachIndexed { index, frame ->
                     put(JSONObject().put("file", String.format(Locale.US, "%02d-tier%d.jpg", index, frame.tier))
                         .put("tier", frame.tier).put("rotation", frame.rotation)
@@ -570,13 +588,35 @@ class CameraViewModel : ViewModel() {
                 exposureProducts = products) else mats[0].clone()
             check(!fused.empty()) { "Fusion returned no image" }
             val report = fuser.lastReport
+            val decision = if (hdr || useStreaming) report.reconstruction else ReconstructionDecision(denied = 1)
+            val srRecord = JSONObject().put("schema", 1).put("requestedRegular2x", hdr && !highResolution)
+                .put("engineRequested", decision.requested).put("memoryPlan", memoryPlan.reason)
+                .put("memoryAdmitted2x", hdr && memoryPlan.superResolution).put("deniedFlags", decision.denied)
+                .put("denialReasons", JSONArray(decision.denialReasons())).put("sourceWidth", bounds.outWidth)
+                .put("sourceHeight", bounds.outHeight).put("anchorCount", report.anchors).put("selectedScale", report.scale)
+                .put("regionalEvaluationPerformed", decision.requested && report.anchors >= 3 && bounds.outWidth.toLong() * bounds.outHeight <= 16_000_000 && report.cropW.toLong() * report.cropH * 4 <= 56_000_000)
+                .put("meanWholeSupportDiagnostic", decision.meanSupport).put("centrePhasesDiagnostic", decision.centrePhases)
+                .put("qualifiedTiles", decision.qualifiedTiles).put("totalTiles", decision.tiles)
+                .put("qualifiedAreaFraction", decision.regionFraction).put("reconstructedPixelFraction", decision.reconstructedFraction)
+                .put("tileSize", decision.tileSize).put("minimumArea", decision.minimumArea).put("minimumTiles", decision.minimumTiles)
+                .put("minimumTileSupport", decision.minimumSupport).put("phaseDeterminant", decision.phaseDeterminant)
+                .put("fittedTiles", decision.fittedTiles).put("initialFitError", decision.initialFitError).put("finalFitError", decision.finalFitError)
+                .put("contributionDomain", "nativeFusionGrid")
+                .put("highlightMetricDomain", "nativeFusionGrid")
+                .put("maximumSourcePixels", 16_000_000).put("maximumOutputPixels", 56_000_000).put("minimumAnchors", 3).put("probeGrid", 3)
+                .put("refinementParameterVersion", "jpeg-footprint-v1")
+                .put("maximumIterations", 8).put("residualLimit", 14).put("correctionLimit", 24)
+                .put("requiredFitErrorRatio", .95).put("minimumObservedPlates", 3).put("minimumPlateObservations", 256)
+                .put("contrastRangeFloor", 12).put("noiseSigmaFactor", 6).put("patchHalo", 8)
+                .put("maximumPatchObservations", 50_000).put("maximumSourceSearch", 128)
+            srRecord.toString().chunked(440).forEachIndexed { index, chunk -> CameraDiagnostics.frame(id, "srDecisionPart$index=$chunk") }
             val mode = if (!hdr) "Normal" else
-                "${if (highResolution) "Native-high-resolution " else ""}${if (report.recoveredFraction > 0) "HDR" else "Burst"}; anchors=${report.anchors}; highlights=${report.highlights}; scale=${report.scale}; reference=${report.reference}; multiFrameFraction=${report.multiFrameFraction}; meanContributors=${report.meanContributors}; recoveredFraction=${report.recoveredFraction}; clippedFraction=${report.clippedFraction}; sourceCrop=${report.left},${report.top},${report.cropW},${report.cropH}; JPEG fusion"
+                "${if (highResolution) "Native-high-resolution " else ""}${if (report.recoveredFraction > 0) "HDR" else "Burst"}; anchors=${report.anchors}; highlights=${report.highlights}; scale=${report.scale}; reference=${report.reference}; multiFrameFraction=${report.multiFrameFraction}; meanContributors=${report.meanContributors}; contributionDomain=nativeFusionGrid; recoveredFraction=${report.recoveredFraction}; clippedFraction=${report.clippedFraction}; sourceCrop=${report.left},${report.top},${report.cropW},${report.cropH}; JPEG fusion"
             val (w, h) = saveUpright(fused, valid[if (hdr) report.reference else 0], output, mode) { w, h ->
                 computeTargetQuad(detection, w, h, frames[0].rotation, if (hdr) report else null)
             } ?: return
             CameraDiagnostics.frame(id,"saved=${w.toInt()}x${h.toInt()} exposureDomain=${evidence.description} $mode")
-            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description)
+            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description, srRecord)
             _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
             if (hdr && (report.anchors < 2 || report.multiFrameFraction <= 0.0))
                 _errorMessage.value = context.getString(R.string.fusion_single_frame)

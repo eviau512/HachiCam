@@ -19,6 +19,8 @@ add_library(
         fusion_pipeline.cpp
         stream_fusion.cpp
         local_registration.cpp
+        regional_reconstruction.cpp
+        regional_refinement.cpp
         vulkan_compute_engine.cpp
         jni_bridge.cpp
 )

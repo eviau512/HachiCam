@@ -81,12 +81,10 @@ sufficient local support are present; otherwise it
 uses native dimensions. Current phase diversity gating is a heuristic, not proof
 of increased resolving power or complete two dimensional phase coverage.
 
-The **current experimental parameters**, recorded from the implementation, are:
-SR requested, at least three accepted base frames, source size at most 16 million
-pixels, qualifying local detail on phase-contributing frames (fraction >= 0.15),
-centre-offset phase determinant >= 0.04 for a pair, and mean non-reference local
-support >= 0.50. All conditions must pass for scale=2; otherwise scale=1. These
-are uncalibrated eligibility heuristics, not an accepted resolving-power profile.
+The **rc10 experimental parameters** are SR requested, at least three accepted
+base frames, input <=16 MP, detail-node fraction >=0.15, centre-offset phase
+determinant >=0.04 and mean whole-image support >=0.50. These historical gates
+are superseded by the experimental rc11 regional contract below.
 Selection is per burst, so successive captures can have different output sizes.
 Neither capture order nor camera warm-up is an eligibility condition. The
 whole-image support fraction is distinct from final per-pixel multi-frame
@@ -99,19 +97,84 @@ demonstrates the global gate's target-region limitation, not recovered detail or
 a calibrated replacement threshold. See the
 [screen analysis](reports/RC10_SCREEN_ANALYSIS_2026-10-14.zh-CN.md).
 
-**Required / not implemented:** retain a structured per-job SR decision with
+**Implemented in rc11; device verification pending:** retain a structured per-job SR decision with
 each eligibility check, measured value, threshold and denial reason in test
 diagnostics. Distinguish actual phase diversity from the combined SR decision;
 do not overload `phases2D` with a coverage failure. Keep requested native capture,
 achieved source size, reconstruction scale and final cropped/rotated dimensions
 separate. This diagnostic requirement does not restore viewfinder MP captions
 removed by SPEC_05. Do not lower gates or unconditionally enlarge an image merely
-to make successive files carry the same megapixel count. Region-specific
-eligibility and measured improvement remain research / unimplemented work.
+to make successive files carry the same megapixel count. Regional eligibility is
+experimental in rc11; physical resolving-power/device-quality acceptance remains pending.
 Regional research acceptance must check phases and support throughout eligible
 text tiles, preserve the reference in unsupported/moving regions, and compare
 stroke fidelity with same-size single-frame interpolation. A single ROI-centre
 phase check or lowered whole-image threshold does not satisfy that acceptance.
+
+### rc11 regional reconstruction contract (specified before implementation; experimental implementation)
+
+Replace the whole-image support/centre-phase authority with a bounded regional
+qualification map. The original local registration, occlusion, border and noise
+gates remain. A 64-source-pixel tile qualifies only with the reference plus at
+least two same-exposure candidate plates having >=0.70 supported tile pixels,
+detail-qualified contributing registration nodes and usable local offsets at
+a distributed 3x3 sample grid. At each probe, evaluate the actual source mapping
+(inverse global transform plus local offset), not a global centre shortcut;
+independent fractional displacement pairs must have determinant >=0.04.
+At least four tiles and 0.02 of the common source crop must qualify before a
+requested, resource-admitted <=16 MP burst selects scale=2. These initial values
+are experimental and require device/independent-chart calibration.
+The common crop multiplied by four must also remain <=56 MP before allocating
+the enlarged image. A nominal 16 MP input alone does not guarantee that bound;
+output-budget denial retains native fusion and is reported separately.
+
+At each output location inside a qualified tile, recheck actual supporting
+candidate detail, residual gate, usable mapping and two-dimensional phases.
+Only these samples enter observation-driven regional refinement. Locations without that
+evidence use the valid native fusion/reference estimate; denoise-only samples
+must not receive resolution credit. No post-sharpening or fabricated strokes
+can substitute for correspondence. A 2x file has partial eligible coverage,
+not a promise of uniformly improved 50 MP resolving power.
+
+Independent chart validation rejected the original compact point kernel (higher
+error than matched interpolation); it must not be activated merely by revised
+eligibility. Replace its regional renderer with bounded iterative back-projection:
+initialize a source-derived cubic estimate; project original same-exposure pixel
+observations through the verified global/local mapping with a 2x2 pixel-footprint
+forward model; distribute residuals using the adjoint of those weights. Keep a
+source-resolution halo, bounded per-worker patch buffers and at most eight
+iterations. Robust residuals are limited to 14 encoded levels, and final correction
+to +/-24 levels relative to the initial estimate. A tile must improve modeled
+observation error by at least 5% (initial mean squared error >1); otherwise retain
+the valid native estimate. Smooth tile-border blending prevents discontinuities.
+The JPEG pixel-footprint model is experimental, not known OEM ISP/RAW physics.
+Each fit needs >=256 usable observations from each of at least three plates;
+bound an observation search to 128x128 source pixels and total stored observations
+to 50,000 per worker patch. Failed/oversized fits preserve native fusion.
+With the two-stage renderer, contributor fractions describe the native fusion
+grid; record that domain explicitly, separately from high-grid reconstruction.
+Chart error and observed strokes/noise must pass; fitting JPEG data alone does not
+prove restored optical detail. HDR recovery remains a separate radiometric stage.
+Protect native-grid recovery from changes in sampling during enlargement. The
+host replay and original Android recovery counts differ substantially; same-host
+old/new comparison does not establish a recovery loss caused by enlargement.
+Complete native fusion and HDR before cubic enlargement; perform regional
+refinement afterward with a dilated native preservation mask for recovered pixels
+and originally clipped targets. Refinement may not overwrite those HDR/evidence
+regions. Pre-recovery clipping and recovered fractions now explicitly use the
+native fusion grid; neither is post-output remaining clipping.
+Flat locations inside an otherwise structured tile keep native denoising: require
+source 5x5 luminance range >=max(12, six times the patch's estimated noise sigma)
+before applying reconstruction. This experimental local-contrast guard must not
+erase faint strokes: ineligible locations retain their native fused estimate.
+
+The per-job structured decision records requested/admitted mode, source/crop,
+anchor count, historical mean support/centre-phase (diagnostic only), regional
+tile counts/area, thresholds, denial flags, selected scale and actually
+reconstructed pixel fraction. Return this through JNI with an explicit packet
+schema; retain it in the test-only paired manifest and capture journal. Streaming
+has an explicit native-only decision. Keep resource denial separate from image
+evidence denial. Device image quality remains unverified until measured.
 
 Output dimensions must be derived from the accepted data and resource limits.
 Upscaling, edge contrast or a larger megapixel label alone must never be reported

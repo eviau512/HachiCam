@@ -15,6 +15,7 @@ struct LocalRegistration {
     bool patchSupport = false; // Highlights use measured patch interiors only.
     cv::Size domain;
     bool offset(double x, double y, cv::Point2d& delta, float& confidence) const;
+    bool hasDetail(double x, double y) const;
 };
 LocalRegistration registerLocal(const cv::Mat& referenceGray, const cv::Mat& warpedGray, bool highlight = false, bool singlePatch = false, const cv::Mat& referenceValidity = cv::Mat());
 cv::Mat unclippedReference(const cv::Mat& image);

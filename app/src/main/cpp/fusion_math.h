@@ -30,12 +30,15 @@ inline float sampleWeight(double dx, double dy) {
            std::max(0.0, 1.0 - std::abs(dy) / 0.5);
 }
 
-inline bool phasesCover2D(const std::vector<std::array<double, 2>>& phases) {
-    for (size_t i = 0; i < phases.size(); ++i)
-        for (size_t j = i + 1; j < phases.size(); ++j)
+inline bool phasesCover2D(const std::array<double,2>* phases,size_t count) {
+    for (size_t i = 0; i < count; ++i)
+        for (size_t j = i + 1; j < count; ++j)
             if (std::abs(phases[i][0] * phases[j][1] - phases[i][1] * phases[j][0]) >= .04)
                 return true;
     return false;
+}
+inline bool phasesCover2D(const std::vector<std::array<double,2>>& phases) {
+    return phasesCover2D(phases.data(),phases.size());
 }
 
 inline bool compatibleHighlight(const Color& base,const Color& shorter,float gain) {

@@ -150,20 +150,40 @@ rc9 follow-up ([contract](research/NIGHT_HDR_REVISION_2026-10-14.md)):
   eligibility check independently and preserve source/scale/crop/rotation identity.
   Current rc9 logs explain the observed 36.76% versus 66.54% mean-support outcome
   but overload `phases2D` and omit a complete structured denial record. That
-  record is required / not implemented; stable output size is not a quality gate.
-- PHOTO-13 (P1, research / not implemented): text-ROI eligibility versus global
+  rc11 records a schema-versioned regional decision in the paired manifest/journal;
+  helper/native checks passed, device acceptance pending. Stable output size is not a quality gate.
+- PHOTO-13 (P1, rc11 experimental implementation; native chart/negative checks passed): text-ROI eligibility versus global
   coverage. The paired 13:25 screen burst fails the 0.50 global gate at 0.4873;
   host production probes show 72..91% support in the inspected text ROI and a
   passing centre phase heuristic. Validate distributed tile phases, strokes,
   aliases and noise on independent fixtures; include usable text with invalid
   background and invalid text with usable background. Unsupported regions retain
   a valid reference estimate. Centre phases and output MP alone are not passes.
-- CAP-09 (P1, target diagnostic evidence required / not implemented): record
+- CAP-09 (P1, rc11 implemented; policy tests passed, device checks pending): record
   selected shutter tap/centre, monotonic tap age and session identity separately
-  from AF acknowledgment/held distance. Test taps inside/outside the current
-  three-second validity window and after session reset; no unrecorded claim that
+  from AF acknowledgment/held distance. Taps persist beyond the old three-second
+  window until geometry/session invalidation; no unrecorded claim that
   a confirmed user tap was reused or overwritten. Target-specific optical quality
   remains a separate device check.
+
+rc11 acceptance contract (specified before implementation; ongoing device acceptance):
+- PHOTO-12/13: regional eligibility uses distributed mappings and actual pixel
+  qualification. Synthetic known two-dimensional phases with valid text and
+  invalid background may qualify; identical/collinear phases, independent noise,
+  blur/occlusion and denoise-only support cannot grant resolution credit.
+  A valid background cannot qualify an invalid target. Qualified tile fallback
+  retains a valid native estimate, including sparse holes and motion boundaries.
+  Report actual reconstruction fraction separately from file scale. Compare a
+  independently rendered high-resolution chart against same-size interpolation;
+  numeric output dimensions alone are never a detail pass.
+- CAP-09: taps remain the shutter target beyond 3 seconds in unchanged geometry;
+  invalid taps, clock rollback, old sessions, zoom/layout/orientation changes do
+  not select stale points. Test the pure target policy and inspect production
+  routing. Device AF execution/optical focus remains separate from target choice.
+- DIAG-02: versioned native packet round-trip preserves per-job denial flags,
+  region counts/fractions and achieved scale; paired manifest/journal identify
+  requested reconstruction, memory decision and selected shutter target without
+  adding viewfinder technical captions. Release does not retain these records.
 - ARCH-01 (P0, rc10 implemented; helper tests passed, device pending): crop/review rotations and four
   rotations followed by cancel/reopen preserve master checksum and consistent
   geometry. Latest recipe generation wins across filter/aspect/rotation/batch
