@@ -15,3 +15,15 @@ The user requires this order for every bug fix and feature:
 
 Do not insert an approval gate between these steps unless the action itself
 requires authorization. Preserve this workflow for follow-up requests.
+
+## End-of-work handoff
+
+When the user says to wrap up or calls it a day (for example, "收工"), commit the
+authorized task changes on the current working branch and push them without
+asking again. Verify the remote branch points to the pushed commit before
+reporting upload complete. A local commit alone is not an upload.
+
+The user's requests to commit or submit (for example, "提交") also mean commit
+and push the authorized changes to GitHub on the current branch by default.
+Do not stop after a local commit or ask for push confirmation again. Verify the
+live remote branch points to the resulting commit before reporting completion.

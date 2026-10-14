@@ -33,6 +33,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.os.LocaleListCompat
 import com.scanner.app.R
+import com.scanner.app.BuildConfig
+import com.scanner.app.data.camera.CapturePolicy
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,10 +69,11 @@ fun SettingsScreen(
     }
 
     var showLangDialog by remember { mutableStateOf(false) }
-    var isFullHdrEnabled by remember {
-        mutableStateOf(prefs.getBoolean("full_hdr_enabled", false))
+    var isHighResolutionEnabled by remember {
+        mutableStateOf(prefs.getBoolean(CapturePolicy.HIGH_KEY, false))
     }
-    var showFullHdrWarning by remember { mutableStateOf(false) }
+    var showHighResolutionWarning by remember { mutableStateOf(false) }
+    var isHdrEnabled by remember { mutableStateOf(prefs.getBoolean(CapturePolicy.HDR_KEY, true)) }
     val coroutineScope = rememberCoroutineScope()
     var isExportingLogs by remember { mutableStateOf(false) }
 
@@ -146,6 +149,24 @@ fun SettingsScreen(
                 }
             }
 
+            item {
+                Card(shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.multi_frame_title)) },
+                        supportingContent = { Text(stringResource(R.string.multi_frame_summary)) },
+                        trailingContent = {
+                            Switch(checked = isHdrEnabled, onCheckedChange = { enabled ->
+                                isHdrEnabled = enabled
+                                val edit = prefs.edit().putBoolean(CapturePolicy.HDR_KEY, enabled)
+                                if (!enabled) { isHighResolutionEnabled = false; edit.putBoolean(CapturePolicy.HIGH_KEY, false) }
+                                edit.apply()
+                            })
+                        }
+                    )
+                }
+            }
+
             // Experimental Features Section
             item {
                 Text(
@@ -164,13 +185,13 @@ fun SettingsScreen(
                     ListItem(
                         headlineContent = {
                             Text(
-                                text = stringResource(R.string.full_hdr_title),
+                                text = stringResource(R.string.high_pixel_title),
                                 fontWeight = FontWeight.Medium
                             )
                         },
                         supportingContent = {
                             Text(
-                                text = stringResource(R.string.full_hdr_summary),
+                                text = stringResource(R.string.high_pixel_summary),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         },
@@ -178,18 +199,18 @@ fun SettingsScreen(
                             Icon(
                                 imageVector = Icons.Default.HdrOn,
                                 contentDescription = null,
-                                tint = if (isFullHdrEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                tint = if (isHighResolutionEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         },
                         trailingContent = {
                             Switch(
-                                checked = isFullHdrEnabled,
+                                checked = isHighResolutionEnabled,
                                 onCheckedChange = { checked ->
                                     if (checked) {
-                                        showFullHdrWarning = true
+                                        showHighResolutionWarning = true
                                     } else {
-                                        isFullHdrEnabled = false
-                                        prefs.edit().putBoolean("full_hdr_enabled", false).apply()
+                                        isHighResolutionEnabled = false
+                                        prefs.edit().putBoolean(CapturePolicy.HIGH_KEY, false).apply()
                                     }
                                 }
                             )
@@ -254,13 +275,13 @@ fun SettingsScreen(
                     ListItem(
                         headlineContent = {
                             Text(
-                                text = stringResource(R.string.export_logs_title),
+                                text = stringResource(if (BuildConfig.SENSITIVE_DIAGNOSTICS) R.string.export_capture_diagnostics_title else R.string.export_logs_title),
                                 fontWeight = FontWeight.Medium
                             )
                         },
                         supportingContent = {
                             Text(
-                                text = stringResource(R.string.export_logs_summary),
+                                text = stringResource(if (BuildConfig.SENSITIVE_DIAGNOSTICS) R.string.export_capture_diagnostics_summary else R.string.export_logs_summary),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         },
@@ -299,6 +320,7 @@ fun SettingsScreen(
                     )
                 }
             }
+            settingsArtworkBanner()
         }
     }
 
@@ -358,9 +380,9 @@ fun SettingsScreen(
         )
     }
 
-    if (showFullHdrWarning) {
+    if (showHighResolutionWarning) {
         AlertDialog(
-            onDismissRequest = { showFullHdrWarning = false },
+            onDismissRequest = { showHighResolutionWarning = false },
             icon = {
                 Icon(
                     imageVector = Icons.Default.Warning,
@@ -371,13 +393,13 @@ fun SettingsScreen(
             },
             title = {
                 Text(
-                    text = stringResource(R.string.full_hdr_warning_title),
+                    text = stringResource(R.string.high_pixel_warning_title),
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
                 Text(
-                    text = stringResource(R.string.full_hdr_warning_desc),
+                    text = stringResource(R.string.high_pixel_warning_desc),
                     style = MaterialTheme.typography.bodyMedium,
                     lineHeight = 20.sp
                 )
@@ -385,9 +407,10 @@ fun SettingsScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        isFullHdrEnabled = true
-                        prefs.edit().putBoolean("full_hdr_enabled", true).apply()
-                        showFullHdrWarning = false
+                        isHighResolutionEnabled = true
+                        isHdrEnabled = true
+                        prefs.edit().putBoolean(CapturePolicy.HIGH_KEY, true).putBoolean(CapturePolicy.HDR_KEY, true).apply()
+                        showHighResolutionWarning = false
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error
@@ -399,7 +422,7 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(
                     onClick = {
-                        showFullHdrWarning = false
+                        showHighResolutionWarning = false
                     }
                 ) {
                     Text(stringResource(R.string.cancel))

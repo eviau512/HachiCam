@@ -36,6 +36,22 @@ OpenCV 5 geometry module. **Android still builds/ships OpenCV 4.10.0**; a host p
 is not an Android runtime, camera, memory or device-quality pass. No host test
 runtime is packaged in the APK. Compiler/Python/OpenCV paths are overridable.
 
+The rc6 suite also compiles `stream_fusion.cpp` and `noise_pipeline_test.cpp`.
+It compares known clean truth with independent noisy color frames, including
+subpixel motion, faint marks, noise-only/identical cases, blurred noisy text and
+sparse verified coverage below 20%. A 4912 x 3684 native fixture checks sequential
+fusion and analysis-to-native mapping after reference changes. Test loaders
+provide owned in-memory frames; Android's file/JPEG loading and camera mode
+availability still require device verification.
+
+The rc7 suite also compiles `highlight_pipeline_test.cpp` against both production
+normal/streaming pipelines. It checks real pixel recovery and regained text
+contrast, single-channel clipping, ordinary midtone preservation, translated
+short exposures, sparse support below the former 5% cutoff, and rejection of
+ignored exposure, occlusion and all-clipped/flat input. Grayscale match validity
+excludes any clipped reference color channel. These known-truth fixtures do not
+model every vendor JPEG response, flicker or rolling shutter.
+
 Verified official package checksums used for this workspace:
 
 | Package | SHA256 |

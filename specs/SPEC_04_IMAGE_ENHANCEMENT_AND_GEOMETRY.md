@@ -1,6 +1,6 @@
 # Specification 04: Document Enhancement Filters and Geometry
 
-> Status: Authoritative. Revised 2026-10-12.
+> Status: Authoritative. Revised 2026-10-14.
 > Language: English.
 >
 > Quality revision contract: [2026-10-12 follow-up](research/QUALITY_REVISION_2026-10-12.md). Experimental implementation; numerical tuning and physical-device acceptance remain unverified.
@@ -27,6 +27,14 @@ Keep the imported/captured master immutable. Express rotation, crop, aspect
 choice and filter settings as a recipe; save derivative results independently.
 Review generally re-renders from the source, but crop rotation currently rewrites
 its input file. Complete source immutability remains **required / not implemented**.
+
+Crop and review must use the same rotation convention and immutable source
+coordinate space. Rotation changes the recipe and display transform, not master
+JPEG bytes. Geometry must identify its source revision; leaving crop without
+confirming may not leave an overwritten source with old repository corners.
+The current crop path rewrites JPEG at quality 95 and changes only local corners;
+review re-renders from the source with recipe rotation. Unifying these paths is
+**required / not implemented**; repeated JPEG encoding is not lossless rotation.
 
 The recipe shall define algorithm version, parameter units, border handling,
 color space, bit depth and output scale. Native BGR storage order is not a color
@@ -126,6 +134,14 @@ must be an explicit document profile choice, not a generic photographic default.
 
 A source-based render path and background coroutines already exist in places;
 they do not prove atomic edits, request freshness or complete thumbnail parity.
+
+Implement the shared page ownership contract in SPEC_00 for crop, filter, aspect,
+rotation and batch requests. The same request generation owns file commit and
+page publication; a whole-page stale copy may not reset newer recipe fields.
+Check encoding success and committed file validity before publishing. UI busy
+indicators are not a concurrency primitive. Automatic edge/line/contour tasks
+also need source/generation checks so a canceled native completion cannot replace
+a newer page or manual edit. These protections remain **required / incomplete**.
 
 ## 6. Book curvature, glare and occlusion
 

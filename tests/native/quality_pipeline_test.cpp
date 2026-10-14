@@ -7,6 +7,8 @@
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void runBoundaryTests();
+void runNoiseTests();
+void runHighlightTests();
 static cv::Mat textChart() {
     cv::Mat image(1024, 1024, CV_8UC3, cv::Scalar(235, 235, 235));
     for (int y = 32; y < image.rows - 20; y += 37)
@@ -61,6 +63,18 @@ int runTests() {
     check(blurredInkSupport < .10, "Blurred text cannot contribute; blank-region noise support is allowed");
 
     BurstFusionEngine engine;
+    {
+        cv::Mat projective;const cv::Mat h=(cv::Mat_<double>(3,3)<<1,.003,4,.002,1,-3,.00001,-.000015,1);
+        cv::warpPerspective(chart,projective,h,chart.size(),cv::INTER_LINEAR,cv::BORDER_REFLECT_101);
+        cv::Mat first,firstH,chosen,chosenH;
+        check(engine.alignFrameECC(projective,chart,first,firstH),"Fixture needs a plausible first Euclidean candidate");
+        check(engine.alignBaseFrame(projective,chart,chosen,chosenH),"Projective text needs a selected registration");
+        const cv::Rect interior(64,64,896,896);
+        const double before=cv::norm(first(interior),chart(interior),cv::NORM_L2SQR)/interior.area();
+        const double after=cv::norm(chosen(interior),chart(interior),cv::NORM_L2SQR)/interior.area();
+        std::cout<<"projective candidate residual="<<before<<" -> "<<after<<'\n';
+        check(after<before*.55,"Candidate comparison must beat first-success text alignment");
+    }
     BurstFusionEngine::Report report;
     const auto result = engine.fuseBurstFrames({blurred, chart, shifted(chart, .65, .10), shifted(chart, .10, .65)},
         false, false, true, {0,0,0,0}, {100,100,100,100}, &report);
@@ -105,7 +119,9 @@ int runTests() {
     document = EdgeDetector().detectDocument(blank);
     check(document.found && cv::contourArea(document.corners) > 230000, "Inner table cannot replace the plausible page boundary");
     runBoundaryTests();
-    std::cout << "PASS: local alignment, parallax, occlusion, blur, reference ranking, fusion, crop, paper and document boundary\n";
+    runNoiseTests();
+    runHighlightTests();
+    std::cout << "PASS: local alignment, parallax, occlusion, blur, noise, highlights, reference ranking, fusion, crop, paper and document boundary\n";
     return 0;
 }
 int main() { try { return runTests(); } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << "\n"; return 1; } }

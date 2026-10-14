@@ -1,20 +1,75 @@
 # Specification 01: Camera Subsystem and Capture Pipeline
 
-> Status: Authoritative. Revised 2026-10-12.
+> Status: Authoritative. Revised 2026-10-13.
 > Language: English.
 
 ## 1. Modes and achieved outcome
 
-**Implemented:** Normal requests one JPEG; experimental HDR requests up to four
+**Implemented in rc6, device quality pending:** Full HDR/multi-frame capture is enabled by default and requests up to four
 base frames, two shorter target frames and one deeper target frame. Frame loss,
 unsupported manual exposure, invalid metadata or failed alignment may reduce
-the usable set. Neither seven valid frames nor a fixed 50 MP result is guaranteed.
+the usable set. An explicit single-frame override remains available. Native
+high-resolution burst is a separate opt-in experimental profile, subject to
+exposed JPEG sizes, exclusive admission and memory checks in the linked noise
+revision. Neither seven valid frames nor a fixed 50 MP result is guaranteed.
 
 The current pipeline is CameraX plus Camera2Interop and CPU JPEG processing.
 It is not a direct Camera2 captureBurst, a RAW pipeline, or a commercial camera
 algorithm. SPEC_02 owns reconstruction and achieved-output quality.
 
 ## 2. Capability-driven camera controls
+
+The [night/screen revision](research/NIGHT_HDR_REVISION_2026-10-14.md) requires
+bounded shutter AF and burst-long focus preservation when supported by fresh
+stationary focused metadata. Auto-cancel must not expire within the burst;
+cancellation-safe cleanup restores controls. Unknown focus stays unknown.
+Use the first captured JPEG's exactly matched result to select the held distance;
+preview metadata around the AF acknowledgment cannot substitute for that frame.
+Deep brackets may prefer lower ISO and supported 100% post-RAW boost within a
+16.667 ms shutter cap, preserving the full exposure product rather than the old
+gain allocation. Validate actual metadata; ordinary tiers retain their plan.
+
+The [rc8 detail/resolution contract](research/DETAIL_RESOLUTION_REVISION_2026-10-13.md)
+requires retaining capture variants within each grouped view. Experimental native
+high-resolution selection may use a compatible same-view endpoint with a larger
+ordinary/high-resolution JPEG budget. Do not confuse the API 31 maximum-resolution
+stream map with ordinary CameraX sizes: a separate supported sensor-pixel-mode
+session is required and is currently unimplemented. Test diagnostics must list
+all three maps and actual selected endpoint; logs retain achieved dimensions/MP.
+The rc9 viewfinder removes these technical captions per the user's request;
+settings explains experimental limits. This supersedes rc8 caption placement.
+Keep the latest capability snapshot and current-burst metadata available to log
+export independently of logcat retention. Newer burst IDs supersede older work;
+do not mix their records. This snapshot contains metadata, not retained photos.
+
+Match capture-result sensor timestamp to JPEG timestamp with bounded storage.
+When available, manual planning uses sensor ISO/time and preserves the observed
+supported post-RAW sensitivity boost, plus AWB lock across tiers. Do not infer
+these controls from JPEG brightness. Use consistent sensor or EXIF evidence for
+burst exposure comparisons; missing AF/lens/boost evidence remains unknown.
+
+The [rc7 camera/HDR correction](research/CAMERA_HDR_REVISION_2026-10-13.md)
+supersedes rc6 raw camera-ID enumeration: an ID is an endpoint, not a lens.
+Keep the default back endpoint and only expose additional compatible JPEG/YUV
+endpoints with a distinct metadata-derived field of view (12% experimental
+grouping tolerance). Prefer the default within its group; omit unclassifiable
+alternatives. Never infer hardware count from IDs or hardcode a phone model.
+Separate lens/view selection from supported logical/digital zoom controls.
+Record endpoint characteristics and grouping in test builds only.
+
+The live preview is a single-exposure SDR stream; Full HDR describes post-capture
+processing. Provide supported exposure compensation with an explicit EV value,
+reset on lens rebind, and lock changes during capture. Apply only after the
+control future succeeds. This is a manual exposure aid, not live HDR or an
+automatic clipping/readiness detector.
+
+The [2026-10-13 revision](research/NOISE_REVISION_2026-10-13.md) additionally
+requires supported back-camera selection and logical zoom controls, with
+capture-time switching disabled and state reset on rebind. Capability queries
+belong to the selected camera. Actual capture dimensions must be reported;
+the normal source budget remains 16 MP; the experimental native profile permits
+at most 56 MP with streaming decode/patch validation. Advertised sensor resolution and
+logical zoom do not certify a native high-resolution mode or a physical switch.
 
 **Implemented / hardware dependent:** prefer supported FAST noise reduction,
 retain camera-default sharpening and tonemapping, request optical stabilization
@@ -232,6 +287,15 @@ Measure camera acquisition, queue time, processing and save separately, with
 observed exposure and accepted frame counts. Apply CAP-01 through CAP-03,
 GEO-01 and LIFE-01 through LIFE-03 in
 [SPEC_06](./SPEC_06_IMAGE_QUALITY_AND_ACCEPTANCE.md).
+
+**Required / not fully implemented (control-state ownership):** record control
+request acknowledgment and actual captured settings separately. If base/focus
+option application or final restore times out/fails, do not equate the elapsed
+timeout with a known restored camera. Record the failure under its capture/session
+identity and restore/rebind or explicitly degrade before normal reuse. The
+current base/focus callers ignore `applyOptions` Boolean results and cleanup
+ignores restore results; actual metadata still determines fusion eligibility.
+This gap does not prove CameraX or an OEM ISP overwrote a successful request.
 
 Device acceptance must include unsupported manual control, ignored settings,
 missing EXIF, partial burst loss, all orientations, mirrored imports, zoom/crop,

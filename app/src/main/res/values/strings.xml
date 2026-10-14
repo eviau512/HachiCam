@@ -78,6 +78,8 @@
     <string name="full_hdr_warning_desc">Captures up to 7 JPEG frames. HDR requires supported manual exposure; detail reconstruction requires usable sub-pixel motion. Processing time and output size vary by device and scene.\n\nEnable?</string>
     <string name="confirm_enable">Enable</string>
     <string name="export_logs_title">Export Diagnostic Logs</string>
+    <string name="export_capture_diagnostics_title">Export Capture Diagnostics</string>
+    <string name="export_capture_diagnostics_summary">Includes the latest completed capture’s original burst photos, result and logs</string>
     <string name="export_logs_summary">Package app logs &amp; device diagnostics for feedback</string>
     <string name="share_logs_title">Share Diagnostic Logs</string>
     <string name="batch_ratio">Batch Ratio</string>
@@ -101,4 +103,26 @@
     <string name="boundary_partial">Edges incomplete · adjust after capture</string>
     <string name="boundary_found">Edges found</string>
     <string name="boundary_missing">No clear edges · crop manually</string>
+    <string name="multi_frame_title">Full HDR</string>
+    <string name="multi_frame_summary">Enabled by default. Combines usable frames for lower noise and highlight recovery. Turn off for a single photo.</string>
+    <string name="high_pixel_title">Native high-resolution burst</string>
+    <string name="high_pixel_summary">Experimental. Uses a higher native camera resolution when available. More time and memory are required.</string>
+    <string name="high_pixel_warning_title">Enable experimental high resolution?</string>
+    <string name="high_pixel_warning_desc">Captures multiple photos at a higher native resolution when the selected camera supports it. Processing takes longer and only one capture job can run at a time. Low memory or unsupported camera combinations may prevent capture or return to the normal mode. Real detail and noise improvement vary.</string>
+    <string name="high_pixel_memory">Not enough free memory for a high-resolution burst. Use the normal mode or try again later.</string>
+    <string name="high_pixel_unavailable">High-resolution capture is unavailable on this camera configuration. Normal Full HDR is active.</string>
+    <string name="high_pixel_active">Experimental · native high resolution</string>
+    <string name="camera_main">Main</string>
+    <string name="capture_native_mp">Native high resolution · %1$.1f MP</string>
+    <string name="capture_normal_mp">Normal capture · %1$.1f MP</string>
+    <string name="native_high_inactive">Native high resolution is inactive</string>
+    <string name="last_output_mp">Last capture output · %1$.1f MP</string>
+    <string name="camera_wide_view">Wide %1$.1f×</string>
+    <string name="camera_tele_view">Tele %1$.1f×</string>
+    <string name="camera_zoom">Zoom</string>
+    <string name="hdr_preview_hint">SDR preview · HDR processed after capture</string>
+    <string name="hdr_no_recovery">The photo was saved, but highlights could not be recovered. Tap the bright area or lower EV for a retake.</string>
+    <string name="camera_rear_number">Rear %1$d</string>
+    <string name="camera_change_failed">Could not change the camera or zoom. Please try again.</string>
+    <string name="fusion_single_frame">Only one base-exposure frame contributed. The photo was saved without multi-frame noise reduction.</string>
 </resources>

@@ -1,6 +1,6 @@
 # Specification 00: System Architecture and Technology Stack
 
-> Status: Authoritative. Revised 2026-10-12.
+> Status: Authoritative. Revised 2026-10-14.
 > Language: English. Chinese reports are explanatory and do not override this document.
 
 ## 1. Scope and status vocabulary
@@ -46,7 +46,7 @@ delivers specifications and reports; it does not implement the new requirements.
 | --- | --- | --- |
 | UI | Kotlin, Jetpack Compose, Material 3; camera, crop, review and export screens | UI availability is not proof that every historical design is implemented |
 | Camera | CameraX with Camera2Interop; JPEG capture and preview analysis | Vendor processing and manual control vary by camera |
-| Native vision | C++17 and OpenCV; contour detection, line snapping, perspective correction and four filters | Heuristic image processing, not semantic document recognition |
+| Native vision | C++17 and OpenCV; contour detection, line snapping, perspective correction and three active filters | Heuristic image processing, not semantic document recognition |
 | Burst processing | CPU alignment, experimental sampling reconstruction and short exposure highlight recovery | JPEG inputs; no active RAW or Vulkan fusion path |
 | Page state | In-memory repository with PROCESSING, READY and FAILED | Durable page metadata and process death recovery are not implemented |
 | Image storage | App private scans directory for completed images | Source and derivative edit transactions need stronger guarantees |
@@ -76,6 +76,27 @@ resources. A replacement file must be successfully encoded and committed before
 its page pointer is changed. Detailed render concurrency and edit transaction
 guarantees remain **required / not fully implemented**.
 
+The 2026-10-14 architecture inspection confirms that the global burst worker
+does **not** serialize crop/review edits or export readers. Those paths currently
+write a shared `crop_<pageId>.jpg`, publish whole page snapshots and lack a page
+revision check. Crop rotation also overwrites the source, unlike review rotation.
+These are implementation gaps, not exceptions to source preservation.
+
+**Required / not implemented:** one page-edit ownership/commit contract across
+crop, review and batch work. Capture an immutable request containing page/source
+identity, source revision, complete recipe and request generation. Render into a
+unique temporary file; recheck identity, deletion and generation before atomic
+publication. Coordinate readers with committed immutable result revisions.
+Obsolete work may finish computation but cannot replace files or page metadata.
+Preserve the last valid source/result on all failure and cancellation paths.
+Blocking OpenCV completion is not automatically canceled by coroutine `cancel()`.
+
+All product JNI image operations must validate input shape/type/dimensions and
+translate native exceptions into explicit managed failures with released buffers.
+Fusion JNI currently has exception guards; perspective/filter entry points do
+not have equivalent guards. A Kotlin `catch (Exception)` alone does not establish
+that native exceptions are contained. Coverage remains **required / incomplete**.
+
 Durable metadata, pending manifests, restart recovery and memory spill storage
 remain **required / not implemented**. Screen independent burst processing while
 the process lives must not be described as recovery after process death.
@@ -98,6 +119,26 @@ queued and executing jobs, with one global processing worker. This bound does no
 establish a measured byte budget for all crop and review work. Additional memory
 and thermal admission policies require implementation and measurement.
 
+The native-high profile is selected by **input** size. Ordinary <=16 MP input can
+still produce a roughly 50 MP reconstruction and simultaneous full-size rotation
+buffer; it does not receive native-high exclusive admission. **Required / not
+implemented:** a shared byte reservation covering compressed queued inputs,
+decoded inputs, alignment, possible reconstruction output, upright encoding,
+crop/review buffers and export readers. Reconcile allocations before scale=2;
+if resources are unavailable, retain valid native-size fusion and record resource
+degradation. A job-count limit or Java heap reading is not a native/RSS budget.
+Worker failure must leave an explicit unavailable/failed state rather than an
+open admission path with no consumer. Do not promise recovery from process death
+or an unrecoverable allocation failure.
+
+The rc6 experimental native-high-resolution profile is exclusive: no other
+capture/queued job may coexist from its admission through cleanup. It bounds
+encoded burst bytes and estimates available memory before capture/decoding.
+Native processing decodes reference plus one candidate and uses bounded patches,
+uint16 sums and byte contributor counts. SPEC_01/02 and the
+[noise revision](research/NOISE_REVISION_2026-10-13.md) own limits. This is not a
+measured thermal/RSS guarantee or durable recovery.
+
 ## 6. Build identity
 
 | Identity | Hachimi test build (debug) | Hachimi release |
@@ -110,6 +151,30 @@ and thermal admission policies require implementation and measurement.
 Use one build specific display-name resource without locale or flavor overrides
 for the application, launcher activity and settings accessibility heading.
 Updating the test build must preserve its package ID and signing identity.
+
+The rc9 [diagnostic contract](research/NIGHT_HDR_REVISION_2026-10-14.md) permits
+test-only private-cache retention of one completed burst (compressed inputs,
+final JPEG, its own manifest), at most 192 MiB. Atomic replacement/export and
+space checks must preserve the previous complete snapshot on failure. Test
+diagnostic export explicitly says original photos are included; release never
+retains or bundles those inputs. Export is initiated through the user's share
+chooser, with at most two cached bundles and no automatic network action.
+
+**Required / not implemented:** distinguish latest-started, latest-completed and
+exported capture identities. Export must label the retained manifest captureId
+and matching per-job control/processing evidence; an active later capture may
+not overwrite the only metadata record for an earlier completed bundle. Snapshot
+log identity and input/result selection consistently, or explicitly identify
+unrelated surrounding log records. A shared image-cache lock alone does not make
+the separately collected live log belong to that image set.
+
+Artifact integrity and delivery are separate from build identity. Before sending,
+record the immutable APK filename, byte size and SHA-256, verify ZIP entry CRCs,
+APK signature and alignment. A successful sender response establishes transport
+acknowledgment only, not received-file integrity or installation. If the receiver
+reports corruption, retain that failure, use a distinct retry filename and verify
+the local source again. Received size/hash or successful installation must be
+recorded separately when available; neither may be inferred from sender status.
 
 Acceptance: inspect the packaged universal test APK's resolved application and
 launcher labels, including localized entries, and merged release label resources.

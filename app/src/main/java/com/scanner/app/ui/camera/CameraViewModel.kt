@@ -8,6 +8,8 @@ import android.graphics.ImageFormat
 import android.graphics.PointF
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.net.Uri
 import android.util.Log
 import androidx.camera.camera2.interop.*
@@ -22,6 +24,10 @@ import com.scanner.app.data.camera.*
 import com.scanner.app.data.image.ImageStorage
 import com.scanner.app.data.repository.PageRepository
 import com.scanner.app.data.util.ExifUtils
+import com.scanner.app.data.util.CameraDiagnostics
+import com.scanner.app.data.util.BurstArchiveStore
+import org.json.JSONArray
+import org.json.JSONObject
 import com.scanner.app.domain.model.*
 import com.scanner.app.engine.NativeBurstFusion
 import com.scanner.app.engine.NativeEdgeDetector
@@ -35,6 +41,7 @@ import org.opencv.imgcodecs.Imgcodecs
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.UUID
+import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.math.sqrt
 
@@ -44,8 +51,25 @@ class CameraViewModel : ViewModel() {
     val detectedQuad = _detectedQuad.asStateFlow()
     private val _curvedModeEnabled = MutableStateFlow(false)
     val curvedModeEnabled = _curvedModeEnabled.asStateFlow()
-    private val _fullHdrEnabled = MutableStateFlow(false)
+    private val _fullHdrEnabled = MutableStateFlow(true)
     val fullHdrEnabled = _fullHdrEnabled.asStateFlow()
+    private val _highResolutionRequested = MutableStateFlow(false)
+    val highResolutionRequested = _highResolutionRequested.asStateFlow()
+    private val _highResolutionActive = MutableStateFlow(false)
+    val highResolutionActive = _highResolutionActive.asStateFlow()
+    private val _captureSize = MutableStateFlow<CapturePolicy.Size?>(null)
+    val captureSize = _captureSize.asStateFlow()
+    private val _lastOutputSize = MutableStateFlow<CapturePolicy.Size?>(null)
+    val lastOutputSize = _lastOutputSize.asStateFlow()
+    private val captureEvidence = CaptureEvidenceStore()
+    private var lastFocusPoint: MeteringPoint? = null
+    private var lastFocusPointAt = 0L
+    private var capturePixels = 0L
+    private val evidenceLock = Any()
+    @Volatile private var cameraGeneration = 0L
+    @Volatile private var evidenceAfterMs = 0L
+    private var zoomPending = false
+    private var zoomGeneration = 0L
     private val _isStable = MutableStateFlow(false)
     val isStable = _isStable.asStateFlow()
     private val _isCapturing = MutableStateFlow(false)
@@ -65,10 +89,116 @@ class CameraViewModel : ViewModel() {
     var cameraControl: CameraControl? = null
     var cameraInfo: CameraInfo? = null
     var frameAnalyzer: FrameAnalyzer? = null
-    private data class Frame(val bytes: ByteArray, val rotation: Int, val tier: Int, val exposure: ManualExposure?)
+    private data class Frame(val bytes: ByteArray, val rotation: Int, val tier: Int, val exposure: ManualExposure?,
+        val exifExposure: ManualExposure?, val evidence: CaptureEvidence?)
 
     fun updateSettings(context: Context) {
-        _fullHdrEnabled.value = context.getSharedPreferences("settings", Context.MODE_PRIVATE).getBoolean("full_hdr_enabled", false)
+        val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        _highResolutionRequested.value = prefs.getBoolean(CapturePolicy.HIGH_KEY, false)
+        _fullHdrEnabled.value = _highResolutionRequested.value || prefs.getBoolean(CapturePolicy.HDR_KEY, true)
+    }
+    fun beginCameraSession(): Long {
+        val oldAnalysis = imageAnalysis; val oldAnalyzer = frameAnalyzer
+        val generation = synchronized(evidenceLock) {
+            ++cameraGeneration
+            imageCapture = null; imageAnalysis = null; frameAnalyzer = null; cameraControl = null; cameraInfo = null
+            cropTracker.reset(); _detectedQuad.value = null; _isStable.value = false
+            _highResolutionActive.value = false; capturePixels = 0; zoomPending = false; evidenceAfterMs = 0
+            _captureSize.value = null; captureEvidence.clear()
+            lastFocusPoint = null; lastFocusPointAt = 0
+            cameraGeneration
+        }
+        // Never wait for the analyzer while holding the result-publication lock.
+        oldAnalysis?.clearAnalyzer(); oldAnalyzer?.close()
+        return generation
+    }
+    fun isCameraSession(generation: Long) = generation == cameraGeneration
+    fun endCameraSession(generation: Long) { if (isCameraSession(generation)) beginCameraSession() }
+    fun cameraNotice(context: Context, message: Int) { _errorMessage.value = context.getString(message) }
+    fun negotiatedCapture(width: Int, height: Int) {
+        capturePixels = width.toLong() * height
+        _captureSize.value = CapturePolicy.Size(width, height)
+        _highResolutionActive.value = _highResolutionRequested.value && capturePixels > CapturePolicy.NORMAL_PIXELS
+        CameraDiagnostics.negotiated("${width}x$height highRequested=${_highResolutionRequested.value} highActive=${_highResolutionActive.value}")
+        if (BuildConfig.SENSITIVE_DIAGNOSTICS)
+            Log.d("HachiCam-Camera", "negotiated=${width}x$height highRequested=${_highResolutionRequested.value} highActive=${_highResolutionActive.value}")
+    }
+    fun onCameraCaptureResult(result: TotalCaptureResult, generation: Long) {
+        val timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+        val time = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+        val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
+        val boost = result.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST)?.takeIf { it > 0 }
+        val observed = if (time != null && time > 0 && iso != null && iso > 0) ManualExposure(time, iso, boost) else null
+        val sample = CaptureEvidence(timestamp, observed, result.get(CaptureResult.CONTROL_AF_STATE),
+            result.get(CaptureResult.LENS_STATE), result.get(CaptureResult.LENS_FOCUS_DISTANCE))
+        synchronized(evidenceLock) { if (isCameraSession(generation)) {
+            captureEvidence.record(sample)
+        } }
+    }
+    fun rememberFocusPoint(point: MeteringPoint) {
+        lastFocusPoint = point; lastFocusPointAt = android.os.SystemClock.elapsedRealtime()
+    }
+    private suspend fun focusForBurst(control: CameraControl?, info: Camera2CameraInfo?, context: Context): Boolean {
+        if (control == null || (info?.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) <= 0) return false
+        val point = lastFocusPoint?.takeIf { android.os.SystemClock.elapsedRealtime() - lastFocusPointAt in 0..3000 }
+            ?: SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(.5f, .5f)
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).disableAutoCancel().build()
+        return withTimeoutOrNull(1500) {
+            suspendCancellableCoroutine<Boolean> { continuation ->
+                try {
+                    val future = control.startFocusAndMetering(action)
+                    continuation.invokeOnCancellation { future.cancel(false) }
+                    future.addListener({
+                        val success = runCatching { future.get().isFocusSuccessful }.getOrDefault(false)
+                        if (continuation.isActive) continuation.resume(success)
+                    }, ContextCompat.getMainExecutor(context))
+                } catch (_: Exception) { if (continuation.isActive) continuation.resume(false) }
+            }
+        } ?: false
+    }
+    fun setZoom(context: Context, ratio: Float, onChanged: () -> Unit) {
+        changeCameraControl(context, onChanged) { it.setZoomRatio(ratio) }
+    }
+    fun setExposure(context: Context, index: Int, onChanged: () -> Unit) {
+        changeCameraControl(context, onChanged) { it.setExposureCompensationIndex(index) }
+    }
+    private fun changeCameraControl(context: Context, onChanged: () -> Unit,
+        apply: (CameraControl) -> com.google.common.util.concurrent.ListenableFuture<*>) {
+        if (_isCapturing.value || zoomPending) return
+        val control = cameraControl ?: return
+        val generation = cameraGeneration
+        val request = ++zoomGeneration
+        synchronized(evidenceLock) {
+            zoomPending = true; evidenceAfterMs = Long.MAX_VALUE
+            cropTracker.reset(); _detectedQuad.value = null; _isStable.value = false
+        }
+        frameAnalyzer?.resetStability()
+        val future = try { apply(control) } catch (_: Exception) {
+            zoomPending = false; evidenceAfterMs = android.os.SystemClock.elapsedRealtime() + 300
+            cameraNotice(context, R.string.camera_change_failed)
+            return
+        }
+        future.addListener({
+            if (isCameraSession(generation) && zoomGeneration == request) {
+                zoomPending = false; evidenceAfterMs = android.os.SystemClock.elapsedRealtime() + 300
+                runCatching { future.get() }.onSuccess { onChanged() }
+                    .onFailure { cameraNotice(context, R.string.camera_change_failed) }
+            }
+        }, ContextCompat.getMainExecutor(context))
+        viewModelScope.launch {
+            delay(3000)
+            if (isCameraSession(generation) && zoomGeneration == request && zoomPending) {
+                ++zoomGeneration; zoomPending = false
+                evidenceAfterMs = android.os.SystemClock.elapsedRealtime() + 300
+                future.cancel(false)
+                cameraNotice(context, R.string.camera_change_failed)
+            }
+        }
+    }
+    private fun highMemoryAvailable(context: Context): Boolean {
+        val info = android.app.ActivityManager.MemoryInfo()
+        (context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(info)
+        return CapturePolicy.canUseHigh(capturePixels, info.availMem, info.lowMemory)
     }
     fun toggleCurvedMode() {
         _curvedModeEnabled.value = !_curvedModeEnabled.value
@@ -85,7 +215,9 @@ class CameraViewModel : ViewModel() {
     }
     private val cropTracker = CropTracker()
     private var lastDetectionLogMs = 0L
-    fun onFrameAnalyzed(result: DetectionResult) {
+    fun onFrameAnalyzed(result: DetectionResult, generation: Long = cameraGeneration) {
+        synchronized(evidenceLock) {
+        if (!isCameraSession(generation) || result.observedAtMs < evidenceAfterMs) return
         _isStable.value = result.isStable
         val w = (result.frameWidth - 1).coerceAtLeast(1).toFloat()
         val h = (result.frameHeight - 1).coerceAtLeast(1).toFloat()
@@ -105,39 +237,86 @@ class CameraViewModel : ViewModel() {
                 "selected=${selected != null} selectedPartial=${selected?.partial} ageMs=${selected?.let { now - it.observedAtMs }} " +
                 "analysisMs=${result.analysisDurationMs} geometry=${result.frameWidth}x${result.frameHeight}/${result.rotationDegrees}")
         }
+        }
     }
 
     fun capturePhoto(context: Context, onPageSaved: (String) -> Unit = {}) {
         if (_isCapturing.value) return
         val capture = imageCapture ?: return
-        if (!BurstProcessor.reserve()) {
+        if (zoomPending) return
+        val highResolution = _highResolutionActive.value
+        if (highResolution && !highMemoryAvailable(context)) {
+            _errorMessage.value = context.getString(R.string.high_pixel_memory)
+            return
+        }
+        val ticket = BurstProcessor.reserve(highResolution)
+        if (ticket == null) {
             _errorMessage.value = context.getString(R.string.capture_queue_full)
             return
         }
         _isCapturing.value = true
+        val captureId = UUID.randomUUID().toString()
+        CameraDiagnostics.beginBurst(captureId)
         val app = context.applicationContext
         val hdr = _fullHdrEnabled.value
+        val captureGeneration = cameraGeneration
         viewModelScope.launch {
             var submitted = false
             val control = cameraControl
             try {
                 if (hdr && !_isStable.value) withTimeoutOrNull(400) { _isStable.first { it } }
                 val frames = mutableListOf<Frame>()
+                var encodedBytes = 0L
+                fun retain(frame: Frame?) {
+                    if (frame == null) return
+                    if (encodedBytes + frame.bytes.size > CapturePolicy.ENCODED_LIMIT) {
+                        Log.w("HachiCam-Burst", "Compressed burst budget reached; frame dropped")
+                        return
+                    }
+                    encodedBytes += frame.bytes.size; frames.add(frame)
+                }
                 val info = cameraInfo?.let { Camera2CameraInfo.from(it) }
-                if (hdr && control != null) {
-                    val options = CaptureRequestOptions.Builder()
+                val focusConfirmed = focusForBurst(control, info, app)
+                check(isCameraSession(captureGeneration)) { "Camera session changed during focus" }
+                val minimumFocus = info?.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+                val supportsFocusOff = info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
+                    ?.contains(CaptureRequest.CONTROL_AF_MODE_OFF) == true
+                // Only the first newly captured frame can establish a held distance.
+                // A recent preview result may still precede the shutter AF operation.
+                var heldFocus: Float? = null
+                fun focusOptions(builder: CaptureRequestOptions.Builder): CaptureRequestOptions.Builder {
+                    heldFocus?.let {
+                        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                        builder.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, it)
+                    }
+                    return builder
+                }
+                fun baseOptions(): CaptureRequestOptions {
+                    val builder = focusOptions(CaptureRequestOptions.Builder())
                     if (info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true)
-                        options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, true)
+                        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, true)
                     if (info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true)
-                        options.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
-                    applyOptions(control, app, options.build())
+                        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
+                    return builder.build()
+                }
+                if (hdr && control != null) {
+                    applyOptions(control, app, baseOptions())
                 }
                 val detection = _detectedQuad.value?.takeIf {
                     CropTracker.cropEligible(it.found, it.partial, it.observedAtMs, android.os.SystemClock.elapsedRealtime())
                 }
                 if (BuildConfig.SENSITIVE_DIAGNOSTICS)
                     Log.d("HachiCam-Detection", "shutter=${if (detection == null) "full-image" else "complete-crop"} latestPartial=${_detectedQuad.value?.partial}")
-                repeat(if (hdr) 4 else 1) { takeFrame(capture, app, 0)?.let(frames::add) }
+                repeat(if (hdr) 4 else 1) { index ->
+                    check(isCameraSession(captureGeneration)) { "Camera session changed during burst" }
+                    val frame = takeFrame(capture, app, 0, captureId)
+                    retain(frame)
+                    if (index == 0 && hdr && control != null && heldFocus == null) {
+                        heldFocus = BurstFocusPolicy.heldDistance(focusConfirmed, frame?.evidence, 0, minimumFocus, supportsFocusOff)
+                        if (heldFocus != null) applyOptions(control, app, baseOptions())
+                    }
+                }
+                if (BuildConfig.SENSITIVE_DIAGNOSTICS) CameraDiagnostics.frame(captureId, "focusConfirmed=$focusConfirmed heldDistance=$heldFocus")
                 check(frames.isNotEmpty()) { "No camera frame received" }
                 val base = frames.first().exposure
                 val caps = info?.getCameraCharacteristic(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
@@ -146,25 +325,38 @@ class CameraViewModel : ViewModel() {
                 val manual = caps?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true
                 if (hdr && control != null && manual && base != null && times != null && isoRange != null) {
                     for ((tier, count, stops) in listOf(Triple(1, 2, 2.5), Triple(2, 1, 6.0))) {
-                        val exposure = ExposurePlan.bracket(base, stops, times.lower, times.upper, isoRange.lower, isoRange.upper) ?: continue
-                        val options = CaptureRequestOptions.Builder()
+                        val boostRange = info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE)
+                        val exposure = (if (tier == 2) ExposurePlan.cleanBracket(base, stops, times.lower, times.upper,
+                            isoRange.lower, isoRange.upper, boostRange?.contains(100) == true)
+                        else ExposurePlan.bracket(base, stops, times.lower, times.upper, isoRange.lower, isoRange.upper)) ?: continue
+                        val options = focusOptions(CaptureRequestOptions.Builder())
                             .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                             .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, exposure.timeNs)
-                            .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, exposure.iso).build()
-                        if (!applyOptions(control, app, options)) continue
+                            .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, exposure.iso)
+                        if (info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true)
+                            options.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
+                        exposure.postRawBoost?.takeIf { boostRange?.contains(it) == true }?.let {
+                            options.setCaptureRequestOption(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, it)
+                        }
+                        if (!applyOptions(control, app, options.build())) continue
                         repeat(count) {
-                            val frame = takeFrame(capture, app, tier)
-                            if (frame?.exposure != null && frame.exposure.product < base.product * .75)
-                                frames.add(frame)
+                            check(isCameraSession(captureGeneration)) { "Camera session changed during brackets" }
+                            val frame = takeFrame(capture, app, tier, captureId)
+                            val sensorBase = frames.first().evidence?.exposure
+                            val sensorShort = frame?.evidence?.exposure
+                            val evidence = ExposurePlan.evidence(listOf(sensorBase,sensorShort),listOf(frames.first().exifExposure,frame?.exifExposure))
+                            val baseProduct = evidence.products[0]; val shortProduct = evidence.products[1]
+                            if (frame != null && baseProduct > 0 && shortProduct > 0 && shortProduct < baseProduct * .75)
+                                retain(frame)
                             else Log.w("HachiCam-Burst", "Rejected bracket: requested=$exposure actual=${frame?.exposure}")
                         }
                     }
                 }
-                val id = UUID.randomUUID().toString()
+                val id = captureId
                 val output = File(ImageStorage(app).getStorageDir(), "$id.jpg")
                 PageRepository.addPage(ScannedPage(id = id, originalImagePath = output.absolutePath,
                     filter = ImageFilter.ORIGINAL, status = PageStatus.PROCESSING))
-                BurstProcessor.submit { processFrames(app, frames, detection, id, output, hdr) }
+                BurstProcessor.submit(ticket) { processFrames(app, frames, detection, id, output, hdr, highResolution) }
                 submitted = true
                 onPageSaved(id)
             } catch (error: CancellationException) { throw error }
@@ -175,7 +367,7 @@ class CameraViewModel : ViewModel() {
                 restoreOptions(control, app)
                 _isCapturing.value = false
                 frameAnalyzer?.resetStability()
-                if (!submitted) BurstProcessor.cancelReservation()
+                if (!submitted) BurstProcessor.cancelReservation(ticket)
             }
         }
     }
@@ -184,6 +376,7 @@ class CameraViewModel : ViewModel() {
         if (control == null) return
         withContext(NonCancellable + Dispatchers.Main) {
             withTimeoutOrNull(3000) { awaitControl(context) { Camera2CameraControl.from(control).clearCaptureRequestOptions() } }
+            withTimeoutOrNull(1500) { awaitControl(context) { control.cancelFocusAndMetering() } }
         }
     }
     private suspend fun applyOptions(control: CameraControl, context: Context, options: CaptureRequestOptions): Boolean =
@@ -199,17 +392,17 @@ class CameraViewModel : ViewModel() {
             } catch (_: Exception) { if (continuation.isActive) continuation.resume(false) }
         }
 
-    private suspend fun takeFrame(capture: ImageCapture, context: Context, tier: Int): Frame? {
+    private suspend fun takeFrame(capture: ImageCapture, context: Context, tier: Int, captureId: String): Frame? {
         val start = android.os.SystemClock.elapsedRealtime()
         val data = withTimeoutOrNull(15000) {
-            suspendCancellableCoroutine<Pair<ByteArray, Int>?> { continuation ->
+            suspendCancellableCoroutine<Triple<ByteArray, Int, Long>?> { continuation ->
                 capture.takePicture(ContextCompat.getMainExecutor(context), object : ImageCapture.OnImageCapturedCallback() {
                     override fun onCaptureSuccess(image: ImageProxy) {
                         try {
                             check(image.format == ImageFormat.JPEG || image.format == ImageFormat.JPEG_R)
                             val buffer = image.planes[0].buffer
                             val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
-                            if (continuation.isActive) continuation.resume(bytes to image.imageInfo.rotationDegrees)
+                            if (continuation.isActive) continuation.resume(Triple(bytes, image.imageInfo.rotationDegrees, image.imageInfo.timestamp))
                         } catch (error: Exception) {
                             Log.e("HachiCam-Burst", "JPEG capture failed", error)
                             if (continuation.isActive) continuation.resume(null)
@@ -222,7 +415,7 @@ class CameraViewModel : ViewModel() {
                 })
             }
         } ?: return null
-        val exposure = withContext(Dispatchers.Default) {
+        val exifExposure = withContext(Dispatchers.Default) {
             runCatching {
                 val exif = ByteArrayInputStream(data.first).use { ExifInterface(it) }
                 val seconds = exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0.0)
@@ -230,8 +423,18 @@ class CameraViewModel : ViewModel() {
                 if (seconds > 0 && iso > 0) ManualExposure((seconds * 1e9).toLong(), iso) else null
             }.getOrNull()
         }
+        val evidence = captureEvidence.take(data.third) ?: withTimeoutOrNull(100) {
+            var observed: CaptureEvidence? = null
+            while (observed == null) { delay(5); observed = captureEvidence.take(data.third) }
+            observed
+        }
+        val exposure = evidence?.exposure ?: exifExposure
         Log.i("HachiCam-Burst", "tier=$tier elapsed=${android.os.SystemClock.elapsedRealtime() - start}ms rotation=${data.second} exposure=$exposure")
-        return Frame(data.first, data.second, tier, exposure)
+        if (BuildConfig.SENSITIVE_DIAGNOSTICS) {
+            val line = "tier=$tier timestamp=${data.third} sensor=${evidence?.exposure} exif=$exifExposure af=${evidence?.afState} lens=${evidence?.lensState} focusDistance=${evidence?.focusDistance}"
+            Log.d("HachiCam-Burst", line); CameraDiagnostics.frame(captureId,line)
+        }
+        return Frame(data.first, data.second, tier, exposure, exifExposure, evidence)
     }
 
     private fun decode(frame: Frame): Mat {
@@ -257,30 +460,79 @@ class CameraViewModel : ViewModel() {
         } finally { upright.release(); params.release(); temp.delete() }
     }
 
-    private fun processFrames(context: Context, frames: List<Frame>, detection: DetectionResult?, id: String, output: File, hdr: Boolean) {
+    private fun retainBurstDiagnostics(context: Context, frames: List<Frame>, id: String, output: File,
+                                       w: Float, h: Float, mode: String, reference: Int, domain: String) {
+        if (!BuildConfig.SENSITIVE_DIAGNOSTICS) return
+        runCatching {
+            val metadata = JSONObject().put("captureId", id).put("version", BuildConfig.VERSION_NAME)
+                .put("build", BuildConfig.BUILD_TIME).put("source", BuildConfig.GIT_HASH)
+                .put("outputWidth", w.toInt()).put("outputHeight", h.toInt())
+                .put("exposureDomain", domain).put("result", mode).put("referenceIndex", reference)
+                .put("frames", JSONArray().apply { frames.forEachIndexed { index, frame ->
+                    put(JSONObject().put("file", String.format(Locale.US, "%02d-tier%d.jpg", index, frame.tier))
+                        .put("tier", frame.tier).put("rotation", frame.rotation)
+                        .put("sensorTimestamp", frame.evidence?.timestamp ?: JSONObject.NULL)
+                        .put("sensorExposure", frame.evidence?.exposure?.toString() ?: JSONObject.NULL)
+                        .put("exifExposure", frame.exifExposure?.toString() ?: JSONObject.NULL)
+                        .put("afState", frame.evidence?.afState ?: JSONObject.NULL)
+                        .put("lensState", frame.evidence?.lensState ?: JSONObject.NULL)
+                        .put("focusDistance", frame.evidence?.focusDistance?.takeIf { it.isFinite() } ?: JSONObject.NULL))
+                } })
+            val stored = BurstArchiveStore(File(context.cacheDir, "debug_burst"), true).replace(
+                frames.mapIndexed { index, frame -> String.format(Locale.US, "%02d-tier%d.jpg", index, frame.tier) to frame.bytes },
+                output, metadata.toString(2))
+            CameraDiagnostics.frame(id, "diagnosticArchiveStored=$stored")
+        }.onFailure { Log.w("HachiCam-Burst", "Diagnostic archive skipped; photo remains valid", it) }
+    }
+
+    private fun processFrames(context: Context, frames: List<Frame>, detection: DetectionResult?, id: String, output: File, hdr: Boolean, highResolution: Boolean) {
         val mats = mutableListOf<Mat>()
         val valid = mutableListOf<Frame>()
         var fused: Mat? = null
+        val temporaryInputs = mutableListOf<File>()
         try {
             frames.forEachIndexed { index, frame ->
                 if (frame.rotation != frames[0].rotation) {
                     Log.w("HachiCam-Burst", "Dropped frame $index: burst orientation changed")
                     return@forEachIndexed
                 }
-                val mat = decode(frame)
-                if (mat.empty()) { mat.release(); check(index != 0) { "Reference decode failed" } }
-                else { mats.add(mat); valid.add(frame) }
+                if (highResolution) {
+                    val temp = File.createTempFile("burst_${id}_", ".jpg", context.cacheDir)
+                    temporaryInputs.add(temp); temp.writeBytes(frame.bytes); valid.add(frame)
+                } else {
+                    val mat = decode(frame)
+                    if (mat.empty()) { mat.release(); check(index != 0) { "Reference decode failed" } }
+                    else { mats.add(mat); valid.add(frame) }
+                }
             }
             val fuser = NativeBurstFusion()
-            fused = if (hdr) fuser.fuseBurstFrames(mats, removeGlare = false, isScreenMode = true,
+            val evidence = ExposurePlan.evidence(valid.map { it.evidence?.exposure },valid.map { it.exifExposure })
+            val products = evidence.products
+            if (BuildConfig.SENSITIVE_DIAGNOSTICS) Log.d("HachiCam-Burst", "fusionExposureDomain=${evidence.description}")
+            fused = if (highResolution) {
+                val info = android.app.ActivityManager.MemoryInfo()
+                (context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(info)
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(valid.first().bytes, 0, valid.first().bytes.size, bounds)
+                check(CapturePolicy.canUseHigh(bounds.outWidth.toLong()*bounds.outHeight, info.availMem, info.lowMemory)) { "High-resolution memory budget unavailable" }
+                fuser.fuseBurstFiles(temporaryInputs.map { it.absolutePath }, valid.map { it.tier }.toIntArray(),
+                    products)
+            } else if (hdr) fuser.fuseBurstFrames(mats, removeGlare = false, isScreenMode = true,
                 superResolution = true, tiers = valid.map { it.tier }.toIntArray(),
-                exposureProducts = valid.map { it.exposure?.product ?: 0.0 }.toDoubleArray()) else mats[0].clone()
+                exposureProducts = products) else mats[0].clone()
             check(!fused.empty()) { "Fusion returned no image" }
             val report = fuser.lastReport
             val mode = if (!hdr) "Normal" else
-                "${if (report.highlights > 0) "HDR" else "Burst"}; anchors=${report.anchors}; highlights=${report.highlights}; scale=${report.scale}; reference=${report.reference}; sourceCrop=${report.left},${report.top},${report.cropW},${report.cropH}; experimental JPEG fusion"
+                "${if (highResolution) "Native-high-resolution " else ""}${if (report.recoveredFraction > 0) "HDR" else "Burst"}; anchors=${report.anchors}; highlights=${report.highlights}; scale=${report.scale}; reference=${report.reference}; multiFrameFraction=${report.multiFrameFraction}; meanContributors=${report.meanContributors}; recoveredFraction=${report.recoveredFraction}; clippedFraction=${report.clippedFraction}; sourceCrop=${report.left},${report.top},${report.cropW},${report.cropH}; JPEG fusion"
             val (w, h) = saveUpright(fused, valid[if (hdr) report.reference else 0], output, mode)
+            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description)
+            CameraDiagnostics.frame(id,"saved=${w.toInt()}x${h.toInt()} exposureDomain=${evidence.description} $mode")
+            _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
             PageRepository.updatePage(id) { it.copy(quad = computeTargetQuad(detection, w, h, frames[0].rotation, if (hdr) report else null), status = PageStatus.READY) }
+            if (hdr && (report.anchors < 2 || report.multiFrameFraction <= 0.0))
+                _errorMessage.value = context.getString(R.string.fusion_single_frame)
+            else if (hdr && report.clippedFraction > .005 && report.recoveredFraction <= 0)
+                _errorMessage.value = context.getString(R.string.hdr_no_recovery)
         } catch (error: Exception) {
             Log.e("HachiCam-Burst", "Fusion failed; retaining reference", error)
             try {
@@ -288,6 +540,9 @@ class CameraViewModel : ViewModel() {
                 try {
                     check(!fallback.empty())
                     val (w, h) = saveUpright(fallback, frames[0], output, "Fallback reference (fusion failed)")
+                    retainBurstDiagnostics(context, frames, id, output, w, h, "Fallback reference (fusion failed)", 0, "see per-frame metadata")
+                    _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
+                    CameraDiagnostics.frame(id,"savedFallback=${w.toInt()}x${h.toInt()} first-base reference")
                     PageRepository.updatePage(id) { it.copy(quad = computeTargetQuad(detection, w, h, frames[0].rotation), status = PageStatus.READY) }
                     _errorMessage.value = context.getString(R.string.fusion_fallback)
                 } finally { fallback.release() }
@@ -296,7 +551,10 @@ class CameraViewModel : ViewModel() {
                 PageRepository.updatePage(id) { it.copy(status = PageStatus.FAILED) }
                 _errorMessage.value = context.getString(R.string.capture_failed)
             }
-        } finally { fused?.release(); mats.forEach(Mat::release) }
+        } finally {
+            fused?.release(); mats.forEach(Mat::release)
+            temporaryInputs.forEach { if (it.exists() && !it.delete()) Log.w("HachiCam-Burst", "Temporary burst cleanup failed") }
+        }
         if (PageRepository.getPage(id) == null) { output.delete(); return }
         if (output.exists()) _lastThumbnailBitmap.value = BitmapFactory.decodeFile(output.absolutePath,
             BitmapFactory.Options().apply { inSampleSize = 16 })

@@ -46,6 +46,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
@@ -64,6 +66,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
 import com.scanner.app.data.camera.ImageCoordinates
+import com.scanner.app.data.camera.CapturePolicy
+import com.scanner.app.data.camera.CameraChoicePolicy
+import com.scanner.app.BuildConfig
+import com.scanner.app.data.util.CameraDiagnostics
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -93,6 +102,15 @@ fun CameraScreen(
     val detectedQuad by viewModel.detectedQuad.collectAsState()
     val curvedModeEnabled by viewModel.curvedModeEnabled.collectAsState()
     val fullHdrEnabled by viewModel.fullHdrEnabled.collectAsState()
+    val highRequested by viewModel.highResolutionRequested.collectAsState()
+    var selectedBackId by rememberSaveable { mutableStateOf<String?>(null) }
+    var backChoices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var boundBackId by remember { mutableStateOf<String?>(null) }
+    var exposureOptions by remember { mutableStateOf<List<Int>>(emptyList()) }
+    var exposureStep by remember { mutableFloatStateOf(0f) }
+    var exposureIndex by remember { mutableIntStateOf(0) }
+    var exposureMenu by remember { mutableStateOf(false) }
+    var highSuppressed by remember(highRequested, selectedBackId) { mutableStateOf(false) }
     val isStable by viewModel.isStable.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
     val isImporting by viewModel.isImporting.collectAsState()
@@ -127,6 +145,7 @@ fun CameraScreen(
     }
 
     var deviceRotationDegrees by remember { mutableFloatStateOf(0f) }
+    val windowView = androidx.compose.ui.platform.LocalView.current
     DisposableEffect(context) {
         val orientationListener = object : OrientationEventListener(context) {
             override fun onOrientationChanged(orientation: Int) {
@@ -139,7 +158,8 @@ fun CameraScreen(
                 }
                 if (!viewModel.isCapturing.value) viewModel.imageCapture?.targetRotation = rotation
 
-                val rawTarget = when (rotation) {
+                val relativeRotation = (rotation - (windowView.display?.rotation ?: Surface.ROTATION_0) + 4) % 4
+                val rawTarget = when (relativeRotation) {
                     Surface.ROTATION_0 -> 0f
                     Surface.ROTATION_90 -> 90f
                     Surface.ROTATION_180 -> 180f
@@ -255,6 +275,11 @@ fun CameraScreen(
             .background(Color.Black)
     ) {
         // ─── 1. Fullscreen Viewfinder ───
+        key(selectedBackId, highRequested, highSuppressed) {
+        val generation = remember { viewModel.beginCameraSession() }
+        DisposableEffect(generation) {
+            onDispose { viewModel.endCameraSession(generation) }
+        }
         AndroidView(
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply {
@@ -270,17 +295,78 @@ fun CameraScreen(
                 val executor = ContextCompat.getMainExecutor(ctx)
 
                 cameraProviderFuture.addListener({
+                    if (!viewModel.isCameraSession(generation)) return@addListener
+                    try {
                     val cameraProvider = cameraProviderFuture.get()
-
+                    val back = CameraSelector.DEFAULT_BACK_CAMERA.filter(cameraProvider.availableCameraInfos)
+                    if (back.isEmpty()) {
+                        viewModel.cameraNotice(ctx, R.string.camera_change_failed)
+                        return@addListener
+                    }
+                    val defaultInfo = back.first()
+                    val defaultId = Camera2CameraInfo.from(defaultInfo).cameraId
+                    val capabilityLines = mutableListOf<String>()
+                    val endpoints = back.map { info ->
+                        val c2 = Camera2CameraInfo.from(info)
+                        val id = c2.cameraId
+                        val configuration = c2.getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                        val compatible = !configuration?.getOutputSizes(android.graphics.ImageFormat.JPEG).isNullOrEmpty() &&
+                            !configuration?.getOutputSizes(android.graphics.ImageFormat.YUV_420_888).isNullOrEmpty()
+                        val ratio = runCatching { info.intrinsicZoomRatio }.getOrDefault(1f)
+                        val ordinary = configuration?.getOutputSizes(android.graphics.ImageFormat.JPEG)?.toList().orEmpty()
+                        val slower = configuration?.getHighResolutionOutputSizes(android.graphics.ImageFormat.JPEG)?.toList().orEmpty()
+                        val nativeHigh = CapturePolicy.choose((ordinary + slower).map { CapturePolicy.Size(it.width, it.height) }, true)?.pixels ?: 0L
+                        if (BuildConfig.SENSITIVE_DIAGNOSTICS)
+                            android.util.Log.d("HachiCam-Camera", "endpoint=$id intrinsicRatio=$ratio compatible=$compatible focal=${c2.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.contentToString()} sensor=${c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)}")
+                        if (BuildConfig.SENSITIVE_DIAGNOSTICS) {
+                            val maximum = if (android.os.Build.VERSION.SDK_INT >= 31)
+                                c2.getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
+                                    ?.getOutputSizes(android.graphics.ImageFormat.JPEG)?.toList().orEmpty() else emptyList()
+                            val summary = "endpoint=$id intrinsicRatio=$ratio compatible=$compatible ordinaryJPEG=$ordinary highJPEG=$slower maximumModeJPEG=$maximum nativeHighPixels=$nativeHigh caps=${c2.getCameraCharacteristic(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contentToString()} pixelArray=${c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)} boostRange=${c2.getCameraCharacteristic(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE)} afModes=${c2.getCameraCharacteristic(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.contentToString()}"
+                            android.util.Log.d("HachiCam-Camera", summary); capabilityLines.add(summary)
+                        }
+                        CameraChoicePolicy.Endpoint(id, ratio, compatible, nativeHigh)
+                    }
+                    val views = CameraChoicePolicy.views(endpoints, defaultId)
+                    backChoices = views.map { endpoint -> endpoint.id to
+                        if (endpoint.id == defaultId) "1x"
+                        else String.format(java.util.Locale.US, "%.1fx", endpoint.intrinsicRatio)
+                    }
+                    if (BuildConfig.SENSITIVE_DIAGNOSTICS)
+                        android.util.Log.d("HachiCam-Camera", "groupedViews=${views.joinToString { it.id }} default=$defaultId")
+                    val selectedView = views.firstOrNull { it.id == selectedBackId } ?: views.first()
+                    val variant = CameraChoicePolicy.captureVariant(endpoints, selectedView, highRequested && !highSuppressed)
+                    val selectedInfo = back.firstOrNull { Camera2CameraInfo.from(it).cameraId == variant.id } ?: defaultInfo
+                    val camera2Info = Camera2CameraInfo.from(selectedInfo)
+                    val currentId = camera2Info.cameraId
+                    if (BuildConfig.SENSITIVE_DIAGNOSTICS)
+                        android.util.Log.d("HachiCam-Camera", "selectedView=${selectedView.id} captureEndpoint=$currentId requestedHigh=$highRequested")
+                    capabilityLines.add("groupedViews=${views.joinToString { it.id }} selectedView=${selectedView.id} captureEndpoint=$currentId requestedHigh=$highRequested")
+                    CameraDiagnostics.capabilities(capabilityLines)
+                    val map = camera2Info.getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    val normalSizes = map?.getOutputSizes(android.graphics.ImageFormat.JPEG)?.toList().orEmpty()
+                    val highSizes = if (highRequested && !highSuppressed)
+                        map?.getHighResolutionOutputSizes(android.graphics.ImageFormat.JPEG)?.toList().orEmpty() else emptyList()
+                    val offered = (normalSizes + highSizes).distinct()
+                    val highSize = if (highRequested && !highSuppressed)
+                        CapturePolicy.choose(offered.map { CapturePolicy.Size(it.width, it.height) }, true) else null
+                    val target = highSize ?: CapturePolicy.choose(normalSizes.map { CapturePolicy.Size(it.width, it.height) }, false)
+                        ?: CapturePolicy.Size(4096, 3072)
+                    val usingHigh = highSize != null
+                    if (highRequested && !highSuppressed && !usingHigh)
+                        viewModel.cameraNotice(ctx, R.string.high_pixel_unavailable)
                     val sensorResolutionSelector = ResolutionSelector.Builder()
-                        .setResolutionStrategy(ResolutionStrategy(android.util.Size(4096, 3072), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER))
-                        .setAspectRatioStrategy(
-                            AspectRatioStrategy(
-                                AspectRatio.RATIO_4_3,
-                                AspectRatioStrategy.FALLBACK_RULE_AUTO
-                            )
-                        )
-                        .build()
+                        .setAllowedResolutionMode(if (usingHigh) ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE
+                            else ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION)
+                        .setResolutionStrategy(ResolutionStrategy(android.util.Size(target.width, target.height), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER))
+                        .setAspectRatioStrategy(AspectRatioStrategy(AspectRatio.RATIO_4_3, AspectRatioStrategy.FALLBACK_RULE_AUTO))
+                        .setResolutionFilter { sizes, _ ->
+                            sizes.filter { size ->
+                                val pixels = size.width.toLong() * size.height
+                                pixels <= (if (usingHigh) CapturePolicy.HIGH_PIXELS else CapturePolicy.NORMAL_PIXELS) &&
+                                    (!usingHigh || pixels > CapturePolicy.NORMAL_PIXELS)
+                            }
+                        }.build()
 
                     val preview = Preview.Builder()
                         .setTargetAspectRatio(AspectRatio.RATIO_4_3)
@@ -295,8 +381,12 @@ fun CameraScreen(
                         .setResolutionSelector(sensorResolutionSelector)
 
                     val camera2Extender = Camera2Interop.Extender(imageCaptureBuilder)
-                    val selectedInfo = CameraSelector.DEFAULT_BACK_CAMERA.filter(cameraProvider.availableCameraInfos).first()
-                    val camera2Info = Camera2CameraInfo.from(selectedInfo)
+                    camera2Extender.setSessionCaptureCallback(object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(session: android.hardware.camera2.CameraCaptureSession,
+                            request: CaptureRequest, result: android.hardware.camera2.TotalCaptureResult) {
+                            viewModel.onCameraCaptureResult(result, generation)
+                        }
+                    })
                     fun supports(key: CameraCharacteristics.Key<IntArray>, mode: Int) =
                         camera2Info.getCameraCharacteristic(key)?.contains(mode) == true
                     // Keep camera-default sharpening/tone. Strong ISP denoising can erase
@@ -314,7 +404,7 @@ fun CameraScreen(
                     val frameAnalyzer = com.scanner.app.data.camera.FrameAnalyzer(
                         detector = edgeDetector,
                         curvedMode = curvedModeEnabled
-                    ) { result -> viewModel.onFrameAnalyzed(result) }
+                    ) { result -> viewModel.onFrameAnalyzed(result, generation) }
                     viewModel.frameAnalyzer = frameAnalyzer
 
                     val imageAnalysis = ImageAnalysis.Builder()
@@ -339,7 +429,8 @@ fun CameraScreen(
                         }
                     viewModel.imageAnalysis = imageAnalysis
 
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                    val cameraSelector = CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                        .addCameraFilter { infos -> infos.filter { Camera2CameraInfo.from(it).cameraId == currentId } }.build()
 
                     try {
                         cameraProvider.unbindAll()
@@ -349,9 +440,34 @@ fun CameraScreen(
                         cameraControl = camera.cameraControl
                         viewModel.cameraControl = camera.cameraControl
                         viewModel.cameraInfo = camera.cameraInfo
+                        boundBackId = selectedView.id
+                        val exposure = camera.cameraInfo.exposureState
+                        exposureStep = exposure.exposureCompensationStep.toFloat()
+                        exposureOptions = if (exposure.isExposureCompensationSupported)
+                            CameraChoicePolicy.exposureIndices(exposureStep, exposure.exposureCompensationRange.lower, exposure.exposureCompensationRange.upper) else emptyList()
+                        exposureIndex = exposure.exposureCompensationIndex
+                        exposureMenu = false
+                        if (exposure.isExposureCompensationSupported && exposureIndex != 0)
+                            viewModel.setExposure(ctx, 0) { exposureIndex = 0 }
+                        imageCapture.resolutionInfo?.resolution?.let { viewModel.negotiatedCapture(it.width, it.height) }
                         camera.cameraControl.enableTorch(isTorchOn)
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        viewModel.imageCapture = null
+                        viewModel.imageAnalysis?.clearAnalyzer()
+                        viewModel.frameAnalyzer?.close()
+                        android.util.Log.e("HachiCam-Camera", "Camera binding failed", e)
+                        if (usingHigh) {
+                            highSuppressed = true
+                            viewModel.cameraNotice(ctx, R.string.high_pixel_unavailable)
+                        } else if (selectedBackId != null) {
+                            selectedBackId = null
+                            viewModel.cameraNotice(ctx, R.string.camera_change_failed)
+                        } else viewModel.cameraNotice(ctx, R.string.camera_change_failed)
+                    }
+                    } catch (error: Exception) {
+                        viewModel.imageCapture = null
+                        android.util.Log.e("HachiCam-Camera", "Camera setup failed", error)
+                        viewModel.cameraNotice(ctx, R.string.camera_change_failed)
                     }
                 }, executor)
 
@@ -374,14 +490,16 @@ fun CameraScreen(
                         val ctrl = cameraControl ?: return@detectTapGestures
                         val factory = pv.meteringPointFactory
                         val point = factory.createPoint(offset.x, offset.y)
-                        val action = FocusMeteringAction.Builder(point)
-                            .addPoint(point, FocusMeteringAction.FLAG_AE)
+                        viewModel.rememberFocusPoint(point)
+                        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
                             .setAutoCancelDuration(3, TimeUnit.SECONDS)
                             .build()
                         ctrl.startFocusAndMetering(action)
                     }
                 }
         )
+
+        } // camera session key
 
         // ─── 2. Real-time Document Edge Overlay ───
         detectedQuad?.let { quad ->
@@ -448,7 +566,6 @@ fun CameraScreen(
             // Stability pill
             Box(
                 modifier = Modifier
-                    .graphicsLayer { rotationZ = uiRotation }
                     .clip(RoundedCornerShape(24.dp))
                     .background(Color(0x990A0F1D))
                     .border(1.dp, Color(0x2AFFFFFF), RoundedCornerShape(24.dp))
@@ -500,7 +617,6 @@ fun CameraScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .graphicsLayer { rotationZ = uiRotation }
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color(0xE60F172A))
                     .border(
@@ -543,6 +659,35 @@ fun CameraScreen(
                 .padding(bottom = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            if (backChoices.isNotEmpty() || exposureOptions.isNotEmpty()) {
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    backChoices.forEach { (id, label) ->
+                        val chosen = boundBackId == id
+                        Surface(onClick = { if (!viewModel.isCapturing.value) selectedBackId = id },
+                            enabled = !isCapturing, shape = CircleShape,
+                            color = if (chosen) SteadyAmber else Color(0xCC11151D),
+                            modifier = Modifier.size(48.dp).semantics { selected = chosen }) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(label, color = if (chosen) Color.Black else Color.White,
+                                    fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                    if (exposureOptions.isNotEmpty()) Box {
+                        val ev = exposureIndex * exposureStep
+                        AssistChip(enabled = !isCapturing, onClick = { exposureMenu = true },
+                            label = { Text(String.format(java.util.Locale.US, "EV %+.1f", ev)) })
+                        DropdownMenu(expanded = exposureMenu && !isCapturing, onDismissRequest = { exposureMenu = false }) {
+                            exposureOptions.forEach { index ->
+                                DropdownMenuItem(text = { Text(String.format(java.util.Locale.US, "EV %+.1f", index * exposureStep)) },
+                                    onClick = { exposureMenu = false; viewModel.setExposure(context, index) { exposureIndex = index } })
+                            }
+                        }
+                    }
+                }
+            }
+
             // Boundary status is independent of scene steadiness.
             Row(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
@@ -555,7 +700,6 @@ fun CameraScreen(
 
                 Box(
                     modifier = Modifier
-                        .graphicsLayer { rotationZ = uiRotation }
                         .clip(RoundedCornerShape(24.dp))
                         .background(Color(0xAA0A0F1D))
                         .border(1.2.dp, boundaryColor.copy(alpha = .4f), RoundedCornerShape(24.dp))

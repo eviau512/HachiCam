@@ -6,25 +6,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
 
 /** One decoder/fusion worker for the whole app, independent of screen navigation. */
 object BurstProcessor {
-    private val slots = Semaphore(3)
-    private val queue = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+    private val admission = BurstAdmission()
+    private data class Work(val ticket: BurstAdmission.Ticket, val action: suspend () -> Unit)
+    private val queue = Channel<Work>(Channel.UNLIMITED)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     init {
         scope.launch {
             for (work in queue) {
-                try { work() }
+                try { work.action() }
                 catch (error: Exception) { Log.e("HachiCam-Burst", "Worker failed", error) }
-                finally { slots.release() }
+                finally { admission.release(work.ticket) }
             }
         }
     }
 
-    fun reserve(): Boolean = slots.tryAcquire()
-    fun cancelReservation() = slots.release()
-    fun submit(work: suspend () -> Unit) { check(queue.trySend(work).isSuccess) }
+    fun reserve(exclusive: Boolean = false) = admission.reserve(exclusive)
+    fun cancelReservation(ticket: BurstAdmission.Ticket) = admission.release(ticket)
+    fun submit(ticket: BurstAdmission.Ticket, work: suspend () -> Unit) { check(queue.trySend(Work(ticket, work)).isSuccess) }
 }

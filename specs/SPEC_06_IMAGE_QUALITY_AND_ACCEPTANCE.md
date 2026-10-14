@@ -2,6 +2,7 @@
 
 > Status: Authoritative acceptance contract. Added 2026-10-12.
 > Language: English.
+> Updated 2026-10-13 with rc8 regression and artifact-delivery acceptance.
 >
 > Quality revision contract: [2026-10-12 follow-up](research/QUALITY_REVISION_2026-10-12.md). Experimental implementation; numerical tuning and physical-device acceptance remain unverified.
 > Execution status: the initial document-only revision did not run these checks. Subsequent rc4/rc5 reports record bounded synthetic/test-build verification; the full device matrix remains pending.
@@ -102,6 +103,7 @@ deferred functionality. Status refers to code inspection, not successful testing
 | UI-01 | P1 | Displayed modes and achieved output agree; no unsupported Photo/dewarp/bilevel/GPU/50 MP guarantee; filter selection does not change crop | Three filters implemented; copy/workflow verification pending; SPEC_05 |
 | UI-02 | P1 | Uncertain crop or failed enhancement: visible manual correction, source comparison and last-valid image; never silent content deletion | Controls partial; transactional comparison workflow incomplete; SPEC_05 |
 | UI-03 | P1 | Steady, focus acknowledgment, requested HDR and processing progress are distinguishable; no one green state implies all quality criteria passed | Steadiness separation implemented; full quality guidance absent; SPEC_05 |
+| DEL-01 | P0 | Record immutable APK name, bytes/hash, ZIP CRC, signature and alignment before delivery. Sender success and receiver integrity/install are separate outcomes. A reported corrupt receipt requires a distinct retry filename and rechecked source; do not mark installation or usable receipt passed without receiver evidence | rc8 local CRC/signature/alignment pass; user reports corrupt 2137 receipt; retry1 sender acknowledged 2026-10-13 23:16:21 +08:00; receiver integrity/install pending; SPEC_00 section 6 |
 
 Additional rc4 fixtures (see the linked quality revision):
 
@@ -112,8 +114,108 @@ Additional rc4 fixtures (see the linked quality revision):
 | PHOTO-06 | P0 | Two-depth text motions, blurred first frame and occlusion: retain useful multi-frame support, improve local residuals and reject unsupported text; crop per edge <=5% | Production C++ synthetic tests; mobile/real-burst acceptance pending; SPEC_02 |
 | FILT-06 | P0 | Continuous faint marks, color, dark paper, tiny/channel variants and unchanged input master | Production math/image synthetic tests; real mark/parity acceptance pending; SPEC_04 |
 | UI-04 | P1 | Crop, single and batch review all expose Original/Magic/Paper only | Code/resource verification and build; device UI acceptance pending; SPEC_05 |
+| UI-06 | P1 | Hachimi settings ends with a bundled approximately 16:9 GPT dragon-girl / Gemini cat-girl banner after the About/log-export card; entire image, ears/horns/faces/hands remain visible, decoration has no click or accessibility action, and standard settings has no blank banner space | Artwork inspected; both debug flavors compile/resource checks pass; bottom placement code verified; physical-device layout pending; SPEC_05 section 4.1 |
+
+Historical artwork resolution verification (before the rc8 native-4x request):
+
+- The earlier enhanced banner master targets 3840 x 2160, is saved
+  separately from the 1672 x 941 version, and records its actual dimensions and
+  enhancement method. Visually compare faces, ears/horns, expressions and the
+  embracing hands with the selected scene. An unachieved size or changed detail
+  must be reported accurately. Passed: 3840 x 2160 export and native 6688 x 3764
+  result dimensions/hashes checked; visual comparison passed. That verification
+  retained the earlier runtime image at that stage. The current native-4x WebP
+  runtime contract is UI-07 below and SPEC_05 section 4.1.
 
 ## 5. Required result record
+
+rc8 additional acceptance ([contract](research/DETAIL_RESOLUTION_REVISION_2026-10-13.md)):
+
+rc9 follow-up ([contract](research/NIGHT_HDR_REVISION_2026-10-14.md)):
+
+- CAP-08: shutter AF is bounded and held through the burst; only fresh stationary
+  focused metadata grants manual distance lock; cleanup restores continuous AF.
+  Deep gain-first planning respects ranges and actual full exposure evidence.
+- PHOTO-11: clipped lamp-ring dark structure with independently verified context
+  survives in normal/streaming paths; existing all-clipped, occlusion, midtone,
+  noise, phase and crop protections pass. Real-device quality remains pending.
+- UI-08: no separate zoom presets or capture/output/native/SDR-HDR captions in
+  the viewfinder; circular real-view selectors and supported EV remain usable.
+- DIAG-01: bounded latest completed burst and matching manifest, atomic replacement
+  and ZIP export, original-photo label, previous snapshot survives failure,
+  and release retains/exports no input photos. The 2026-10-14 10:07 diagnostic ZIP
+  contains seven inputs and a matching latest completed result; decoded pixels
+  match supplied P002. Replacement/failure/privacy device cases remain pending.
+- PHOTO-12 (P1): successive 1x/2x reconstruction decisions must explain every
+  eligibility check independently and preserve source/scale/crop/rotation identity.
+  Current rc9 logs explain the observed 36.76% versus 66.54% mean-support outcome
+  but overload `phases2D` and omit a complete structured denial record. That
+  record is required / not implemented; stable output size is not a quality gate.
+- ARCH-01 (P0, required / not implemented): crop/review rotations and four
+  rotations followed by cancel/reopen preserve master checksum and consistent
+  geometry. Latest recipe generation wins across filter/aspect/rotation/batch
+  work; stale completions cannot replace result bytes or reset newer fields.
+- ARCH-02 (P0, required / incomplete): false encoder result, full disk, null
+  destination/stream, deletion during render/export and a failed input page do
+  not publish ordinary success. Preserve the previous valid rendering; reject
+  export or explicitly report partial page counts and roll back unfinished items.
+- ARCH-03 (P1, required / not implemented): normal-size inputs with scale=2,
+  multiple queued bursts plus review/export, and canceled work obey a shared byte
+  budget. Record dimensions, stage RSS/heap and allocation ownership; no consumer
+  failure may leave a silently accepting queue with permanently waiting pages.
+- ARCH-04 (P1, required / not implemented): start B while A completes/exports;
+  bundle A has A's manifest and matching per-job evidence, never an unlabeled B
+  snapshot. Late edge/line results cannot replace new-page/manual geometry.
+- ARCH-05 (P0, required / incomplete): malformed geometry/type/dimensions and
+  recoverable OpenCV failures at every connected JNI entry point produce managed
+  failures and release buffers. Fusion-only guards do not pass the whole product.
+- ARCH-06 (P1, required / incomplete): failed/timed-out base focus/AE/AWB apply or
+  cleanup has explicit session-bound state; reused capture cannot silently assume
+  restoration. Test acknowledgment failure separately from actual ignored settings.
+
+Architecture scope and static evidence are recorded in the
+[2026-10-14 architecture audit](reports/ARCHITECTURE_AUDIT_2026-10-14.zh-CN.md).
+These are future acceptance contracts, not new implemented protections or device passes.
+- PHOTO-02 / PHOTO-07 device evidence: the same-burst P002 reference/result pair
+  supports preliminary texture/noise and stroke inspection at matched scale.
+  It does not certify restored resolution, OCR accuracy, night quality or a
+  calibrated noise reduction percentage. See the
+  [daylight evidence report](reports/RC9_DAYLIGHT_ANALYSIS_2026-10-14.zh-CN.md).
+
+- CAP-06: grouped same-view endpoints retain different ordinary/high JPEG
+  capabilities; native selection prefers a supported variant within budget and
+  excludes maximum-pixel-mode-only sizes. Unsupported fallback shows actual MP.
+- CAP-07: timestamp matching is exact and bounded; bracket planning preserves
+  observed post-RAW boost/AWB lock and does not mix sensor and EXIF products.
+- PHOTO-10: projective text alignment chooses stronger structural evidence than
+  the first accepted Euclidean candidate; existing negative/phase/noise gates pass.
+- UI-07: native 4x WebP decodes to identical RGB, preserves full composition at
+  the settings bottom and uses bounded asynchronous display decoding.
+
+These requirements do not certify phone high-resolution support or soft-text quality.
+
+Additional rc6 checks ([contract](research/NOISE_REVISION_2026-10-13.md)):
+
+Additional rc7 checks ([contract](research/CAMERA_HDR_REVISION_2026-10-13.md)):
+
+- CAP-05: four back endpoints representing two fields of view yield two view
+  choices; keep distinct tele/ultra-wide views, omit unknown auxiliaries, retain
+  default and separate zoom. Test actual device grouping and bind fallback.
+- PHOTO-09: run the production normal and streaming pipelines on clipped text
+  with useful short exposure and a small supported bright region; require actual
+  recovered pixels, retained midtones and no false recovery for ignored exposure,
+  all-clipped/flat evidence or displaced/occluded content. Record pixel coverage.
+- UI-05: SDR preview and HDR achieved outcome are distinguishable; exposure menu
+  respects support/range/busy state; long status labels cannot overlap shutter or
+  view controls in either window orientation or with OS rotation locked.
+
+These are acceptance requirements, not claims of physical-device verification.
+
+| ID | Priority | Scenario and acceptance | Current status / owner |
+| --- | --- | --- | --- |
+| PHOTO-07 | P1 | Independent-noise sparse text/flat shadows: retain usable native-size multi-frame support, reduce measured noise without losing strokes, and report actual coverage | Production synthetic noise/subpixel/sparse regressions pass; rc6 real burst pending; SPEC_02 |
+| PHOTO-08 | P0 | Noise-only, correlated/identical noise, blur, sparse masks and occlusion: no false SR or copied unsupported detail; noisy reference cannot win merely through grain energy | Production synthetic checks pass, including noisy blur and 18.1 MP streaming; real ISP/correlated-noise limits pending; SPEC_02 |
+| CAP-04 | P1 | Select exposed back camera/zoom, reject unsupported capture size, switch/reset, failed binding and capture-time lock: UI and achieved geometry agree | Implemented/compiled; pure policy/reset tests pass; actual lens/size/peak memory verification pending; SPEC_01/05 |
 
 Additional rc5 boundary checks ([contract](research/BOUNDARY_REVISION_2026-10-12.md)):
 

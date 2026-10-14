@@ -12,6 +12,21 @@
 #define TAG "HachiCam-JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
+static jlongArray encodeFusionResult(JNIEnv* env, cv::Mat& fused, const BurstFusionEngine::Report& report) {
+    jlongArray result=env->NewLongArray(25);
+    if(!result)return nullptr;
+    jlong values[25]={reinterpret_cast<jlong>(new cv::Mat(std::move(fused))),report.anchors,report.highlights,report.scale,
+        report.reference,report.crop.x,report.crop.y,report.crop.width,report.crop.height,report.sourceSize.width,report.sourceSize.height};
+    static_assert(sizeof(double)==sizeof(jlong));
+    for(int i=0;i<9;++i)std::memcpy(&values[11+i],&report.firstToReference.val[i],sizeof(double));
+    values[20]=report.geometryKnown ? 1 : 0;
+    std::memcpy(&values[21],&report.multiFrameFraction,sizeof(double));
+    std::memcpy(&values[22],&report.meanContributors,sizeof(double));
+    std::memcpy(&values[23],&report.recoveredFraction,sizeof(double));
+    std::memcpy(&values[24],&report.clippedFraction,sizeof(double));
+    env->SetLongArrayRegion(result,0,25,values);return result;
+}
+
 extern "C" {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
@@ -148,19 +163,36 @@ Java_com_scanner_app_engine_NativeBurstFusion_nativeFuseBurstFrames(JNIEnv* env,
         BurstFusionEngine engine;
         BurstFusionEngine::Report report;
         cv::Mat fused = engine.fuseBurstFrames(frames, removeGlare, isScreenMode, superResolution, tiers, exposures, &report);
-        jlongArray result = env->NewLongArray(21);
-        if (!result) return nullptr;
-        jlong values[21] = {reinterpret_cast<jlong>(new cv::Mat(fused)), report.anchors, report.highlights, report.scale,
-            report.reference, report.crop.x, report.crop.y, report.crop.width, report.crop.height,
-            report.sourceSize.width, report.sourceSize.height};
-        static_assert(sizeof(double) == sizeof(jlong));
-        for (int i = 0; i < 9; ++i) std::memcpy(&values[11 + i], &report.firstToReference.val[i], sizeof(double));
-        values[20] = report.geometryKnown ? 1 : 0;
-        env->SetLongArrayRegion(result, 0, 21, values);
-        return result;
+        return encodeFusionResult(env,fused,report);
     } catch (const std::exception& error) {
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), error.what());
         return nullptr;
+    }
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_scanner_app_engine_NativeBurstFusion_nativeFuseBurstFiles(JNIEnv* env,jobject,jobjectArray pathArray,jintArray tierArray,jdoubleArray exposureArray) {
+    if(!pathArray||!tierArray||!exposureArray)return nullptr;
+    const jsize count=env->GetArrayLength(pathArray);
+    if(count<1||count>7||env->GetArrayLength(tierArray)!=count||env->GetArrayLength(exposureArray)!=count) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),"Stream metadata length mismatch");return nullptr;
+    }
+    std::vector<std::string> paths;paths.reserve(count);
+    for(int i=0;i<count;++i) {
+        auto path=static_cast<jstring>(env->GetObjectArrayElement(pathArray,i));
+        if(!path){env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),"Missing source file");return nullptr;}
+        const char* text=env->GetStringUTFChars(path,nullptr);
+        if(!text){env->DeleteLocalRef(path);return nullptr;}
+        paths.emplace_back(text);env->ReleaseStringUTFChars(path,text);env->DeleteLocalRef(path);
+    }
+    std::vector<int> tiers(count);std::vector<double> exposures(count);
+    env->GetIntArrayRegion(tierArray,0,count,tiers.data());env->GetDoubleArrayRegion(exposureArray,0,count,exposures.data());
+    try {
+        BurstFusionEngine engine;BurstFusionEngine::Report report;
+        auto fused=engine.fuseBurstStream(count,[&](size_t i){return cv::imread(paths[i],cv::IMREAD_COLOR|cv::IMREAD_IGNORE_ORIENTATION);},tiers,exposures,&report);
+        return encodeFusionResult(env,fused,report);
+    } catch(const std::exception& error) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),error.what());return nullptr;
     }
 }
 

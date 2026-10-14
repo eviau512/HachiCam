@@ -38,17 +38,23 @@ inline bool phasesCover2D(const std::vector<std::array<double, 2>>& phases) {
     return false;
 }
 
-inline Color recoverHighlight(const Color& base, const Color& shorter, float gain) {
+inline bool compatibleHighlight(const Color& base,const Color& shorter,float gain) {
+    for(int c=0;c<3;++c)
+        if(base[c]<247 && std::abs(encoded(std::min(1.f,linear(shorter[c])*gain))-base[c])>24)return false;
+    return true;
+}
+
+inline Color recoverHighlight(const Color& base, const Color& shorter, float gain, bool observedDark = false) {
     const float peak = *std::max_element(base.begin(), base.end());
     const float shortPeak = *std::max_element(shorter.begin(), shorter.end());
-    if (peak <= 230.0f || shortPeak < 3.0f || shortPeak >= 246.0f || gain <= 1.1f)
+    if (peak <= 230.0f || (!observedDark && shortPeak < 3.0f) || shortPeak >= 246.0f || gain <= 1.1f)
         return base;
     Color radiance;
     for (int c = 0; c < 3; ++c) radiance[c] = linear(shorter[c]) * gain;
     const float maxRadiance = *std::max_element(radiance.begin(), radiance.end());
     // Continuous shoulder with unit slope at the knee, asymptotic ceiling < 255.
     constexpr float knee = 0.60f, ceiling = 0.92f;
-    if (maxRadiance < knee) return base;
+    if (maxRadiance < knee && !observedDark) return base;
     const float excess = std::max(0.0f, maxRadiance - knee);
     const float target = maxRadiance <= knee ? maxRadiance :
         knee + (ceiling - knee) * excess / (excess + ceiling - knee);

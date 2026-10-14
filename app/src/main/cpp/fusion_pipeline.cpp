@@ -8,6 +8,7 @@
 namespace {
 struct Plate {
     cv::Mat image;
+    cv::Mat highlightNeighborhood;
     fusion::LocalRegistration local;
     cv::Matx33d inverse;
     float gain = 1.0f;
@@ -38,7 +39,7 @@ Plate prepare(const cv::Mat& image, const cv::Mat& h) {
     cv::Matx33d matrix;
     for (int y = 0; y < 3; ++y)
         for (int x = 0; x < 3; ++x) matrix(y, x) = inverse.at<double>(y, x);
-    return {image, {}, matrix, 1.0f};
+    Plate plate; plate.image=image; plate.inverse=matrix; return plate;
 }
 
 bool rectangleSupported(const Plate& plate, const cv::Rect& crop) {
@@ -69,30 +70,6 @@ bool cropForPlate(const Plate& plate, cv::Rect& crop) {
     return true;
 }
 
-// Estimate the effective JPEG response from shared, unclipped scene samples.
-// Camera JPEGs are already ISP tone-mapped: exposure metadata alone is not a
-// calibrated radiometric response. Use the measured ratio when well supported.
-float responseGain(const cv::Mat& base, const cv::Mat& aligned, double fallback) {
-    std::vector<float> ratios;
-    const int step = std::max(1, std::max(base.rows, base.cols) / 100);
-    for (int y = 0; y < base.rows; y += step) {
-        for (int x = 0; x < base.cols; x += step) {
-            const auto b = base.at<cv::Vec3b>(y, x);
-            const auto s = aligned.at<cv::Vec3b>(y, x);
-            const int bmax = std::max({b[0], b[1], b[2]}), smax = std::max({s[0], s[1], s[2]});
-            if (bmax < 40 || bmax > 220 || smax < 12 || smax > 220) continue;
-            const float bl = 0.114f * fusion::linear(b[0]) + 0.587f * fusion::linear(b[1]) + 0.299f * fusion::linear(b[2]);
-            const float sl = 0.114f * fusion::linear(s[0]) + 0.587f * fusion::linear(s[1]) + 0.299f * fusion::linear(s[2]);
-            if (sl > 1e-5f) ratios.push_back(bl / sl);
-        }
-    }
-    if (ratios.size() >= 64) {
-        const auto mid = ratios.begin() + ratios.size() / 2;
-        std::nth_element(ratios.begin(), mid, ratios.end());
-        return std::clamp(*mid, 1.0f, 256.0f);
-    }
-    return std::clamp(static_cast<float>(fallback), 1.0f, 256.0f);
-}
 } // namespace
 
 cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
@@ -121,6 +98,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
     std::vector<Plate> highlights;
     cv::Mat refGray;
     cv::cvtColor(ref, refGray, cv::COLOR_BGR2GRAY);
+    const cv::Mat highlightValidity=fusion::unclippedReference(ref);
     cv::Rect commonCrop(0, 0, ref.cols, ref.rows);
     cv::Matx33d firstToReference = cv::Matx33d::eye();
     bool geometryKnown = reference == 0;
@@ -130,14 +108,14 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
         if (i == reference) continue;
         if (frames[i].empty() || frames[i].size() != ref.size() || frames[i].type() != ref.type()) continue;
         const int tier = tiers.empty() ? 0 : tiers[i];
+        const double exposureGain=(!exposureProducts.empty() && exposureProducts[i]>0) ? exposureProducts[reference]/exposureProducts[i] : 0;
+        if(tier!=0 && (!isScreenMode || exposureGain<=1.25 || !std::isfinite(exposureGain)))continue;
         cv::Mat warped, h;
         bool aligned;
         if (tier == 0) {
-            aligned = alignFrameECC(frames[i], ref, warped, h) ||
-                      alignFrameHomography(frames[i], ref, warped, h) ||
-                      alignGradientPhaseCorrelation(frames[i], ref, warped, h);
+            aligned = alignBaseFrame(frames[i], ref, warped, h);
         } else {
-            aligned = alignHighlightFrame(frames[i], ref, warped, h);
+            aligned = alignHighlightFrame(frames[i], ref, warped, h, exposureGain);
         }
         if (!aligned || warped.empty() || h.empty() || !cv::checkRange(h) || std::abs(cv::determinant(h)) < 1e-9) {
             LOGI("Frame %zu tier=%d rejected: alignment failed", i, tier);
@@ -150,11 +128,13 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
             geometryKnown = true;
         }
         cv::Mat gray;
-        cv::cvtColor(warped, gray, cv::COLOR_BGR2GRAY);
-        plate.local = fusion::registerLocal(refGray, gray, tier != 0);
-        LOGI("Frame %zu tier=%d localSupport=%.3f detailNodes=%.3f maxRefinement=%.3fpx", i, tier, plate.local.supportedFraction, plate.local.detailFraction, plate.local.maxOffset);
+        if(tier!=0)plate.gain=fusion::responseGain(ref,warped,exposureGain);
+        if(tier!=0)LOGI("Frame %zu short responseGain=%.3f metadataGain=%.3f",i,plate.gain,exposureGain);
+        cv::cvtColor(tier!=0 ? fusion::normalizeExposure(warped,plate.gain) : warped, gray, cv::COLOR_BGR2GRAY);
+        plate.local = fusion::registerLocal(refGray, gray, tier != 0, false, tier!=0 ? highlightValidity : cv::Mat());
+        LOGI("Frame %zu tier=%d localSupport=%.3f detailNodes=%.3f denoiseOnly=%.3f noiseSigma=%.2f maxRefinement=%.3fpx", i, tier, plate.local.supportedFraction, plate.local.detailFraction, plate.local.denoiseOnlyFraction, plate.local.noiseSigma, plate.local.maxOffset);
         if (tier == 0) {
-            if (plate.local.supportedFraction < .20f) {
+            if (plate.local.supportedFraction < .005f || cv::countNonZero(plate.local.gate)<1024) {
                 LOGI("Frame %zu rejected: insufficient local support", i); continue;
             }
             auto crop = commonCrop;
@@ -171,8 +151,10 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
             const double gain = exposureProducts[reference] / exposureProducts[i];
             // Reject an ignored manual exposure request rather than invent HDR.
             if (gain <= 1.25) continue;
-            plate.gain = responseGain(ref, warped, gain);
-            if (plate.gain > 1.1f && plate.local.supportedFraction >= .05f) highlights.push_back(std::move(plate));
+            if (plate.gain > 1.1f && cv::countNonZero(plate.local.gate)>=1024) {
+                plate.highlightNeighborhood=fusion::highlightNeighborhood(plate.image,plate.gain);
+                highlights.push_back(std::move(plate));
+            }
         }
     }
     // Prefer the least underexposed valid plate (better SNR); use the deeper
@@ -181,6 +163,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
     const bool diversePhases = anchors.size() >= 3 && fusion::phasesCover2D(phases) &&
         reliableCoverage / std::max(size_t(1), anchors.size() - 1) >= .50;
     const int scale = superResolution && diversePhases && ref.total() <= 16000000 ? 2 : 1;
+    LOGI("SR decision: requested=%d anchors=%zu detailFrames=%zu phases2D=%d reliableCoverage=%.4f sourcePixels=%zu scale=%d",superResolution,anchors.size(),phases.size(),fusion::phasesCover2D(phases),reliableCoverage/std::max(size_t(1),anchors.size()-1),ref.total(),scale);
     if (report) {
         report->anchors = int(anchors.size()); report->highlights = int(highlights.size()); report->scale = scale;
         report->reference = int(reference); report->crop = commonCrop; report->sourceSize = ref.size();
@@ -192,7 +175,10 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
     cv::Mat result(commonCrop.height * scale, commonCrop.width * scale, CV_8UC3);
     // Only the 8-bit result is allocated at output resolution. No 50MP float
     // accumulation, gradient pyramids or per-channel temporaries are retained.
-    #pragma omp parallel for schedule(static)
+    long long contributorCount=0,multiFramePixels=0,recoveredPixels=0,clippedPixels=0;
+    unsigned usedHighlightMask=0;
+    // Up to seven plates; a bit records actual use without per-pixel atomics.
+    #pragma omp parallel for schedule(static) reduction(+:contributorCount,multiFramePixels,recoveredPixels,clippedPixels) reduction(|:usedHighlightMask)
     for (int y = 0; y < result.rows; ++y) {
         auto* out = result.ptr<cv::Vec3b>(y);
         const double ry = commonCrop.y + fusion::sourceCoordinate(y, scale);
@@ -202,6 +188,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
             sample(ref, std::clamp(rx, 0.0, double(ref.cols - 1)), std::clamp(ry, 0.0, double(ref.rows - 1)), base);
             fusion::Color sum{};
             float weights = 0;
+            int contributors=0;
             const int gx = std::clamp(int(std::round(rx)), 0, ref.cols - 1);
             const int gy = std::clamp(int(std::round(ry)), 0, ref.rows - 1);
             for (const auto& plate : anchors) {
@@ -221,11 +208,16 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
                 } else if (!sample(plate.image, p.x, p.y, color)) continue;
                 for (int c = 0; c < 3; ++c) sum[c] += color[c] * w;
                 weights += w;
+                ++contributors;
             }
+            contributorCount+=std::max(1,contributors);
+            if(contributors>=2)++multiFramePixels;
             if (weights > 1e-5f)
                 for (int c = 0; c < 3; ++c) base[c] = sum[c] / weights;
+            if(*std::max_element(base.begin(),base.end())>=250)++clippedPixels;
             if (*std::max_element(base.begin(), base.end()) > 230) {
-                for (const auto& plate : highlights) {
+                for (size_t hi=0;hi<highlights.size();++hi) {
+                    const auto& plate=highlights[hi];
                     if (!plate.local.gate.at<uchar>(gy, gx)) continue;
                     cv::Point2d delta; float confidence;
                     if (!plate.local.offset(rx, ry, delta, confidence)) continue;
@@ -233,13 +225,27 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat>& frames,
                     fusion::Color color;
                     if (!sample(plate.image, p.x, p.y, color)) continue;
                     const float peak = *std::max_element(color.begin(), color.end());
-                    if (peak < 3 || peak >= 246 || fusion::linear(peak) * plate.gain < 0.60f) continue;
-                    base = fusion::recoverHighlight(base, color, plate.gain);
+                    const bool observedDark=*std::max_element(base.begin(),base.end())>=247 &&
+                        plate.highlightNeighborhood.at<uchar>(std::clamp(int(std::round(p.y)),0,plate.image.rows-1),
+                            std::clamp(int(std::round(p.x)),0,plate.image.cols-1));
+                    if (peak >= 246 || (!observedDark && (peak < 3 || fusion::linear(peak) * plate.gain < .60f)) ||
+                        !fusion::compatibleHighlight(base,color,plate.gain)) continue;
+                    const auto recovered=fusion::recoverHighlight(base,color,plate.gain,observedDark);
+                    float change=0;for(int c=0;c<3;++c)change=std::max(change,std::abs(base[c]-recovered[c]));
+                    if(change<.5f)continue;
+                    base=recovered;++recoveredPixels;usedHighlightMask|=1u<<hi;
                     break;
                 }
             }
             for (int c = 0; c < 3; ++c) out[x][c] = cv::saturate_cast<uchar>(base[c]);
         }
     }
+    const double multiFraction=double(multiFramePixels)/result.total();
+    const double meanContributors=double(contributorCount)/result.total();
+    int usedHighlights=0;for(unsigned bits=usedHighlightMask;bits;bits>>=1)usedHighlights+=bits&1u;
+    if(report){report->multiFrameFraction=multiFraction;report->meanContributors=meanContributors;report->highlights=usedHighlights;
+        report->recoveredFraction=double(recoveredPixels)/result.total();report->clippedFraction=double(clippedPixels)/result.total();}
+    LOGI("Highlight pixels: framesUsed=%d admitted=%zu recovered=%lld clipped=%lld fraction=%.6f",usedHighlights,highlights.size(),recoveredPixels,clippedPixels,double(recoveredPixels)/result.total());
+    LOGI("Contribution: multiFrameFraction=%.4f meanContributors=%.3f",multiFraction,meanContributors);
     return result;
 }

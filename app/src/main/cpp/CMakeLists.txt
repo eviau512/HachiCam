@@ -17,6 +17,7 @@ add_library(
         curve_dewarper.cpp
         burst_fusion.cpp
         fusion_pipeline.cpp
+        stream_fusion.cpp
         local_registration.cpp
         vulkan_compute_engine.cpp
         jni_bridge.cpp

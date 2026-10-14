@@ -37,6 +37,8 @@ object LogCollector {
                     appendLine("Android: ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}")
                     appendLine("ABIs: ${Build.SUPPORTED_ABIS.joinToString()}")
                     appendLine("Root available: ${DiagnosticAccess.rootAvailable}")
+                    appendLine("--- Latest camera capabilities and burst metadata ---")
+                    appendLine(CameraDiagnostics.snapshot())
                     appendLine("--- App process log ---")
                     appendLine(DiagnosticAccess.command(listOf("logcat", "-d", "-v", "time", "--pid=${android.os.Process.myPid()}", "-t", "3000")))
                     if (DiagnosticAccess.rootAvailable) {
@@ -48,12 +50,19 @@ object LogCollector {
                 }
             }
             file.writeText(text, Charsets.UTF_8)
+            val bundle = if (BuildConfig.SENSITIVE_DIAGNOSTICS) runCatching {
+                BurstArchiveStore(File(context.cacheDir, "debug_burst"), true)
+                    .export(file, File(directory, "hachicam_capture_$timestamp.zip"))
+            }.getOrNull() else null
+            directory.listFiles { f -> f.isFile && f.name.startsWith("hachicam_capture_") && f.extension == "zip" }
+                ?.sortedByDescending { it.lastModified() }?.drop(2)?.forEach { it.delete() }
+            val shared = bundle ?: file
             withContext(Dispatchers.Main) {
-                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", shared)
                 val intent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
+                    type = if (bundle != null) "application/zip" else "text/plain"
                     putExtra(Intent.EXTRA_STREAM, uri)
-                    putExtra(Intent.EXTRA_SUBJECT, "HachiCam Diagnostic Log - ${file.name}")
+                    putExtra(Intent.EXTRA_SUBJECT, "HachiCam Diagnostics - ${shared.name}")
                     putExtra(Intent.EXTRA_TEXT, "HachiCam ${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_HASH})")
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }

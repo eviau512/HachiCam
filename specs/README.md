@@ -1,6 +1,6 @@
 # HachiCam Specifications
 
-> Revised 2026-10-12. Authoritative specifications are written in English.
+> Revised 2026-10-14. Authoritative specifications are written in English.
 > Chinese reports explain the changes and do not override the English contracts.
 
 ## 1. Required workflow and status
@@ -19,6 +19,21 @@ next-device checks and remaining implementation work. It does not override the
 authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
+
+Latest follow-up: [rc9 night/screen contract](research/NIGHT_HDR_REVISION_2026-10-14.md)
+and [Chinese evidence/implementation report](reports/RC9_NIGHT_HDR_REPORT_2026-10-14.zh-CN.md).
+This includes observed output sizes, focus/highlight changes, simplified camera UI,
+test-only paired-input diagnostics and outstanding device acceptance.
+
+The [2026-10-14 daylight analysis](reports/RC9_DAYLIGHT_ANALYSIS_2026-10-14.zh-CN.md)
+explains per-burst 12.35/47.17 MP selection, same-burst text/noise observations,
+confirmed focus holding, limited highlight recovery and the next-device checklist.
+It updates SPEC_02/06 requirements only; no new product build accompanies it.
+
+The [architecture audit](reports/ARCHITECTURE_AUDIT_2026-10-14.zh-CN.md) checks
+cross-flow ownership, source rotation, edit commits, export failures, JNI bounds,
+resource admission and diagnostic/control identity. SPEC_00/01/04/06 now record
+the corresponding required protections; the audit does not implement them.
 
 | Document | Scope |
 | --- | --- |
@@ -90,3 +105,33 @@ line assembly, partial/manual outcomes and bounded test diagnostics.
 [Chinese rc5 report](reports/RC5_BOUNDARY_FIX_REPORT_2026-10-12.zh-CN.md) records
 production C++ regression, screenshot tuning, build identity and hyper-obs
 delivery. Physical-device quality remains unverified.
+
+## rc6 noise and capture follow-up (2026-10-13)
+
+The supplied rc5 log confirms that all nonreference base frames were discarded,
+leaving no temporal denoising. [Noise revision](research/NOISE_REVISION_2026-10-13.md)
+separates native denoising from detail eligibility, retains sparse verified
+samples, defaults Full HDR on, and specifies optional native high-resolution
+streaming plus available back-camera/zoom selection. The
+[Chinese rc6 report](reports/RC6_NOISE_FIX_REPORT_2026-10-13.zh-CN.md) records
+executed regressions, delivery and remaining device validation.
+
+## rc7 camera and highlight follow-up (2026-10-13)
+
+The rc6 device log confirms four base contributors but zero useful short
+exposures. [Correction contract](research/CAMERA_HDR_REVISION_2026-10-13.md)
+and SPEC_01/02/05/06 revise endpoint grouping, SDR/EV guidance, normalized
+short-exposure geometry checks and actual recovered-pixel reporting. The
+[Chinese rc7 report](reports/RC7_CAMERA_HDR_FIX_REPORT_2026-10-13.zh-CN.md)
+records the synthetic regressions and delivered universal test APK, including
+the supplied settings banner at the bottom. Real-camera acceptance is pending.
+
+## rc8 detail and actual resolution follow-up
+
+[Revised contract](research/DETAIL_RESOLUTION_REVISION_2026-10-13.md) addresses
+the rc7 12 MP output and soft-text feedback. It retains same-view capture variants,
+shows achieved MP, records timestamp-matched sensor/EXIF evidence, preserves
+supported post-RAW boost/AWB lock and compares bounded global alignment models.
+It also packages the user's native 4x banner as lossless WebP with bounded display
+decoding. [Chinese rc8 record](reports/RC8_DETAIL_RESOLUTION_REPORT_2026-10-13.zh-CN.md)
+states executed checks and the remaining device/source-comparison limits.

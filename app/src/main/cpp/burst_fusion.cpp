@@ -1,4 +1,5 @@
 #include "burst_fusion.h"
+#include "local_registration.h"
 #include <opencv2/photo.hpp>
 #include <opencv2/video.hpp>
 #include <vector>
@@ -122,6 +123,48 @@ static bool verifyAlignment(const cv::Mat& src, const cv::Mat& ref, const cv::Ma
     LOGI("verify[%s]: hp-zncc=%.3f identity=%.3f moved=%.1fpx lumaRatio=%.2f sameExposure=%d -> %s",
          tag, zH, zI, moved, ratio, sameExposure ? 1 : 0, ok ? "ACCEPT" : "REJECT");
     return ok;
+}
+
+static bool projectiveECC(const cv::Mat& src,const cv::Mat& ref,const cv::Mat& initial,cv::Mat& warped,cv::Mat& h) {
+    try {
+        cv::Mat gs,gr;cv::cvtColor(src,gs,cv::COLOR_BGR2GRAY);cv::cvtColor(ref,gr,cv::COLOR_BGR2GRAY);
+        const double ratio=std::min(1.,1280./std::max(ref.cols,ref.rows));
+        if(ratio<1){cv::resize(gs,gs,{},ratio,ratio,cv::INTER_AREA);cv::resize(gr,gr,{},ratio,ratio,cv::INTER_AREA);}
+        const double sx=double(gr.cols)/ref.cols,sy=double(gr.rows)/ref.rows;
+        const cv::Mat s=(cv::Mat_<double>(3,3)<<sx,0,.5*sx-.5,0,sy,.5*sy-.5,0,0,1);
+        cv::Mat inverse=initial.empty() ? cv::Mat::eye(3,3,CV_64F) : initial.inv();
+        cv::Mat w=s*inverse*s.inv();w.convertTo(w,CV_32F);
+        const double cc=cv::findTransformECC(gr,gs,w,cv::MOTION_HOMOGRAPHY,
+            cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,40,1e-5));
+        if(!std::isfinite(cc)||cc<.60)return false;
+        w.convertTo(w,CV_64F);h=s.inv()*w.inv()*s;
+        if(!cv::checkRange(h)||std::abs(h.at<double>(2,2))<1e-9)return false;
+        h/=h.at<double>(2,2);
+        if(std::abs(cv::determinant(h))<1e-9||!displacementWithinLimit(h,ref.rows,ref.cols,"ProjectiveECC")||
+            !verifyAlignment(src,ref,h,"ProjectiveECC"))return false;
+        cv::warpPerspective(src,warped,h,ref.size(),cv::INTER_LINEAR,cv::BORDER_CONSTANT);
+        return true;
+    } catch(const cv::Exception&) {return false;}
+}
+
+bool BurstFusionEngine::alignBaseFrame(const cv::Mat& src,const cv::Mat& ref,cv::Mat& outWarped,cv::Mat& outH) {
+    double best=-2;const char* selected="none";
+    outWarped.release();outH.release();
+    for(int method=0;method<4;++method) {
+        cv::Mat warped,h;
+        const bool accepted=method==0 ? alignFrameECC(src,ref,warped,h) :
+            method==1 ? projectiveECC(src,ref,outH,warped,h) :
+            method==2 ? alignFrameHomography(src,ref,warped,h) : alignGradientPhaseCorrelation(src,ref,warped,h);
+        if(!accepted)continue;
+        double score,identity,ratio;
+        if(!alignmentScores(src,ref,h,score,identity,ratio)||!std::isfinite(score))continue;
+        const char* name=method==0 ? "ECC" : method==1 ? "ProjectiveECC" : method==2 ? "ORB-Homography" : "Phase";
+        LOGI("Base candidate %s score=%.4f",name,score);
+        if(score>best+.02) {best=score;selected=name;outH=h;outWarped=warped;}
+        if(best>=.985)break;
+    }
+    LOGI("Base selected=%s score=%.4f",selected,best);
+    return best>-2;
 }
 
 // ============================================================================
@@ -685,11 +728,20 @@ bool BurstFusionEngine::alignHighlightTemplate(const cv::Mat& srcShort, const cv
 // 5. 对数梯度相位相关 (低对比度平滑结构)
 // 6. 坏板熔断保护 (返回 false，防止未对齐曝光板进入 MergeMertens 造成双重重影)
 // ============================================================================
-bool BurstFusionEngine::alignHighlightFrame(const cv::Mat& srcShort, const cv::Mat& refBase, cv::Mat& outWarped, cv::Mat& outH) {
+bool BurstFusionEngine::alignHighlightFrame(const cv::Mat& srcShort, const cv::Mat& refBase, cv::Mat& outWarped, cv::Mat& outH, double exposureGain) {
     if (srcShort.empty() || refBase.empty() || srcShort.size() != refBase.size()) {
         return false;
     }
 
+    // Fit matching brightness/saturation first; keep the original short pixels.
+    if (exposureGain > 1.25 && std::isfinite(exposureGain)) {
+        cv::Mat normalized=fusion::normalizeExposure(srcShort,std::min(256.,exposureGain)), ignored;
+        if (alignFrameECC(normalized,refBase,ignored,outH)) {
+            cv::warpPerspective(srcShort,outWarped,outH,refBase.size(),cv::INTER_LINEAR,cv::BORDER_CONSTANT);
+            LOGI("alignHighlightFrame: normalized ECC accepted gain=%.3f",exposureGain);
+            return true;
+        }
+    }
     // 1. 优先尝试 CLAHE + ORB 单应性配准
     if (alignFrameHomography(srcShort, refBase, outWarped, outH)) {
         LOGI("alignHighlightFrame: successfully aligned via CLAHE ORB homography");
