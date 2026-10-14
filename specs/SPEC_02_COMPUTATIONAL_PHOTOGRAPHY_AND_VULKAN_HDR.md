@@ -72,6 +72,66 @@ unsupported samples retain the selected reference. This is experimental sparse
 tile alignment. Dense local alignment is a **research candidate / not implemented**. It requires
 independent quality and resource evidence before becoming a product feature.
 
+### Document alignment research contract (2026-10-14)
+
+**Research candidate; application integration not implemented.** Evaluate bounded
+coarse block matching followed by robust pyramidal Lucas-Kanade translation on
+overlapping document patches against the current ECC fit. Public descriptions of
+RAW burst SR motivate this experiment; they do not establish equivalent results
+on HachiCam's ISP JPEG input. An offline prototype is not a product replacement.
+Also evaluate the same ambiguity/consistency checks around the existing ECC
+optimizer as a smaller incremental candidate. Prefer the least costly validated
+change; block/LK need not replace ECC merely because it is used in a public paper.
+
+Use grayscale intensity/gradients with valid unclipped observations, rather than
+binary edges alone. Report the two eigenvalues of the local gradient Hessian:
+an isolated straight edge does not determine displacement along its tangent.
+Require a distinct matching minimum, bounded displacement, usable two-dimensional
+structure, residual support and forward/reverse consistency before granting
+detail eligibility. A consistent reverse match alone cannot resolve repeated
+text. Photometric nuisance gain/offset may assist geometric fitting but may not
+modify original samples, certify radiance, or authorize clipped-target recovery.
+
+The mapping convention is source position = reference position + local offset
+in the globally warped domain. Reconstruct from original observations using the
+composed inverse-global mapping; do not repeatedly resample aligned JPEG plates
+as if they were new independent observations. Flat/ambiguous/occluded patches
+receive no SR credit. Native denoising and existing highlight fallback remain
+separate decisions. Motion-boundary interpolation may not mix incompatible
+displacements. Finer tiles are experimental; increased accepted area is not
+itself evidence of better stroke fidelity.
+
+Before integration, compare against the **complete** existing registration/gate
+path, not just an ECC optimizer. Use independent pixel-integrated synthetic
+observations plus held-out real document bursts; report accepted endpoint error,
+acceptance rate, false acceptance, per-pixel support, edge/stroke outcomes,
+end-to-end reconstruction against matched interpolation, and mobile resource
+cost. Freeze exploratory thresholds before held-out evaluation. Do not change
+rc11 regional/HDR gates merely to admit this candidate. The handoff and bounded
+offline scope are recorded in
+[the document alignment study](reports/DOCUMENT_ALIGNMENT_RESEARCH_2026-10-14.zh-CN.md).
+
+**Main feasibility review (2026-10-15; offline validation, not app admission):**
+freeze the study's parameters while comparing actual 321x321 interior production
+nodes under a shared unclipped, smoothing-safe mask. Record original production
+eligibility separately from a same-mask production refit. Apply existing
+correlation, signal/noise, detail-ratio and pixel residual checks to each new
+proposal; a patch optimizer's acceptance alone is not final SR eligibility.
+Report differences in OpenCV versions, common-mask loss and support explicitly.
+Without real flow truth, disagreements remain disagreements. A high feasibility
+rating for product integration additionally needs original-observation end-to-end
+stroke improvement and a native/mobile resource result; neither an offline
+precision figure nor relaxed thresholds can substitute for those requirements.
+
+The [Main review](reports/UPSCAN_REVIEW_2026-10-15.zh-CN.md) completed synthetic
+reproduction and the shared-mask 321-pixel node/post-gate comparison. Production
+and LK each retain 15/27, with three different nodes on either side; real flow
+truth, field/renderer benefit and Android cost remain unknown. This does not
+meet the high-feasibility product-integration condition. Keep current application
+alignment, denoising, HDR and reconstruction unchanged. The next integration
+candidate must be a bounded native selective refinement with separate denoise
+and detail eligibility; complete end-to-end acceptance before activation.
+
 ## 4. Multi-frame sampling and resolution
 
 **Experimental implementation:** compact-support accumulation samples accepted

@@ -300,6 +300,37 @@ rc12 target-exposure acceptance (specified before implementation; helper/build c
   The rc11 sample's source/short comparison does not establish a validated new
   tone model. The other two user-accepted scenes are regression references.
 
+Document alignment research acceptance (2026-10-14; offline candidate only):
+
+- ALIGN-R01: independently sampled known subpixel translations must report
+  endpoint error and acceptance together. Compare robust block/LK and ECC fits
+  under identical input/support; an optimizer-only comparison cannot certify
+  improvement over the complete production gate. Exploratory target: accepted
+  translation p95 <=0.15 source pixels; this is not a calibrated release limit.
+- ALIGN-R02: flat areas, single-direction edges, periodic grids, corrupted or
+  clipped correspondence, and mixed local motions must expose ambiguity or lack
+  of support and receive no unsupported SR credit. Record rejection reasons and
+  valid-detail loss as well as false acceptance. A reference-derived fallback
+  must preserve punctuation, thin rules and faint marks.
+- ALIGN-R03: phase-qualified end-to-end chart/held-out real-burst comparisons
+  must improve resolved detail against matched single-frame interpolation while
+  retaining strokes and bounded ghosts/noise. An improved residual, fitted flow
+  or accepted area alone is insufficient. Measure Android p50/p95 capture-to-ready,
+  per-stage time, peak memory and fallback; host patch timings are not phone timings.
+
+- ALIGN-R04 (2026-10-15, offline review implemented; product acceptance pending): evaluate
+  exact 321x321 production-node patches and a frozen shared valid mask. Distinguish
+  original production, shared-mask production refit, new proposal, and proposal
+  surviving existing physical detail/residual gates. Record support loss,
+  rejection cause and host timing; do not label a small accepted subset better
+  resolution without truth or an original-observation end-to-end comparison.
+
+The [Main review](reports/UPSCAN_REVIEW_2026-10-15.zh-CN.md) reproduced 53/61
+synthetic LK positives and completed the 321-pixel shared-mask comparison;
+post-detail counts are 15/27 for both production and LK. This completes the
+bounded review, not ALIGN-R03 or product acceptance. No real-error, phone timing,
+full-field ghost/noise or restored-stroke pass is recorded.
+
 For each executed case record fixture revision, application build, device/camera,
 recipe and algorithm version, observed metadata, expected outcome, measured
 outcome, pass/fail, fallback reason and residual limitation. Include comparative

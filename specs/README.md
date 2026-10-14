@@ -79,6 +79,14 @@ HachiCamTest/HachiCam naming contract remains in SPEC_00 section 6.
 
 ## 3. APK research and readable reports
 
+- [Main assessment of Upscan (2026-10-15)](./reports/UPSCAN_REVIEW_2026-10-15.zh-CN.md):
+  independent reproduction and a 321-pixel common-mask/native-post-gate comparison;
+  technical route viable, actual text benefit and mobile cost remain unproven.
+  Application integration is deferred on evidence, not an approval gate.
+- [Document alignment and burst SR research (2026-10-14)](./reports/DOCUMENT_ALIGNMENT_RESEARCH_2026-10-14.zh-CN.md):
+  public product/algorithm survey, independent offline ECC/block-LK candidates,
+  disjoint synthetic phases and production-domain real-patch probes. Real detail
+  and mobile resources are not accepted; no Android algorithm replacement.
 - [Sanitized English research proposal](./research/APK_CLEAN_ROOM_SPEC_PROPOSAL_2026-10-12.md):
   static-only observations and independently phrased proposed contracts.
 - [Research boundary and handoff record](./research/README.md).

@@ -1,0 +1,155 @@
+{
+  "date": "2026-10-14",
+  "baseline_commit": "b93bad5",
+  "status": "offline_research_not_integrated",
+  "runtime": {
+    "python": "3.12.14",
+    "opencv": "4.10.0",
+    "numpy": "2.3.5"
+  },
+  "config": {
+    "max_shift": 8,
+    "sigma": 1.2,
+    "iterations": 15,
+    "huber": 8.0,
+    "min_samples": 256,
+    "min_eigenvalue": 0.2,
+    "min_eigen_ratio": 0.01,
+    "min_peak_margin": 0.08,
+    "max_fb_error": 0.2,
+    "max_residual": 8.0,
+    "min_inlier_fraction": 0.8
+  },
+  "fixture_revision": 1,
+  "synthetic": {
+    "exploratory": {
+      "summary": {
+        "block_lk": {
+          "positive_accepted": 17,
+          "positive_total": 17,
+          "accepted_error_median": 0.01462730456420066,
+          "accepted_error_p95": 0.029187888008513595,
+          "negative_accepted": 0,
+          "negative_total": 6,
+          "patch_time_median_ms": 46.930499956943095,
+          "patch_time_p95_ms": 59.43090998916886,
+          "accepted_error_max": 0.029651255018295505,
+          "positive_rejection_reasons": {}
+        },
+        "ecc_fit_only": {
+          "positive_accepted": 17,
+          "positive_total": 17,
+          "accepted_error_median": 0.017984524435177222,
+          "accepted_error_p95": 0.05042388147493547,
+          "negative_accepted": 3,
+          "negative_total": 6,
+          "patch_time_median_ms": 2.250900026410818,
+          "patch_time_p95_ms": 8.616850007092578,
+          "accepted_error_max": 0.07231941480746391,
+          "positive_rejection_reasons": {}
+        },
+        "guarded_ecc": {
+          "positive_accepted": 17,
+          "positive_total": 17,
+          "accepted_error_median": 0.017984524435177222,
+          "accepted_error_p95": 0.05042388147493547,
+          "negative_accepted": 0,
+          "negative_total": 6,
+          "patch_time_median_ms": 13.009799993596971,
+          "patch_time_p95_ms": 24.13967997999862,
+          "accepted_error_max": 0.07231941480746391,
+          "positive_rejection_reasons": {}
+        }
+      }
+    },
+    "heldout": {
+      "summary": {
+        "block_lk": {
+          "positive_accepted": 53,
+          "positive_total": 61,
+          "accepted_error_median": 0.010120459606452364,
+          "accepted_error_p95": 0.032714568140558446,
+          "negative_accepted": 0,
+          "negative_total": 6,
+          "patch_time_median_ms": 34.55060004489496,
+          "patch_time_p95_ms": 45.356050011469044,
+          "accepted_error_max": 0.04241385622863232,
+          "positive_rejection_reasons": {
+            "forward_reverse": 5,
+            "insufficient_support": 3
+          }
+        },
+        "ecc_fit_only": {
+          "positive_accepted": 61,
+          "positive_total": 61,
+          "accepted_error_median": 0.025382741032554914,
+          "accepted_error_p95": 0.1624636514551371,
+          "negative_accepted": 3,
+          "negative_total": 6,
+          "patch_time_median_ms": 2.110400004312396,
+          "patch_time_p95_ms": 6.684759998461232,
+          "accepted_error_max": 0.24948593116828807,
+          "positive_rejection_reasons": {}
+        },
+        "guarded_ecc": {
+          "positive_accepted": 55,
+          "positive_total": 61,
+          "accepted_error_median": 0.02474943765252342,
+          "accepted_error_p95": 0.13983071398660754,
+          "negative_accepted": 0,
+          "negative_total": 6,
+          "patch_time_median_ms": 11.068699997849762,
+          "patch_time_p95_ms": 20.376459998078644,
+          "accepted_error_max": 0.24948593116828807,
+          "positive_rejection_reasons": {
+            "forward_reverse": 6
+          }
+        }
+      }
+    }
+  },
+  "real_patch_probe": {
+    "patch_count": 27,
+    "ground_truth": false,
+    "production_usable": 26,
+    "production_detail_centres": 18,
+    "block_lk": {
+      "accepted": 12,
+      "reasons": {
+        "accepted": 12,
+        "forward_reverse": 6,
+        "displacement_bound": 4,
+        "ambiguous_peak": 5
+      },
+      "median_production_disagreement": 0.16399549030057445,
+      "accepted_at_production_detail": 7,
+      "accepted_at_production_no_detail": 5,
+      "max_production_disagreement": 0.3869496335661626
+    },
+    "guarded_ecc": {
+      "accepted": 12,
+      "reasons": {
+        "accepted": 12,
+        "forward_reverse": 6,
+        "ambiguous_peak": 9
+      },
+      "median_production_disagreement": 0.1544230383190067,
+      "accepted_at_production_detail": 7,
+      "accepted_at_production_no_detail": 5,
+      "max_production_disagreement": 0.3804616415503238
+    }
+  },
+  "limitations": [
+    "ECC optimizer baseline excludes existing production detail/residual guards",
+    "Real production nodes and candidate patches differ in size and sampling grid",
+    "No real flow ground truth or end-to-end resolution acceptance",
+    "Synthetic cases are generated stroke-like marks, not natural Chinese documents",
+    "Python host timings are single-run observations, not calibrated device profiles"
+  ],
+  "source_sha256": {
+    "00-tier0.jpg": "5f4e24883c4e5e14543e49a5ff224d3ff1b11b75d543a7a9afee92cc22a83985",
+    "01-tier0.jpg": "bb552a7a94cd54c1eebc03dac6b9df03f99679ee104d7e908807681bd9326030",
+    "02-tier0.jpg": "8d8ae8259b6d55f7f207b796d6532e0f967b6f8922eee7f8ef2d23d40cedfafb",
+    "03-tier0.jpg": "40cf2a34904bf9760abadf7c7ba7545a6736d901f99c7455646178a22cc6b6b8"
+  }
+}
