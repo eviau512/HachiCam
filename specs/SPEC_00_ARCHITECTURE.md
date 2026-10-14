@@ -307,6 +307,21 @@ reports corruption, retain that failure, use a distinct retry filename and verif
 the local source again. Received size/hash or successful installation must be
 recorded separately when available; neither may be inferred from sender status.
 
+Alignment evidence must distinguish APK ZIP entry alignment from native ELF
+compatibility. Check every bundled arm64-v8a/x86_64 library, including transitive
+prebuilts, for LOAD alignment >=16 KiB and compatible RELRO boundaries before
+claiming 16 KiB page-size support; ZIP alignment alone cannot certify it. A
+universal package means the listed ABIs are bundled, not every device/page-size
+configuration is verified. Record unqualified dependencies explicitly and retain
+4 KiB and 16 KiB runtime acceptance separately. See the
+[Android page-size guide](https://developer.android.com/guide/practices/page-sizes).
+**rc13 limitation:** bundled OpenCV 4.10 arm64-v8a/x86_64 LOAD segments remain
+4 KiB aligned although APK ZIP alignment and the project's 64-bit engine LOAD
+alignment pass 16 KiB checks. RELRO end-boundary checks also leave several
+64-bit libraries unqualified, including the arm64-v8a engine. Full 16 KiB
+device compatibility is not certified; linker/dependency migration or rebuild
+and numerical/device regression remain required.
+
 Acceptance: inspect the packaged universal test APK's resolved application and
 launcher labels, including localized entries, and merged release label resources.
 rc10 preserves this build identity; APK checks and delivery are recorded in the

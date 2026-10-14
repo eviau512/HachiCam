@@ -131,8 +131,15 @@ README/spec 索引中旧 B&W/灰阶、固定 50 MP、矢量 PDF/全 GPU 等介�
   timeout 测试在实际完成后模拟未决状态，验证隔离/禁止重用，不冒充实际驱动挂死测试。
 - 四组归档的数量/字节淘汰、失败导出、并发替换/导出与 disabled store 检查通过。
   页面索引 CRC/越界/截断备份及当前/前一检查点文件租约检查通过。
-- Android debug/release 三 ABI 实际原生编译通过；最终 APK 还需统一打包/签名/CRC/
-  对齐/资源身份检查并记录发送结果。
+- Android debug/release 三 ABI 实际原生编译通过；最终 universal APK 身份/资源/CRC/
+  v2 签名与不可变副本哈希校验通过，实际发送状态见交付记录。
+- APK ZIP 16 KiB 对齐通过；项目 64 位 engine LOAD 为 16 KiB、32 位为 4 KiB。
+  两个 64 位 OpenCV 4.10 预编译库 LOAD 仅 4 KiB，不能据 ZIP 检查宣称整包
+  16 KiB 设备兼容。逐库 RELRO 检查也发现多个 64 位库结束边界不是 16 KiB 整倍数，
+  包括 arm64 engine；记录为未通过，不因其 LOAD 通过而略过。
+  后续链接/依赖升级或重编译需先修订契约并运行完整数值/设备回归。
+  [Android 官方说明](https://developer.android.com/guide/practices/page-sizes)
+  要求分开检查打包、原生库和运行行为；此前报告的 ZIP 检查不能替代全部 ELF 检查。
 
 仍需手机确认完整等待、选择的后端、实际输出、内存/热状态和强杀恢复。
 全局/连续降噪/HDR/反投影 GPU 迁移、可靠灯具 HDR、RAW 捕获与 Upscan 接入没有
@@ -140,4 +147,21 @@ README/spec 索引中旧 B&W/灰阶、固定 50 MP、矢量 PDF/全 GPU 等介�
 
 ## 交付记录
 
-统一 APK 构建、不可变副本校验与 Hyper-obs 发送结果待完成后追加。
+2026-10-15 05:38 构建；APK 内源代码标识为 `d4af9ac`，构建时工作树干净。
+代码 commit `d4af9acde20d139320b323210a9eaa4d38cadc19` 已推送 `gpu-hdr`，
+现场查询远端指向同一 commit。交付笔记后续 commit 不改变此 APK 的代码来源。
+
+- 文件：`HachiCamTest-0.1.2-rc13-0538-universal.apk`
+- 大小：126,563,123 字节。
+- SHA-256：`778076c4b519194cc9aedde42424c38102204c968feaf6c2c926b846dabee7f8`。
+- 包名 `moe.hachimi.cam.test`，显示名 HachiCamTest；versionCode 37，
+  versionName `0.1.2-rc13-test`；含 arm64-v8a /armeabi-v7a /x86_64。
+- v2 签名通过；debug 证书 SHA-256：
+  `61186b8588c3de3828798fe929ae04a91fcdd2de1c3f9517dd1e0d3ec0ff7a12`。
+- ZIP 所有条目 CRC、ZIP 16 KiB 对齐、资源/banner/当前版本和源代码标识、
+  原生测试注入标记未携带检查通过；上述 OpenCV ELF 限制单独保留。
+- 目标只读核对为 `Hyper Obs` / `hyper-obs.tail42e03a.ts.net.` /
+  `100.79.217.41`，交付前查询为在线。
+
+发送动作在创建进程前被自动审批拒绝，理由为不接受历史传输授权、要求当前明确确认。
+已提出当前授权问题；尚无发送回执，接收端哈希与安装仍未验收。

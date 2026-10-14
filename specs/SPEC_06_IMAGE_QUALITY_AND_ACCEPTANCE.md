@@ -104,6 +104,7 @@ deferred functionality. Status refers to code inspection, not successful testing
 | UI-02 | P1 | Uncertain crop or failed enhancement: visible manual correction, source comparison and last-valid image; never silent content deletion | Controls partial; transactional comparison workflow incomplete; SPEC_05 |
 | UI-03 | P1 | Steady, focus acknowledgment, requested HDR and processing progress are distinguishable; no one green state implies all quality criteria passed | Steadiness separation implemented; full quality guidance absent; SPEC_05 |
 | DEL-01 | P0 | Record immutable APK name, bytes/hash, ZIP CRC, signature and alignment before delivery. Sender success and receiver integrity/install are separate outcomes. A reported corrupt receipt requires a distinct retry filename and rechecked source; do not mark installation or usable receipt passed without receiver evidence | rc8 local CRC/signature/alignment pass; user reports corrupt 2137 receipt; retry1 sender acknowledged 2026-10-13 23:16:21 +08:00; receiver integrity/install pending; SPEC_00 section 6 |
+| DEL-02 | P1 | Separate ZIP entry alignment from every bundled 64-bit native LOAD/RELRO check and 4/16 KiB runtime verification; transitive prebuilt failure prevents a full 16 KiB compatibility claim | rc13 ZIP and own 64-bit engine LOAD alignment pass; OpenCV 4.10 64-bit LOAD is 4 KiB and several libraries have unqualified RELRO boundaries; full 16 KiB support and device runtime acceptance pending; SPEC_00 section 6 |
 
 Additional rc4 fixtures (see the linked quality revision):
 
