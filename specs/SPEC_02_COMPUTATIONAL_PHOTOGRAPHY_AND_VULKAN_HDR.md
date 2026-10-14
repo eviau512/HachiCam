@@ -298,10 +298,28 @@ Current `clippedFraction` counts pixels with a base-merge channel >= 250 **befor
 highlight replacement, divided by output pixels. `recoveredFraction` counts
 output locations actually changed by accepted short observations. Neither is a
 post-HDR clipping metric or a guarantee of readable recovered content.
-**Required / not implemented:** separately record post-recovery clipping and
-useful recovery in relevant text/light regions, and validate confidence in JPEG
+**Implemented in rc13:** the appended metric below records post-recovery clipping.
+**Required / not implemented:** useful recovery in relevant text/light regions
+and confidence validation in JPEG
 response estimates when they differ greatly from metadata exposure ratios.
 Do not force a match to either ratio without observed signal/geometry evidence.
+
+**First HDR diagnostic follow-up (specified before implementation; implemented):** report
+post-recovery channel clipping on the actual byte native-fusion grid, before any
+2x resampling/JPEG encoding, alongside the existing before/recovered fractions.
+Append a separately versioned two-slot extension to the 42-slot JNI packet;
+old packets leave the new metric unknown, not zero. This measurement changes no
+pixel/tone formula and does not certify a target ROI.
+
+Avoid an unconditional `HDR` outcome merely because one pixel changed. Classify
+no clipped baseline, no reliable recovery, limited pixel changes and partial
+highlight recovery separately. The initial experimental partial-recovery label
+requires >=128 changed native pixels and >=1% of the pre-clipped pixel count;
+other actual changes remain recorded as limited adjustments. These are outcome
+label parameters, not acceptance thresholds or reasons to discard pixels.
+Neither the label nor a global clipping reduction establishes readable screen
+text or restored lamp shape. Keep the requested Full HDR mode separate from the
+achieved outcome and preserve reference white balance.
 
 **Required / partly implemented:**
 
@@ -392,10 +410,11 @@ Vulkan HDR/LTM, RAW fusion, dense motion compensation and guaranteed OEM hardwar
 temporal processing remain **not implemented / unverified**. Their presence in
 earlier diagrams, metadata or static library inventories is not acceptance.
 
-### 7.1 Future GPU compute backend (2026-10-15; required / not implemented)
+### 7.1 GPU compute migration (2026-10-15; partly implemented)
 
 The user requests faster processing in subsequent versions. Vulkan compute is
-the initial backend candidate; CPU remains the current product implementation.
+the backend for two connected debug experiments in sections 7.2/7.3; CPU remains
+the release implementation and the calibrated/failed workload fallback.
 The linked `vulkan_compute_engine.cpp` and embedded shader have no execution
 caller in the inspected product source. Their old two-frame luma-graft/LTM
 semantics omit current registration, photometric, clipping and recovery masks.
@@ -468,8 +487,149 @@ Do not repeatedly retry a failed device for every frame. Backend choice and
 technical status belong in diagnostics, without adding clutter to the camera UI.
 Detailed capability/device logging follows the existing test-build privacy rule.
 
-Acceptance is GPU-01 through GPU-04 in SPEC_06. No phone speedup, GPU image-quality
-pass or connected GPU fallback is claimed by this specification revision.
+Acceptance is GPU-01 through GPU-04 in SPEC_06. Host shader/failure and image
+regressions validate the two connected kernels, including CPU fallback; they do
+not establish phone speedup, sustained operation or full-migration acceptance.
+
+### 7.2 First performance implementation (specified before implementation; experimental debug integration)
+
+The user prioritizes shutter-to-final-diagnostic readiness, then fidelity, and
+requests a consolidated build after the useful performance/quality work. RAW and
+restart recovery may be included when supported and beneficial; OCR, book
+flattening and changes to the accepted crop workflow do not block this batch.
+
+The first GPU kernel accelerates the full-resolution local photometric support
+map for ordinary same-exposure plates. CPU retains fitting, high-pass/noise/detail
+qualification and HDR patch support initially. Its input is the existing CPU
+smoothed gray pair and immutable local field; its output is the same byte gate.
+No new transform, SR authority, tone or white balance is granted by this kernel.
+Use packed byte storage and a compact float node field, at most 16 MP, <=64 MiB
+of persistent/in-flight GPU allocations, counted in the shared resource overhead.
+Avoid an additional full-resolution float representation or per-pixel host packing.
+Among compatible host-visible/coherent types, prefer device-local memory, then
+host-cached memory, using reported properties rather than enumeration order.
+Log selected flags/allocation bytes without device identifiers. Keep the same
+64 MiB allocation cap and measured CPU fallback when available memory is unsuitable.
+
+Port offset interpolation, motion-discontinuity rejection, boundary checks and
+residual thresholds unchanged. FP32 cases near a motion-distance, source-boundary
+or residual decision must return an ambiguity marker for CPU rechecking at that
+pixel, not an automatic positive. A capability/runtime self-test must pass before
+using the kernel; unknown values, mismatched dimensions, unhealthy execution or
+unsupported workload use the existing CPU gate. Record backend, whole call time
+(including copies and ambiguity checking) and fallback. Preserve HDR's separate
+patch support path until independently qualified. This first kernel is one
+performance stage, not completion of the full section 7.1 migration.
+
+Initial activation is experimental in debug/test builds only. The first real
+support map in each <=1 MP / <=4 MP / <=16 MP bucket runs a full CPU comparison;
+it must match resolved bytes exactly and have GPU call time <=90% of CPU time
+before subsequent maps in that bucket use GPU. Record both calibration times.
+This bounded warm probe protects against obvious transfer/driver regressions;
+it does not satisfy GPU-03 end-to-end/sustained acceptance. Release remains CPU
+until that acceptance is independently completed.
+
+Use per-job fences and bounded wait; on an unresolved timeout retain and disable
+the bounded in-flight context rather than release it early or submit again.
+An actual submission error also leaves execution uncertain; mark submission as
+in-flight before the driver call and quarantine that context instead of freeing
+possibly referenced storage. Known host failure before submission may clean up.
+The reserved persistent GPU overhead remains accounted on the CPU path. No
+fallback may publish a partial GPU result. CPU-only builds retain identical
+semantics without requiring a Vulkan loader.
+
+Per-frame native profiling separates preparation, local fit/verification and
+support-map construction. Structured capture timing additionally separates
+acquisition, queue/heavy-permit wait, decode, native call, rotate/encode/save and
+diagnostic snapshot. Export timing separately measures log commands, snapshot
+wait and ZIP writing; it must not imply the final image already exists while a
+newer job is still processing. Timings are monotonic, bounded, keyed by captureId
+and governed by existing test/release diagnostic privacy.
+
+Independent bounded app/root log commands may run concurrently after worker
+readiness, with separate stage timers and unchanged per-command output/time
+bounds. Cancelled export must propagate cancellation and never open a partial ZIP.
+
+CPU optimization may reuse immutable reference gray/high-pass/blur/noise data
+within one ordinary burst, with matching dimensions, source identity and node
+layout. Release that workspace before final fusion allocations. If every local
+node lacks confidence, the photometric gate is identically zero; skip additional
+blur and per-pixel lookup without granting support. Zero-orientation encoding may
+read the owned immutable result directly instead of allocating a full-size copy.
+Other rotations still use a separate buffer; do not mutate the master or release
+the borrowed input. These optimizations preserve existing equations and source
+decisions and require differential/native regression checks.
+
+Global candidate scoring may cache immutable downscaled gray/high-pass masks,
+identity correlation and an exactly identical transform's computed score within
+one source/reference pair. Scope the cache to that alignment call; validate
+source addresses, shape and type, and release it before fusion allocations.
+Candidate order, equations, thresholds and selected transform stay unchanged.
+No early acceptance threshold may be lowered to reduce runtime.
+
+Encoded JPEG decode may allocate the same one-channel byte Mat and copy the
+immutable ByteArray directly with Mat.put, avoiding Kotlin vararg-spread copies.
+Do not change decode flags, orientation, source ownership or decode limits.
+Test memory records may sample Java/native allocated bytes and bounded own-process
+VmRSS/VmHWM. Label VmHWM process-lifetime high-water memory, not this capture's peak;
+missing proc data stays unknown and release does not perform these diagnostic reads.
+
+Per-call native profiling is part of the paired result, not a global last-job
+variable or only expiring logcat. Append a versioned six-slot extension after
+the 44-slot highlight packet: schema, total native time, global registration time,
+local registration/validation time, published GPU support-map count and GPU fit
+proposal count. Accept old 42/44-slot packets as unknown for this extension;
+validate finite nonnegative times and bounded counts. Normal and streaming calls
+measure nonoverlapping global/local wall intervals in their own scope; native
+remaining time includes reference selection, decode in streaming, fusion and
+reconstruction and must not be described as pure SR. A proposal count does not
+prove a physical detail gate or pixel contribution passed. Preserve these values
+under the captureId in its manifest so four-group export survives logcat rollover.
+
+Within ordinary global candidate selection, defer full-resolution BGR warping
+until the unchanged scoring/order has selected the final transform. Internal
+candidate verifiers use the original pair and scoring-grid warps; they do not
+need each discarded candidate's full-color output. Direct public alignment
+calls retain their warped-output contract. Normalized HDR alignment may likewise
+discard its unused normalized-color warp, then warp the original short once.
+
+### 7.3 Batched translation fitting (specified before implementation; experimental debug integration)
+
+The first native phase timers show fitting/verification dominates support-map
+construction on the executed host fixtures. Prototype translation ECC on GPU,
+with at most six <=321x321 patches per batch and the existing 30-iteration,
+1e-4 convergence, 3x3 Gaussian/input-mask preprocessing and source-gradient
+semantics. Preserve the optimizer's fixed interpolation/nearest-mask convention,
+bounded original observations and CPU high-pass/noise/detail/residual checks.
+This ports the current ECC proposal, not Upscan's unaccepted LK replacement.
+
+Use stable centered statistics and per-patch reductions/2x2 solves. Failed,
+singular, unsupported or nonconforming GPU candidates use the existing CPU fit;
+do not skip a valid CPU observation for speed. Startup/frozen known-shift tests
+require <=0.05 source-pixel discrepancy for accepted CPU/GPU proposals and bounded
+correlation difference <=0.002. Before experimental reuse, compare a small real
+batch on the same device against CPU and include packing/upload/wait/readback in
+cost. A profile with disagreement or unfavorable measured cost remains CPU.
+Fitting and support kernels share one bounded context/pool; staged CPU patches
+and retained GPU buffers must fit the reserved overhead together. No large
+image-wide five-plane float upload is permitted. End-to-end text/ghost/noise and
+phone p50/p95 acceptance remain required; an accurate patch is not that pass.
+
+Keep a proposal paired with the correlation measured at that proposal. The GPU
+experiment retains the highest observed masked ECC pose, rather than reporting
+a pre-update score with a later unscored pose at an oscillating iteration limit.
+This is an explicit numerical selection difference; it still requires the stated
+CPU discrepancy profile and all independent physical acceptance gates. Do not
+relax that profile merely because a test fails.
+
+The optimizer mask excludes the same ten-pixel **patch boundary** already excluded
+by the independent high-pass check. This prevents constant-border resampling at
+an artificial ROI edge from driving the fit/score. Apply it equally to the CPU
+baseline and GPU proposal, still requiring >=256 input-mask samples. It does not
+erode clipped-target boundaries throughout the image or widen HDR support. Record
+registration parameter version `masked-ecc-edges-v1` and optimizer margin 10;
+compare qualification loss and full reconstruction against the previous contract
+before release, including the existing clipped-screen regression.
 
 ## 8. Acceptance and limits
 

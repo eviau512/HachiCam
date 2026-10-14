@@ -20,12 +20,15 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Future performance work: [GPU assessment and phased migration](reports/GPU_ROADMAP_2026-10-15.zh-CN.md).
-SPEC_00/02/06 define profiling, backend ownership, batched registration work,
-resident fusion/reconstruction and CPU fallback acceptance. The current product
-still runs CPU processing; this plan does not enable the old Vulkan shader.
+Latest batch: [rc13 performance, diagnostics and recovery](reports/RC13_PERFORMANCE_AND_RECOVERY_2026-10-15.zh-CN.md),
+following the [four-scene rc12 evidence](reports/RC12_FOUR_SCENES_2026-10-15.zh-CN.md).
+Two debug Vulkan kernels self-test/calibrate before use, with CPU fallback;
+release stays CPU. This does not enable the old HDR shader or establish phone
+speedup. Multi-group final-image diagnostics and completed-page checkpoints are
+implemented; lamp HDR and the remaining full GPU migration require further work.
+The earlier [GPU assessment](reports/GPU_ROADMAP_2026-10-15.zh-CN.md) preserves its baseline.
 
-Latest follow-up: [rc12 shutter metering continuity](reports/RC12_TARGET_METERING_2026-10-14.zh-CN.md)
+Previous follow-up: [rc12 shutter metering continuity](reports/RC12_TARGET_METERING_2026-10-14.zh-CN.md)
 addresses the paired bright-slide capture by retaining target AE with shutter AF,
 bounded fresh exposure settling and separately recorded actual JPEG AE evidence.
 Manual EV is removed per the user's request. The rc11 native fusion is unchanged;
@@ -74,8 +77,9 @@ the audit itself retains its pre-refactor evidence and did not implement them.
 
 The SPEC_02 filename retains its historical Vulkan reference for link
 compatibility; Vulkan HDR is not integrated. GPU/RAW fusion, automatic capture,
-complete book flattening, finger cleanup, a separate Photo filter and durable
-session/pending recovery are not completed features.
+complete book flattening, finger cleanup, a separate Photo filter and automatic
+pending-job recovery are not completed features. Committed-page recovery is
+implemented in rc13 with device process-death checks still pending.
 
 The existing [implementation audit](./IMPLEMENTATION_AUDIT_2026-10-12.md) retains
 earlier build/test history. It does not replace corrected authoritative contracts.

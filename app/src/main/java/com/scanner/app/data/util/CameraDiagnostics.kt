@@ -20,4 +20,15 @@ object CameraDiagnostics {
     @Synchronized fun snapshot(): String = if (!BuildConfig.SENSITIVE_DIAGNOSTICS) "" else
         "Live context at export, latest STARTED capture:\n${journal.snapshot(journal.latestStarted)}"
     @Synchronized fun snapshot(id: String): String = if (BuildConfig.SENSITIVE_DIAGNOSTICS) journal.snapshot(id) else ""
+    @Synchronized fun latestCaptureId(): String = if (BuildConfig.SENSITIVE_DIAGNOSTICS) journal.latestStarted else ""
+    fun memory(id:String,stage:String) {
+        if(!BuildConfig.SENSITIVE_DIAGNOSTICS)return
+        val proc=runCatching {
+            java.io.File("/proc/self/status").bufferedReader().use { reader ->
+                reader.lineSequence().take(100).filter { it.startsWith("VmRSS:") || it.startsWith("VmHWM:") }.joinToString("; ")
+            }
+        }.getOrDefault("unknown")
+        val runtime=Runtime.getRuntime()
+        frame(id,"memory stage=$stage javaUsedBytes=${runtime.totalMemory()-runtime.freeMemory()} nativeAllocatedBytes=${android.os.Debug.getNativeHeapAllocatedSize()} proc=$proc; VmHWM is process-lifetime, not capture peak")
+    }
 }

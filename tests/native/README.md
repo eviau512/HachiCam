@@ -30,6 +30,22 @@ independent/identical phases, excessive source border loss, colored/faint ink,
 blank paper and an internal table. Outputs are in `.tools/native-quality-tests.log`.
 The launcher suppresses Windows modal loader/error dialogs and captures failures.
 
+## Experimental GPU primitives (rc13)
+
+Run `scripts/test-gpu-native.ps1` on a host with a hardware Vulkan compute device.
+It builds the actual packed-byte support/ECC shaders against the production
+sources, compares gates and known shifts, injects loader/software/pipeline/
+allocation/bind/map/submit/completion failure policies, then runs the full image
+regression. Missing hardware is an explicit failure of GPU execution, not a
+CPU pass reported as GPU. Timeout injection completes real work first and then
+simulates the unresolved policy state; it tests bounded quarantine without
+deliberately hanging a driver. Real Android driver failure/thermal tests remain pending.
+
+`scripts/build-compute-shaders.ps1` rebuilds the checked-in SPIR-V and C++ headers
+using the installed NDK's glslc, targeting Vulkan 1.0. Android debug integration
+adds startup and real-workload CPU/timing calibration. Test force/failure hooks
+are host-test-only macros and are absent from the shipped APK. Release remains CPU.
+
 The current host dependency is MSYS2 OpenCV 5.0.0-5, isolated under
 `.tools/opencv-host/ucrt64`. `opencv_compat.h` includes declarations split into the
 OpenCV 5 geometry module. **Android still builds/ships OpenCV 4.10.0**; a host pass

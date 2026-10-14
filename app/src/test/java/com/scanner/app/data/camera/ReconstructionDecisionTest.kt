@@ -28,4 +28,12 @@ class ReconstructionDecisionTest {
             packet().apply { this[27]=8 },packet().apply { this[3]=1 })
         invalid.forEach { try { ReconstructionDecision.decode(it);fail("Invalid packet accepted") } catch(_:IllegalArgumentException) {} }
     }
+    @Test fun appendedHighlightMetricsAreVersionedAndLegacyDecisionIsUnchanged() {
+        val legacy=packet();val extended=legacy.copyOf(44).apply { this[42]=1;this[43]=.03.toBits() }
+        assertEquals(ReconstructionDecision.decode(legacy),ReconstructionDecision.decode(extended))
+        val timed=extended.copyOf(50).apply { this[44]=1;this[45]=30.0.toBits();this[46]=12.0.toBits();this[47]=10.0.toBits();this[48]=2;this[49]=12 }
+        assertEquals(ReconstructionDecision.decode(legacy),ReconstructionDecision.decode(timed))
+        for(invalid in listOf(extended.copyOf().apply { this[42]=2 },extended.copyOf().apply { this[43]=Double.NaN.toBits() }))
+            try { ReconstructionDecision.decode(invalid);fail("Invalid highlight extension") } catch(_:IllegalArgumentException) {}
+    }
 }

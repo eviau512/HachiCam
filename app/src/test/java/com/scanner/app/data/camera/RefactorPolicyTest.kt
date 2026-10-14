@@ -39,7 +39,7 @@ class RefactorPolicyTest {
         journal.begin("A","x");journal.begin("B","x");journal.begin("C","x")
         repeat(100){journal.record("C","$it:"+"y".repeat(2000))}
         assertTrue(journal.snapshot("A").contains("unavailable"))
-        assertTrue(journal.snapshot("C").length<17000)
+        assertTrue(journal.snapshot("C").length<33000)
         assertFalse(journal.snapshot("C").lines().any { it.startsWith("0:") })
     }
     @Test fun editBudgetIncludesAspectExpandedOutputAndRejectsUnsafeGeometry() {

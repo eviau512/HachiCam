@@ -48,11 +48,11 @@ remaining requirements are recorded separately.
 | UI | Kotlin, Jetpack Compose, Material 3; camera, crop, review and export screens | UI availability is not proof that every historical design is implemented |
 | Camera | CameraX with Camera2Interop; JPEG capture and preview analysis | Vendor processing and manual control vary by camera |
 | Native vision | C++17 and OpenCV; contour detection, line snapping, perspective correction and three active filters | Heuristic image processing, not semantic document recognition |
-| Burst processing | CPU alignment, experimental sampling reconstruction and short exposure highlight recovery | JPEG inputs; no active RAW or Vulkan fusion path |
-| Page state | In-memory repository with PROCESSING, READY and FAILED | Durable page metadata and process death recovery are not implemented |
-| Image storage | Immutable private masters, unique derivative commits and read leases | Metadata and restart recovery remain in-memory only |
+| Burst processing | CPU pipeline with experimental debug Vulkan support maps / ECC proposals, sampling reconstruction and short exposure recovery | JPEG inputs; no RAW, GPU denoise/HDR/reconstruction or phone performance acceptance |
+| Page state | Repository with PROCESSING, READY/FAILED and bounded asynchronous committed metadata checkpoints | Completed-page recovery implemented in rc13; pending captures/edits are not replayed |
+| Image storage | Immutable private masters, unique derivative commits, read leases and current/previous checkpoint pins | JPEG bounds/completion checked on restart; process-death device tests still pending |
 | Export | Android PDF container with raster scanned pages and image export | No OCR or vectorized text layer |
-| Vulkan / curved geometry | Existing experimental primitives | Presence of code or shader files does not constitute a connected product feature |
+| Vulkan / curved geometry | Two connected debug compute kernels plus older unconnected HDR/curved primitives | Each connected workload self-tests/calibrates or uses CPU; older shader presence is not a connected feature |
 
 Repository build files are authoritative for dependency versions and ABI selection.
 The current architecture uses Android minSdk 29 / targetSdk 35, CameraX 1.4.1 and
@@ -135,6 +135,13 @@ degrade from 2x eligibility to native-size fusion, then native-size streaming;
 if all plans fail, use the declared reference/failure outcome. These are
 conservative heuristics, not measured upper bounds or RSS certification.
 
+The first GPU-support implementation adds a separately identified 64 MiB
+process-lifetime GPU pool allowance to the 128 MiB base overhead of every heavy
+operation estimate (192 MiB total). This applies even on CPU fallback or editing,
+because cached/quarantined GPU work may survive its originating job. Each GPU
+allocation is independently capped within that allowance; it is not permission
+to exceed the per-job/shared admission budget.
+
 All product JNI image operations must validate input shape/type/dimensions and
 translate native exceptions into explicit managed failures with released buffers.
 Gray/edge lookup requires one-channel 8-bit input; touch/line coordinates and
@@ -148,9 +155,39 @@ warping, with bitmap locks and temporary Mat ownership released on failure.
 The guards do not validate arbitrary native addresses or prevent process-level
 faults. Android JNI failure injection and broad device coverage remain pending.
 
-Durable metadata, pending manifests, restart recovery and memory spill storage
-remain **required / not implemented**. Screen independent burst processing while
-the process lives must not be described as recovery after process death.
+Durable committed metadata and completed-page recovery are implemented below in
+rc13; automatic pending-job replay remains **required / not implemented**.
+Temporary encoded-frame spill for streaming processing exists, but is not a
+durable queue and cannot resume a burst after process death.
+
+### rc13 completed-page recovery (contract revised before implementation; implemented, device checks pending)
+
+Persist a bounded versioned/checksummed index of committed page identities,
+private scan filenames, order and committed crop/filter/rotation/aspect recipes.
+Limit it to 512 pages / 2 MiB; validate finite bounded geometry and paths inside
+the private scans directory. Write unique temporary metadata, sync it, retain a
+previous valid checkpoint and rename atomically; truncated/invalid current data
+may recover the previous validated checkpoint. Do not enumerate orphan images
+as pages or delete unknown files. Initial restore reads metadata and JPEG bounds,
+never a full-resolution image or device identifiers.
+
+Metadata IO after initialization uses one background writer with a conflated
+bounded pending snapshot. Pin every snapshot's referenced paths and keep the
+current and previous durable checkpoints' pins until each is replaced. An edit/delete
+must not remove an image still referenced by that checkpoint. Failed persistence
+keeps that checkpoint, emits a visible warning and leaves the current session
+usable; it does not claim the newest recipe survived a crash.
+Expose a monotonic latest-requested/completed/committed checkpoint identity;
+tests and diagnostic export may wait at most five seconds for the current
+checkpoint, distinguishing a failed write from completed durable data.
+
+Restore completed readable masters and valid derivatives; if a derivative is
+missing/invalid, show the master with ORIGINAL/zero-rotation/default aspect and
+retain source-space crop geometry. Interrupted PROCESSING with a complete readable
+master becomes READY with the committed recipe; without one it becomes FAILED,
+never permanently busy. This recovers pages, not pending frame arrays or automatic
+job replay. No exactly-once capture-resumption claim is granted. Unsaved edit
+intents do not replace the last committed recipe.
 
 ## 5. Quality, resources and acceptance
 
@@ -182,16 +219,18 @@ Worker failure must leave an explicit unavailable/failed state rather than an
 open admission path with no consumer. Do not promise recovery from process death
 or an unrecoverable allocation failure.
 
-**Required / not implemented (2026-10-15):** future GPU work is a compute-backend
+**Partly implemented in rc13, debug only:** future GPU work is a compute-backend
 migration under SPEC_02 section 7.1, not a second capture/page pipeline. Preserve
 the single admitted worker, capture identity, immutable source, request generation,
 read leases, unique output commit and READY-after-save semantics. Reserve host,
 device, staging and scratch allocations together before submission; mobile shared
 physical memory does not make separate live buffers free. CPU estimates above do
-not cover an additional GPU backend. GPU completion, cancellation and fallback
+include the additional bounded GPU pool allowance above. GPU completion, cancellation and fallback
 must retain ownership until in-flight work has stopped; failed or obsolete GPU
 outputs cannot commit. The current CPU pipeline is the fallback implementation
-to connect and test, not an already integrated automatic GPU fallback.
+used by the two connected kernels when unsupported, unhealthy or unqualified.
+The rest of the migration remains unimplemented; phone latency/thermal acceptance
+has not been established by the host tests.
 
 The rc6 experimental native-high-resolution profile is exclusive: no other
 capture/queued job may coexist from its admission through cleanup. It bounds
@@ -212,6 +251,9 @@ measured thermal/RSS guarantee or durable recovery.
 
 Use one build specific display-name resource without locale or flavor overrides
 for the application, launcher activity and settings accessibility heading.
+Runtime activity title and Recents task label must use that same resource.
+Set the task label through an API available at minSdk 29; newer Builder APIs
+must not be called under an older version guard.
 Updating the test build must preserve its package ID and signing identity.
 
 The rc9 [diagnostic contract](research/NIGHT_HDR_REVISION_2026-10-14.md) permits
@@ -230,6 +272,32 @@ log identity and input/result selection consistently, or explicitly identify
 unrelated surrounding log records. A shared image-cache lock alone does not make
 the separately collected live log belong to that image set. The bounded archive
 includes its own `diagnostics.txt`; live surrounding log context is labeled separately.
+
+The first performance follow-up raises the bounded per-capture journal to 64
+lines of at most 512 characters, retaining at most six capture identities and
+16384 context characters per identity. This accommodates timing alongside frame
+and control evidence. The archive still limits the UTF-8 paired context to
+128 KiB; an oversized context cannot replace the previous valid snapshot.
+
+**Required before diagnostic-retention implementation:** retain at most four
+completed test-only groups with a combined steady-state 192 MiB photo/metadata
+budget. Preserve each group's own final image, inputs, captureId and paired
+context. Evict the oldest retained group by byte/count limits; a failed new
+snapshot must preserve the latest complete one. Transient pending/replacement
+copies require separate free-space checks. Default final-image diagnostic export
+may include the four retained completed groups; use `capture/` for the latest and
+distinct `captures/<group>/` paths for older groups. The root live log is context,
+not older groups' matching log. Report retained IDs and per-export command,
+snapshot-lock and ZIP times; no input-only snapshot may be called a final result.
+Keep the release no-retention rule and source read leases while copying a READY
+image. No new automatic network sharing is introduced.
+
+The final-image export request may wait for the admitted burst worker to become
+idle, off the UI thread with a bounded wait. Include snapshot work in that idle
+definition; page READY alone does not certify a completed diagnostic archive.
+Show waiting/preparing state, allow navigation cancellation, and report timeout
+or missing archive explicitly. Failed jobs resolve the wait; newly arriving jobs
+remain visible in the worker count rather than being mislabeled complete.
 
 Artifact integrity and delivery are separate from build identity. Before sending,
 record the immutable APK filename, byte size and SHA-256, verify ZIP entry CRCs,

@@ -87,6 +87,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
                                            bool isScreenMode, bool superResolution,
                                            const std::vector<int> &tiers,
                                            const std::vector<double> &exposureProducts, Report *report) {
+    const auto nativeStarted=std::chrono::steady_clock::now();Performance performance;
     if (frames.empty())
         return {};
     CV_Assert(tiers.empty() || tiers.size() == frames.size());
@@ -118,6 +119,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
     cv::Mat refGray;
     cv::cvtColor(ref, refGray, cv::COLOR_BGR2GRAY);
     const cv::Mat highlightValidity = fusion::unclippedReference(ref);
+    auto referencePreparation=fusion::prepareReference(refGray);
     cv::Rect commonCrop(0, 0, ref.cols, ref.rows);
     cv::Matx33d firstToReference = cv::Matx33d::eye();
     bool geometryKnown = reference == 0;
@@ -136,11 +138,13 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
             continue;
         cv::Mat warped, h;
         bool aligned;
+        const auto globalStarted=std::chrono::steady_clock::now();
         if (tier == 0) {
             aligned = alignBaseFrame(frames[i], ref, warped, h);
         } else {
             aligned = alignHighlightFrame(frames[i], ref, warped, h, exposureGain);
         }
+        performance.globalRegistrationMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-globalStarted).count();
         if (!aligned || warped.empty() || h.empty() || !cv::checkRange(h) ||
             std::abs(cv::determinant(h)) < 1e-9) {
             LOGI("Frame %zu tier=%d rejected: alignment failed", i, tier);
@@ -162,8 +166,12 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
             LOGI("Frame %zu short responseGain=%.3f metadataGain=%.3f", i, plate.gain, exposureGain);
         cv::cvtColor(tier != 0 ? fusion::normalizeExposure(warped, plate.gain) : warped, gray,
                      cv::COLOR_BGR2GRAY);
+        const auto localStarted=std::chrono::steady_clock::now();
         plate.local =
-            fusion::registerLocal(refGray, gray, tier != 0, false, tier != 0 ? highlightValidity : cv::Mat());
+            fusion::registerLocal(refGray, gray, tier != 0, false, tier != 0 ? highlightValidity : cv::Mat(), &referencePreparation);
+        performance.localRegistrationMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-localStarted).count();
+        performance.gpuSupportMaps+=plate.local.gpuSupportMap ? 1 : 0;
+        performance.gpuFitProposals+=plate.local.gpuFitProposals;
         LOGI("Frame %zu tier=%d localSupport=%.3f detailNodes=%.3f denoiseOnly=%.3f noiseSigma=%.2f "
              "maxRefinement=%.3fpx",
              i, tier, plate.local.supportedFraction, plate.local.detailFraction,
@@ -196,6 +204,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
             }
         }
     }
+    referencePreparation={}; // No retained full-size workspace during output reconstruction.
     // Prefer the least underexposed valid plate (better SNR); use the deeper
     // bracket only where the brighter plate is still clipped.
     std::stable_sort(highlights.begin(), highlights.end(),
@@ -244,7 +253,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
          reference, anchors.size(), highlights.size(), centrePhases, scale, commonCrop.x, commonCrop.y,
          commonCrop.width, commonCrop.height, ref.cols, ref.rows, removeGlare);
     cv::Mat native(commonCrop.height, commonCrop.width, CV_8UC3), result;
-    long long contributorCount = 0, multiFramePixels = 0, recoveredPixels = 0, clippedPixels = 0,
+    long long contributorCount = 0, multiFramePixels = 0, recoveredPixels = 0, clippedPixels = 0, postClippedPixels=0,
               reconstructedPixels = 0;
     unsigned usedHighlightMask = 0;
 #pragma omp parallel for schedule(static) reduction(+ : contributorCount, multiFramePixels)
@@ -282,7 +291,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
         }
     const double nativePixels = native.total();
     cv::Mat preserve = scale == 2 ? cv::Mat::zeros(native.size(), CV_8U) : cv::Mat();
-#pragma omp parallel for schedule(static) reduction(+ : recoveredPixels, clippedPixels)                      \
+#pragma omp parallel for schedule(static) reduction(+ : recoveredPixels, clippedPixels, postClippedPixels)                      \
     reduction(| : usedHighlightMask)
     for (int y = 0; y < native.rows; ++y)
         for (int x = 0; x < native.cols; ++x) {
@@ -335,6 +344,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
                 }
             for (int c = 0; c < 3; ++c)
                 pixel[c] = cv::saturate_cast<uchar>(base[c]);
+            if(std::max({pixel[0],pixel[1],pixel[2]})>=250)++postClippedPixels;
         }
     if (!preserve.empty())
         cv::dilate(preserve, preserve, cv::getStructuringElement(cv::MORPH_RECT, {3, 3}));
@@ -371,6 +381,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
         report->highlights = usedHighlights;
         report->recoveredFraction = double(recoveredPixels) / nativePixels;
         report->clippedFraction = double(clippedPixels) / nativePixels;
+        report->postClippedFraction = double(postClippedPixels) / nativePixels;
         report->reconstructedFraction = double(reconstructedPixels) / result.total();
     }
     LOGI("Regional reconstruction: tiles=%d/%d eligibleArea=%.6f actualPixelFraction=%.6f", regions.qualified,
@@ -379,5 +390,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
          usedHighlights, highlights.size(), recoveredPixels, clippedPixels,
          double(recoveredPixels) / nativePixels);
     LOGI("Contribution: multiFrameFraction=%.4f meanContributors=%.3f", multiFraction, meanContributors);
+    performance.totalMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-nativeStarted).count();
+    if(report)report->performance=performance;
     return result;
 }

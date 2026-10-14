@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="page_recovery_warning">Page history could not be saved or restored. Photo files are retained; the newest edits may not survive a restart.</string>
     <string name="app_name">HachiCam</string>
     <string name="camera_title">Scan</string>
     <string name="crop_title">Adjust Document</string>
@@ -79,8 +80,12 @@
     <string name="confirm_enable">Enable</string>
     <string name="export_logs_title">Export Diagnostic Logs</string>
     <string name="export_capture_diagnostics_title">Export Capture Diagnostics</string>
-    <string name="export_capture_diagnostics_summary">Includes the latest completed capture’s original burst photos, result and logs</string>
-    <string name="export_logs_summary">Package app logs &amp; device diagnostics for feedback</string>
+    <string name="export_capture_diagnostics_summary">Includes original burst photos, final results and logs for up to four recent completed captures</string>
+    <string name="export_logs_summary">Export app version and safe diagnostic information for feedback</string>
+    <string name="diagnostics_waiting">Waiting for photos to finish processing…</string>
+    <string name="diagnostics_preparing">Preparing the diagnostic package…</string>
+    <string name="diagnostics_wait_timeout">Photos are still processing. Try exporting again later.</string>
+    <string name="diagnostics_latest_missing">The latest attempt has no complete photo diagnostic. Any included photos are earlier completed captures.</string>
     <string name="share_logs_title">Share Diagnostic Logs</string>
     <string name="batch_ratio">Batch Ratio</string>
     <string name="select_all">Select All</string>

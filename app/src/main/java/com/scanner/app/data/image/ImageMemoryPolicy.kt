@@ -2,7 +2,9 @@ package com.scanner.app.data.image
 
 object ImageMemoryPolicy {
     private const val MIB = 1024L * 1024
-    const val OVERHEAD = 128 * MIB
+    // Persistent bounded GPU buffers may outlive a job, including quarantined work.
+    const val GPU_POOL = 64 * MIB
+    const val OVERHEAD = 128 * MIB + GPU_POOL
     data class Plan(val streaming: Boolean, val superResolution: Boolean, val bytes: Long, val reason: String)
     fun budget(available: Long, is64Bit: Boolean): Long = minOf(available.coerceAtLeast(0) * 2 / 3, (if (is64Bit) 2048 else 768) * MIB)
     fun fusionBytes(pixels: Long, frames: Int, streaming: Boolean, superResolution: Boolean): Long {

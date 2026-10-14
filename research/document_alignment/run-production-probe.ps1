@@ -20,7 +20,7 @@ try {
     New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
     $executable = Join-Path $outputPath 'production_probe.exe'
     $sources = @('research/document_alignment/export_production_patches.cpp',
-        'app/src/main/cpp/local_registration.cpp','app/src/main/cpp/fusion_pipeline.cpp',
+        'app/src/main/cpp/local_registration.cpp','app/src/main/cpp/gpu_local_support.cpp','app/src/main/cpp/fusion_pipeline.cpp',
         'app/src/main/cpp/stream_fusion.cpp','app/src/main/cpp/regional_reconstruction.cpp',
         'app/src/main/cpp/regional_refinement.cpp','app/src/main/cpp/burst_fusion.cpp',
         'app/src/main/cpp/perspective_corrector.cpp','app/src/main/cpp/edge_detector.cpp',

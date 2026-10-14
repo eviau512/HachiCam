@@ -46,14 +46,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "HachiCam"
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            setTaskDescription(
-                android.app.ActivityManager.TaskDescription.Builder()
-                    .setLabel("HachiCam")
-                    .build()
-            )
-        }
+        title = getString(com.scanner.app.R.string.build_app_name)
+        @Suppress("DEPRECATION")
+        val taskLabel=android.app.ActivityManager.TaskDescription(getString(com.scanner.app.R.string.build_app_name))
+        setTaskDescription(taskLabel)
         enableEdgeToEdge()
         setContent {
             DocScannerTheme {

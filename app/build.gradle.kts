@@ -37,8 +37,8 @@ android {
         applicationId = "moe.hachimi.cam"
         minSdk = 29
         targetSdk = 35
-        versionCode = 36
-        versionName = "0.1.2-rc12"
+        versionCode = 37
+        versionName = "0.1.2-rc13"
 
         buildConfigField("String", "GIT_HASH", "\"$gitCommit\"")
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
@@ -105,6 +105,9 @@ android {
             applicationIdSuffix = ".test"
             resValue("string", "build_app_name", "HachiCamTest")
             buildConfigField("boolean", "SENSITIVE_DIAGNOSTICS", "true")
+            externalNativeBuild {
+                cmake { arguments += "-DHACHICAM_GPU_EXPERIMENTAL=ON" }
+            }
         }
         release {
             resValue("string", "build_app_name", "HachiCam")

@@ -17,6 +17,17 @@ The current pipeline is CameraX plus Camera2Interop and CPU JPEG processing.
 It is not a direct Camera2 captureBurst, a RAW pipeline, or a commercial camera
 algorithm. SPEC_02 owns reconstruction and achieved-output quality.
 
+### RAW feasibility diagnostics (rc13 contract, specified before implementation)
+
+Test-only capability snapshots list RAW_SENSOR, RAW10 and RAW12 ordinary,
+high-resolution and API-31 maximum-resolution sizes, RAW capability and maximum
+RAW output count. Missing data stays unknown. This only evaluates available
+formats; it neither binds RAW streams nor proves any RAW+preview/burst session
+combination works. Release does not acquire or retain this capability snapshot.
+RAW capture/color/noise/fusion changes require separate supported session and
+paired quality/resource acceptance; published JPEG dimensions cannot authorize
+native 50 MP RAW capture. Existing source MP semantics remain unchanged.
+
 ## 2. Capability-driven camera controls
 
 The [night/screen revision](research/NIGHT_HDR_REVISION_2026-10-14.md) requires

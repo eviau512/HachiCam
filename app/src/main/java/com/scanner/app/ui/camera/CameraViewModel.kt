@@ -323,7 +323,10 @@ class CameraViewModel : ViewModel() {
         }
         _isCapturing.value = true
         val captureId = UUID.randomUUID().toString()
+        val timing = com.scanner.app.data.util.ProcessingTimeline { android.os.SystemClock.elapsedRealtimeNanos() }
+        timing.start("acquisitionAndControls")
         CameraDiagnostics.beginBurst(captureId)
+        CameraDiagnostics.memory(captureId,"shutterAdmission")
         val app = context.applicationContext
         val hdr = _fullHdrEnabled.value
         val captureGeneration = cameraGeneration
@@ -449,18 +452,25 @@ class CameraViewModel : ViewModel() {
                 val id = captureId
                 // Complete and record hardware cleanup before the worker snapshots this capture.
                 restoreCaptureControls()
+                timing.end("acquisitionAndControls")
+                timing.start("queue")
                 val output = File(ImageStorage(app).getStorageDir(), "$id.jpg")
                 PageRepository.addPage(ScannedPage(id = id, originalImagePath = output.absolutePath,
                     filter = ImageFilter.ORIGINAL, status = PageStatus.PROCESSING))
                 BurstProcessor.submit(ticket, failure = { error ->
+                    timing.finishPending("workerFailed")
                     PageRepository.updatePage(id) { if (it.status == PageStatus.PROCESSING) it.copy(status = PageStatus.FAILED) else it }
                     Log.e("HachiCam-Burst", "Capture job unavailable", error)
-                }) { processFrames(app, frames, detection, id, output, hdr, highResolution) }
+                }, dequeued = { timing.end("queue"); timing.start("heavyPermitWait") },
+                    admitted = { timing.end("heavyPermitWait") }) {
+                    processFrames(app, frames, detection, id, output, hdr, highResolution, timing)
+                }
                 submitted = true
                 onPageSaved(id)
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) {
                 Log.e("HachiCam-Burst", "Capture failed", error)
+                timing.finishPending("captureFailed")
                 _errorMessage.value = app.getString(R.string.capture_failed)
             } finally {
                 restoreCaptureControls()
@@ -539,39 +549,51 @@ class CameraViewModel : ViewModel() {
     }
 
     private fun decode(frame: Frame): Mat {
-        val buffer = MatOfByte(*frame.bytes)
+        val buffer = Mat(frame.bytes.size,1,org.opencv.core.CvType.CV_8UC1)
+        buffer.put(0,0,frame.bytes)
         return try { Imgcodecs.imdecode(buffer, Imgcodecs.IMREAD_COLOR or Imgcodecs.IMREAD_IGNORE_ORIENTATION) }
         finally { buffer.release() }
     }
     private fun saveUpright(mat: Mat, frame: Frame, output: File, mode: String,
+                            timing: com.scanner.app.data.util.ProcessingTimeline,
                             targetQuad: (Float, Float) -> DocumentQuad): Pair<Float, Float>? {
-        val upright = Mat()
+        val upright = if (frame.rotation == 0) mat else Mat()
         val params = MatOfInt(Imgcodecs.IMWRITE_JPEG_QUALITY, 95)
         val temp = File(output.parentFile, "${output.nameWithoutExtension}.tmp.jpg")
         try {
-            when (frame.rotation) {
+            timing.measure("rotation") { when (frame.rotation) {
                 90 -> Core.rotate(mat, upright, Core.ROTATE_90_CLOCKWISE)
                 180 -> Core.rotate(mat, upright, Core.ROTATE_180)
                 270 -> Core.rotate(mat, upright, Core.ROTATE_90_COUNTERCLOCKWISE)
-                else -> mat.copyTo(upright)
-            }
-            check(Imgcodecs.imwrite(temp.absolutePath, upright, params)) { "JPEG write failed" }
-            ExifUtils.copyAndStampExif(frame.bytes, temp, mode)
+                else -> Unit
+            } }
+            timing.measure("jpegEncoding") { check(Imgcodecs.imwrite(temp.absolutePath, upright, params)) { "JPEG write failed" } }
+            timing.measure("exifStamping") { ExifUtils.copyAndStampExif(frame.bytes, temp, mode) }
             val w = upright.cols().toFloat(); val h = upright.rows().toFloat()
-            if (!PageRepository.commitCapture(output.nameWithoutExtension, temp, output, targetQuad(w, h))) return null
+            val committed = timing.measure("fileCommitAndReady") { PageRepository.commitCapture(output.nameWithoutExtension, temp, output, targetQuad(w, h)) }
+            if (!committed) return null
             return w to h
-        } finally { upright.release(); params.release(); temp.delete() }
+        } finally { if (upright !== mat) upright.release(); params.release(); temp.delete() }
     }
 
     private fun retainBurstDiagnostics(context: Context, frames: List<Frame>, id: String, output: File,
-                                       w: Float, h: Float, mode: String, reference: Int, domain: String, reconstruction: JSONObject? = null) {
+                                       w: Float, h: Float, mode: String, reference: Int, domain: String,
+                                       timing: com.scanner.app.data.util.ProcessingTimeline, reconstruction: JSONObject? = null) {
         if (!BuildConfig.SENSITIVE_DIAGNOSTICS) return
         runCatching {
+            val sourceLease=PageRepository.readMaster(id) ?: return@runCatching
+            sourceLease.use {
+            check(sourceLease.pages.single().originalImagePath==output.absolutePath)
             val metadata = JSONObject().put("captureId", id).put("version", BuildConfig.VERSION_NAME)
                 .put("build", BuildConfig.BUILD_TIME).put("source", BuildConfig.GIT_HASH)
                 .put("outputWidth", w.toInt()).put("outputHeight", h.toInt())
                 .put("exposureDomain", domain).put("result", mode).put("referenceIndex", reference)
                 .put("reconstruction", reconstruction ?: JSONObject.NULL)
+                .put("timing", JSONObject().put("schema", 1).put("clock", "elapsedRealtimeNanos")
+                    .put("elapsedToSnapshotMs", timing.elapsedMs()).put("stages", JSONArray().apply {
+                        timing.snapshot().forEach { stage -> put(JSONObject().put("name", stage.name)
+                            .put("offsetMs", stage.offsetMs).put("durationMs", stage.durationMs).put("outcome", stage.outcome)) }
+                    }).put("unfinishedStages", JSONArray(timing.pending())))
                 .put("frames", JSONArray().apply { frames.forEachIndexed { index, frame ->
                     put(JSONObject().put("file", String.format(Locale.US, "%02d-tier%d.jpg", index, frame.tier))
                         .put("tier", frame.tier).put("rotation", frame.rotation)
@@ -592,10 +614,13 @@ class CameraViewModel : ViewModel() {
                 frames.mapIndexed { index, frame -> String.format(Locale.US, "%02d-tier%d.jpg", index, frame.tier) to frame.bytes },
                 output, metadata.toString(2), CameraDiagnostics.snapshot(id))
             CameraDiagnostics.frame(id, "diagnosticArchiveStored=$stored")
+            CameraDiagnostics.memory(id,"finalDiagnosticSnapshot")
+            }
         }.onFailure { Log.w("HachiCam-Burst", "Diagnostic archive skipped; photo remains valid", it) }
     }
 
-    private fun processFrames(context: Context, frames: List<Frame>, detection: DetectionResult?, id: String, output: File, hdr: Boolean, highResolution: Boolean) {
+    private fun processFrames(context: Context, frames: List<Frame>, detection: DetectionResult?, id: String, output: File, hdr: Boolean, highResolution: Boolean,
+                              timing: com.scanner.app.data.util.ProcessingTimeline) {
         val mats = mutableListOf<Mat>()
         val valid = mutableListOf<Frame>()
         var fused: Mat? = null
@@ -611,7 +636,7 @@ class CameraViewModel : ViewModel() {
             ImageWork.check(memoryPlan.bytes)
             CameraDiagnostics.frame(id, "memoryPlan=${memoryPlan.reason} bytes=${memoryPlan.bytes} reserved=${ImageWork.reserved()}")
             val useStreaming = memoryPlan.streaming
-            frames.forEachIndexed { index, frame ->
+            timing.measure("jpegDecodeOrSpill") { frames.forEachIndexed { index, frame ->
                 if (frame.rotation != frames[0].rotation) {
                     Log.w("HachiCam-Burst", "Dropped frame $index: burst orientation changed")
                     return@forEachIndexed
@@ -632,19 +657,23 @@ class CameraViewModel : ViewModel() {
                     else { mats.add(mat); valid.add(frame) }
                 }
             }
+            } // timed decode/spill
+            CameraDiagnostics.memory(id,"decodedOrSpilled")
             val fuser = NativeBurstFusion()
             val evidence = ExposurePlan.evidence(valid.map { it.evidence?.exposure },valid.map { it.exifExposure })
             val products = evidence.products
             if (BuildConfig.SENSITIVE_DIAGNOSTICS) Log.d("HachiCam-Burst", "fusionExposureDomain=${evidence.description}")
-            fused = if (useStreaming) {
+            fused = timing.measure("nativeFusion") { if (useStreaming) {
                 fuser.fuseBurstFiles(temporaryInputs.map { it.absolutePath }, valid.map { it.tier }.toIntArray(),
                     products)
             } else if (hdr) fuser.fuseBurstFrames(mats, removeGlare = false, isScreenMode = true,
                 superResolution = memoryPlan.superResolution, tiers = valid.map { it.tier }.toIntArray(),
-                exposureProducts = products) else mats[0].clone()
+                exposureProducts = products) else mats[0].clone() }
             check(!fused.empty()) { "Fusion returned no image" }
+            CameraDiagnostics.memory(id,"nativeFusionComplete")
             val report = fuser.lastReport
             val decision = if (hdr || useStreaming) report.reconstruction else ReconstructionDecision(denied = 1)
+            val highlightOutcome=com.scanner.app.data.camera.HighlightOutcome.classify(report.cropW.toLong()*report.cropH,report.clippedFraction,report.recoveredFraction)
             val srRecord = JSONObject().put("schema", 1).put("requestedRegular2x", hdr && !highResolution)
                 .put("engineRequested", decision.requested).put("memoryPlan", memoryPlan.reason)
                 .put("memoryAdmitted2x", hdr && memoryPlan.superResolution).put("deniedFlags", decision.denied)
@@ -665,14 +694,25 @@ class CameraViewModel : ViewModel() {
                 .put("requiredFitErrorRatio", .95).put("minimumObservedPlates", 3).put("minimumPlateObservations", 256)
                 .put("contrastRangeFloor", 12).put("noiseSigmaFactor", 6).put("patchHalo", 8)
                 .put("maximumPatchObservations", 50_000).put("maximumSourceSearch", 128)
+            srRecord.put("registrationParameterVersion","masked-ecc-edges-v1").put("optimizerMargin",10)
+            srRecord.put("nativePerformance",report.performance?.let { perf ->
+                JSONObject().put("schema",1).put("totalMs",perf.totalMs)
+                    .put("globalRegistrationMs",perf.globalRegistrationMs).put("localRegistrationMs",perf.localRegistrationMs)
+                    .put("remainingNativeMs",perf.remainingNativeMs).put("gpuSupportMaps",perf.gpuSupportMaps)
+                    .put("gpuFitProposals",perf.gpuFitProposals).put("remainingScope","reference/decode/prepare/fusion/HDR/reconstruction; not pure SR")
+            } ?: JSONObject.NULL)
+            srRecord.put("highlightMetrics",JSONObject().put("schema",1).put("domain","nativeFusionGrid")
+                .put("outcome",highlightOutcome).put("preClippedFraction",report.clippedFraction)
+                .put("changedFraction",report.recoveredFraction).put("postClippedFraction",report.postClippedFraction ?: JSONObject.NULL)
+                .put("minimumChangedPixels",128).put("minimumClippedShare",.01).put("targetRoiVerified",false))
             srRecord.toString().chunked(440).forEachIndexed { index, chunk -> CameraDiagnostics.frame(id, "srDecisionPart$index=$chunk") }
             val mode = if (!hdr) "Normal" else
-                "${if (highResolution) "Native-high-resolution " else ""}${if (report.recoveredFraction > 0) "HDR" else "Burst"}; anchors=${report.anchors}; highlights=${report.highlights}; scale=${report.scale}; reference=${report.reference}; multiFrameFraction=${report.multiFrameFraction}; meanContributors=${report.meanContributors}; contributionDomain=nativeFusionGrid; recoveredFraction=${report.recoveredFraction}; clippedFraction=${report.clippedFraction}; sourceCrop=${report.left},${report.top},${report.cropW},${report.cropH}; JPEG fusion"
-            val (w, h) = saveUpright(fused, valid[if (hdr) report.reference else 0], output, mode) { w, h ->
+                "${if (highResolution) "Native-high-resolution " else ""}Burst; highlightOutcome=$highlightOutcome; anchors=${report.anchors}; highlights=${report.highlights}; scale=${report.scale}; reference=${report.reference}; multiFrameFraction=${report.multiFrameFraction}; meanContributors=${report.meanContributors}; contributionDomain=nativeFusionGrid; recoveredFraction=${report.recoveredFraction}; clippedFraction=${report.clippedFraction}; postClippedFraction=${report.postClippedFraction}; sourceCrop=${report.left},${report.top},${report.cropW},${report.cropH}; JPEG fusion"
+            val (w, h) = saveUpright(fused, valid[if (hdr) report.reference else 0], output, mode, timing) { w, h ->
                 computeTargetQuad(detection, w, h, frames[0].rotation, if (hdr) report else null)
             } ?: return
             CameraDiagnostics.frame(id,"saved=${w.toInt()}x${h.toInt()} exposureDomain=${evidence.description} $mode")
-            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description, srRecord)
+            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description, timing, srRecord)
             _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
             if (hdr && (report.anchors < 2 || report.multiFrameFraction <= 0.0))
                 _errorMessage.value = context.getString(R.string.fusion_single_frame)
@@ -691,10 +731,10 @@ class CameraViewModel : ViewModel() {
                 val fallback = decode(frames[0])
                 try {
                     check(!fallback.empty())
-                    val (w, h) = saveUpright(fallback, frames[0], output, "Fallback reference (fusion failed)") { w, h ->
+                    val (w, h) = saveUpright(fallback, frames[0], output, "Fallback reference (fusion failed)", timing) { w, h ->
                         computeTargetQuad(detection, w, h, frames[0].rotation)
                     } ?: return
-                    retainBurstDiagnostics(context, frames, id, output, w, h, "Fallback reference (fusion failed)", 0, "see per-frame metadata")
+                    retainBurstDiagnostics(context, frames, id, output, w, h, "Fallback reference (fusion failed)", 0, "see per-frame metadata", timing)
                     _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
                     CameraDiagnostics.frame(id,"savedFallback=${w.toInt()}x${h.toInt()} first-base reference")
                     _errorMessage.value = context.getString(R.string.fusion_fallback)
@@ -705,6 +745,7 @@ class CameraViewModel : ViewModel() {
                 _errorMessage.value = context.getString(R.string.capture_failed)
             }
         } finally {
+            timing.finishPending("interrupted")
             fused?.release(); mats.forEach(Mat::release)
             temporaryInputs.forEach { if (it.exists() && !it.delete()) Log.w("HachiCam-Burst", "Temporary burst cleanup failed") }
         }

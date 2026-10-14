@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="page_recovery_warning">页面记录保存或恢复失败。照片文件会保留，最新编辑可能无法在重启后保留。</string>
     <string name="app_name">HachiCam</string>
     <string name="camera_title">扫描</string>
     <string name="crop_title">文档裁剪与调正</string>
@@ -79,8 +80,12 @@
     <string name="confirm_enable">确认开启</string>
     <string name="export_logs_title">导出诊断日志</string>
     <string name="export_capture_diagnostics_title">导出拍摄诊断</string>
-    <string name="export_capture_diagnostics_summary">包含最近一次完成拍摄的原始连拍照片、成片与日志</string>
-    <string name="export_logs_summary">打包 App 运行日志与硬件环境信息以供排障</string>
+    <string name="export_capture_diagnostics_summary">包含最近最多四组完成拍摄的原始连拍照片、成片与日志</string>
+    <string name="export_logs_summary">导出应用版本与安全诊断信息以供排障</string>
+    <string name="diagnostics_waiting">正在等待照片处理完成…</string>
+    <string name="diagnostics_preparing">正在准备诊断包…</string>
+    <string name="diagnostics_wait_timeout">照片仍在处理中，请稍后再次导出。</string>
+    <string name="diagnostics_latest_missing">最新一次尚无完整照片诊断，包内照片来自较早完成的拍摄。</string>
     <string name="share_logs_title">分享诊断日志</string>
     <string name="batch_ratio">批量比例</string>
     <string name="select_all">全选</string>

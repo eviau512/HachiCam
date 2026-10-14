@@ -62,8 +62,15 @@ void runHighlightTests() {
             engine.fuseBurstFrames(frames,false,true,false,{0,0,1},{4,4,1},&report);
         std::cout<<"HDR pipeline stream="<<stream<<" admitted="<<report.highlights<<" recovered="<<report.recoveredFraction<<" clipped="<<report.clippedFraction<<'\n';
         check(report.anchors==2,"HDR must retain base multi-frame noise reduction");
+        const auto perf=report.performance;
+        check(std::isfinite(perf.totalMs) && perf.totalMs>0 && perf.globalRegistrationMs>=0 && perf.localRegistrationMs>=0 &&
+            perf.globalRegistrationMs+perf.localRegistrationMs<=perf.totalMs+.001,"Per-call native intervals must be finite and nonoverlapping");
+        check(perf.gpuSupportMaps>=0 && perf.gpuSupportMaps<=6 && perf.gpuFitProposals>=0,"Per-result backend counters must be bounded");
         check(report.recoveredFraction>.002,"Production pipeline must actually recover clipped screen text");
         check(report.scale==1,"Short exposure must not grant SR phase credit");
+        long long measuredPost=0;
+        for(int y=0;y<out.rows;++y)for(int x=0;x<out.cols;++x){const auto p=out.at<cv::Vec3b>(y,x);if(std::max({p[0],p[1],p[2]})>=250)++measuredPost;}
+        check(std::abs(report.postClippedFraction-double(measuredPost)/out.total())<1e-12,"Post HDR metric must match actual native byte clipping");
         const auto colored=out.at<cv::Vec3b>(385-report.crop.y,540-report.crop.x);
         check(colored[2]<250 && colored[2]>colored[0]+20,"Single-channel clipping must recover observed color");
         cv::Mat sg,og;cv::cvtColor(shortImage,sg,cv::COLOR_BGR2GRAY);cv::cvtColor(out,og,cv::COLOR_BGR2GRAY);
@@ -91,6 +98,7 @@ void runHighlightTests() {
         if(stream)engine.fuseBurstStream(2,[&](size_t){return clipped.clone();},{0,1},{4,1},&report);
         else engine.fuseBurstFrames({clipped,clipped},false,true,false,{0,1},{4,1},&report);
         check(report.recoveredFraction==0,"All-clipped evidence cannot invent detail");
+        check(report.postClippedFraction==1,"All-clipped no-recovery output must retain post clipping");
     }
     {
         cv::Mat clean(1536,2048,CV_8UC3,cv::Scalar::all(100));

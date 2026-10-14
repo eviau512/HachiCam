@@ -19,6 +19,7 @@ add_library(
         fusion_pipeline.cpp
         stream_fusion.cpp
         local_registration.cpp
+        gpu_local_support.cpp
         regional_reconstruction.cpp
         regional_refinement.cpp
         vulkan_compute_engine.cpp
@@ -26,6 +27,7 @@ add_library(
 )
 
 find_library(vulkan-lib vulkan)
+find_library(dl-lib dl)
 
 target_link_libraries(
         doc_scanner_engine
@@ -33,7 +35,13 @@ target_link_libraries(
         jnigraphics
         OpenCV::opencv_java4
         ${vulkan-lib}
+        ${dl-lib}
 )
+
+option(HACHICAM_GPU_EXPERIMENTAL "Enable validated experimental support/ECC compute backend" OFF)
+if(HACHICAM_GPU_EXPERIMENTAL)
+    target_compile_definitions(doc_scanner_engine PRIVATE HACHICAM_VULKAN_SUPPORT=1)
+endif()
 
 target_compile_options(doc_scanner_engine PRIVATE -O3 -fopenmp)
 target_link_options(doc_scanner_engine PRIVATE -fopenmp -static-openmp)

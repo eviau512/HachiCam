@@ -1,7 +1,7 @@
 > [!NOTE]
 > The owner of this repo built this entirely via vibe coding, and isn't quite sure what this Agent actually does. ¯\\\_(ツ)\_/¯
 
-> See the [2026-10-12 implementation audit](specs/IMPLEMENTATION_AUDIT_2026-10-12.md) for verified behavior and missing features. Historical fixed 50MP, GPU/OEM parity and vector PDF claims below are not acceptance results. Build the test APK with `scripts/build-test.ps1`.
+> Current contracts and implementation limits: [specifications](specs/README.md), [TODO](TODO.md) and [rc13 report](specs/reports/RC13_PERFORMANCE_AND_RECOVERY_2026-10-15.zh-CN.md). Build the test APK with `scripts/build-test.ps1`.
 
 <div align="center">
 
@@ -25,94 +25,39 @@
 
 ---
 
-## 🌟 Key Features
+## Current features
 
-### 1. Camera & Computational Photography
-* **Hardware ISP Tuning**:
-  - Leverages Camera2Interop to inject high-quality capture parameters, ensuring hardware OIS and optimal tone mapping.
-* **50MP Multi-Frame Super-Resolution Burst (Experimental)**:
-  - Capitalizes on involuntary physiological hand tremor ($0.1 \sim 0.8\text{ px}$ subpixel displacement) across rapid frames, utilizing ORB + RANSAC homography to accumulate polyphase samples onto a $2\times$ canvas ($8160 \times 6144 \approx 50.1\text{MP}$), reconstructing high-frequency optical detail beyond single-frame Nyquist limits.
-* **Orientation Awareness & Dynamic UI Rotation**:
-  - Fully adaptive rotation across viewfinder controls, automatically normalizing physical pixel orientation and EXIF headers for convenient landscape shooting of wide banners and station signs.
+- CameraX/Camera2Interop JPEG capture, supported back views/zoom, tap AF/AE and upright output. Camera requests are capability dependent, not guaranteed OEM behavior.
+- Full HDR/multi-frame capture enabled by default: requests up to four base and three shorter frames. Only locally supported observations contribute to denoising, experimental regional reconstruction or highlight recovery. Output size and recovered detail are separate; native 50 MP is not guaranteed.
+- Debug-only experimental Vulkan support maps/ECC proposals with numerical and cost calibration, bounded resources and CPU fallback. Release stays CPU. Full GPU fusion and phone speedup are not yet accepted.
+- Tracked document outlines, manual four-corner correction, line snapping and planar perspective/aspect correction. Detection remains heuristic.
+- Three filters: Original, Magic Color and continuous-tone Paper. B&W/Grayscale have been replaced; paper/color/weak-stroke quality still needs device comparisons.
+- Immutable masters, generation-checked derivative commits, export read leases and bounded committed-page checkpoints. Restart restores saved pages; interrupted captures fail explicitly or retain a complete master. Pending bursts and unsaved edits are not replayed.
+- JPEG and raster-page PDF export; no OCR or vector text layer. HachiCamTest diagnostics can export up to four matching completed burst groups with final images and phase timings. Release does not probe root or collect device identifiers/raw diagnostic groups.
 
-### 2. Edge Detection & Perspective Correction
-* **Text Saliency & Wide Aspect Ratio Support**:
-  - Integrates a Sobel gradient integral image to rapidly assess internal stroke energy density (Text Saliency), prioritizing text-bearing signs over empty, reflective glass doors in challenging environments.
-  - Accommodates wide aspect ratios up to $12:1$ for subway route signs, banners, and long receipts.
-* **Interactive Quad Cropping with 2.8x Loupe**:
-  - Floating crosshair magnifying glass displays during corner adjustments for pixel-accurate positioning.
-  - Quick aspect presets: A4, A3, 4:3, 16:9, 8:7, and freeform Custom, with automatic foreshortening recovery.
+## Current limits
 
-### 3. Document Enhancement Filters
-* **Retinex Magic Color**:
-  - Isolates the L channel in CIE-Lab color space using low-frequency illumination division to neutralize cast shadows and paper creases, paired with dynamic white balancing to preserve colorful highlighter marks and official stamps.
-* **Sauvola Adaptive Binarization (B&W Document)**:
-  - Accelerated by double-precision integral images for $O(1)$ local dynamic thresholding, removing photocopy background gray without breaking delicate letterforms.
-* **Smooth Grayscale**:
-  - Balanced contrast stretching tailored for ID cards, pencil sketches, and invoices.
+Lamp/screen HDR and scene-specific JPEG response remain active quality work. Regional reconstruction is experimental and can retain the original output size when evidence is insufficient. RAW availability is recorded in test builds, but RAW capture/fusion, dense alignment, automatic capture, book flattening and finger cleanup are not completed features. Host regressions are distinct from real-camera/thermal/latency acceptance.
 
-### 4. Privacy & Document Export
-* **100% On-Device**: All C++ NDK and OpenCV computations execute strictly locally.
-* **Zero Telemetry**: No user accounts, zero analytics or advertising SDKs.
-* **Vector PDF & Image Export**: Compiles clean multi-page PDFs using Android's native `PdfDocument` alongside batch JPEG exports.
+## Build and checks
 
----
+The repository pins SDK 35, build-tools 36.0.0, NDK 30.0.16248370 and Gradle 8.14. Use JDK 17/21 and installed CMake; the wrapper defaults to 3.22.1 and supports `-Pscanner.cmakeVersion=4.1.2` for the configured workspace.
 
-## ⚠️ Known Issues & Technical Debt
-
-This project was rapidly prototyped through human-AI pair programming. There are recognized architectural compromises and technical debt in the current codebase that are slated for refactoring:
-
-1. **File I/O Serialization Overhead**:
-   - The current multi-frame pipeline writes burst frames to temporary JPEGs on disk, decodes them back in C++ via `imread`, processes them, and writes them back. This introduces unnecessary disk wear and re-compression latency. We plan to transition to a zero-copy memory buffer pipeline using `ImageProxy` / `HardwareBuffer`.
-2. **Monolithic UI & ViewModel Components**:
-   - Files like `CameraScreen` and `CameraViewModel` currently manage multiple concurrent responsibilities (sensor monitoring, CameraX lifecycle, UI animations, and capture coordination). These will be decoupled into single-responsibility UseCases and Controllers.
-   - An in-memory StateFlow repository is currently used; a persistent SQLite/Room database is needed to protect unexported batches against process death.
-3. **JNI Interface Refinement**:
-   - Several JNI methods pass raw pointer handles (`jlong matAddr`) and flat arrays without comprehensive RAII memory management wrappers.
-
-We welcome constructive critiques, issue reports, and community pull requests.
-
----
-
-## 🛠️ Build & Run
-
-### Prerequisites
-* Android Studio Ladybug (2024.2.1) or newer
-* Android SDK 35 (Android 15)
-* Android NDK 26+ / 30
-* JDK 17 or JDK 21
-* CMake 3.22.1+
-
-### Build from Command Line
-
-```bash
-# Clone the repository
-git clone https://github.com/eviau512/Hachimi-Scan.git
-cd Hachimi-Scan
-
-# Build HachiCam Release APK
-./gradlew assembleHachimiRelease
-
-# Or build standard flavor Release APK
-./gradlew assembleStandardRelease
+```powershell
+.\scripts\build-test.ps1
+# Release, with a configured signing key:
+.\gradlew.bat :app:assembleHachimiRelease
 ```
 
-Generated APKs are located in `app/build/outputs/apk/hachimi/release/`.
+The test package is `moe.hachimi.cam.test`, visibly HachiCamTest; release is `moe.hachimi.cam`, HachiCam. Universal debug output is under `app/build/outputs/apk/hachimi/debug/` and contains arm64-v8a, armeabi-v7a and x86_64.
 
----
+`scripts/test-quality-native.ps1` runs CPU image fixtures; `scripts/test-gpu-native.ps1` exercises actual host Vulkan kernels and failure policy. See [native test instructions](tests/native/README.md). Android unit checks, packaged identity/signature checks and device tests serve different purposes.
 
-## 📄 Technical Specifications
+## Specifications and workflow
 
-All core algorithms are documented with detailed mathematical models under [`specs/`](specs/) (dedicated to public domain under CC0 1.0):
-* [`SPEC_00_ARCHITECTURE_AND_TECH_STACK.md`](specs/SPEC_00_ARCHITECTURE_AND_TECH_STACK.md): System architecture, pipelines, and tech stack overview
-* [`SPEC_01_RETINEX_MAGIC_COLOR_ENGINE.md`](specs/SPEC_01_RETINEX_MAGIC_COLOR_ENGINE.md): Retinex CIE-Lab illumination division model
-* [`SPEC_02_ADAPTIVE_BINARIZATION_ENGINE.md`](specs/SPEC_02_ADAPTIVE_BINARIZATION_ENGINE.md): Sauvola integral image adaptive binarization
-* [`SPEC_04_BURST_FUSION_ENGINE.md`](specs/SPEC_04_BURST_FUSION_ENGINE.md): Multi-frame alignment and 50MP subpixel super-resolution
-* [`SPEC_15_METRO_SIGN_AND_TEXT_SALIENCY_DETECTION.md`](specs/SPEC_15_METRO_SIGN_AND_TEXT_SALIENCY_DETECTION.md): Wide-aspect detection and text saliency scoring
+The [English authoritative index](specs/README.md) links SPEC_00 through SPEC_06. Chinese reports explain evidence and do not replace the contracts. Every change follows problem analysis → spec analysis → spec revision → implementation and verification; [AGENTS.md](AGENTS.md) also defines commit-and-push handoff.
 
----
+## License
 
-## 📄 License
-
-* **Source Code**: Licensed under the **[GNU General Public License v3 (GPLv3)](LICENSE)**.
-* **Specifications**: Dedicated to the public domain under **[Creative Commons Zero v1.0 (CC0 1.0)](specs/LICENSE)**.
+- Source: [GNU GPLv3](LICENSE).
+- Specifications: [CC0 1.0](specs/LICENSE).

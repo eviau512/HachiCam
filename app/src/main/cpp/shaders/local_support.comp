@@ -1,0 +1,52 @@
+#version 450
+// Byte planes avoid full-size float conversion. One invocation writes four gates.
+layout(local_size_x=128) in;
+layout(std430,binding=0) readonly buffer Pixels { uint pixels[]; };
+layout(std430,binding=1) readonly buffer Field { vec4 nodes[]; };
+layout(std430,binding=2) writeonly buffer Gates { uint gates[]; };
+layout(push_constant) uniform Shape { int width; int height; int planeWords; int nx; int ny; int spacing; int count; int unused; } p;
+
+float byteAt(int plane, int x, int y) {
+    int at=y*p.width+x;
+    return float((pixels[plane*p.planeWords+(at>>2)] >> (8*(at&3))) & 255u);
+}
+uint gateAt(int at) {
+    if(at>=p.count)return 0u;
+    int x=at%p.width, y=at/p.width;
+    precise float gx=clamp(float(x)/float(p.spacing),0.,float(p.nx-1));
+    precise float gy=clamp(float(y)/float(p.spacing),0.,float(p.ny-1));
+    int x0=int(gx),y0=int(gy),x1=min(x0+1,p.nx-1),y1=min(y0+1,p.ny-1);
+    precise float fx=gx-float(x0),fy=gy-float(y0);
+    vec4 n[4]=vec4[4](nodes[y0*p.nx+x0],nodes[y0*p.nx+x1],nodes[y1*p.nx+x0],nodes[y1*p.nx+x1]);
+    precise float w[4]=float[4]((1.-fx)*(1.-fy),fx*(1.-fy),(1.-fx)*fy,fx*fy);
+    precise vec3 sum=vec3(0.);
+    for(int i=0;i<4;i++) {
+        if(w[i]<=.001)continue;
+        if(n[i].z<=0.)return 0u;
+        for(int j=0;j<i;j++)if(w[j]>.001) {
+            float distance=length(n[i].xy-n[j].xy);
+            if(abs(distance-1.5)<.001)return 128u;
+            if(distance>1.5)return 0u;
+        }
+        sum+=n[i].xyz*w[i];
+    }
+    if(sum.z<=0.)return 0u;
+    // CPU uses double coordinate addition. Recheck near a sampling boundary.
+    precise vec2 q=vec2(x,y)+sum.xy;
+    if(min(abs(q.x),abs(q.x-float(p.width-1)))<.002 ||
+       min(abs(q.y),abs(q.y-float(p.height-1)))<.002)return 128u;
+    if(q.x<0. || q.y<0. || q.x>float(p.width-1) || q.y>float(p.height-1))return 0u;
+    int sx=int(q.x),sy=int(q.y),xx=min(sx+1,p.width-1),yy=min(sy+1,p.height-1);
+    precise float a=q.x-float(sx),b=q.y-float(sy);
+    precise float observed=(1.-b)*((1.-a)*byteAt(1,sx,sy)+a*byteAt(1,xx,sy))+
+        b*((1.-a)*byteAt(1,sx,yy)+a*byteAt(1,xx,yy));
+    float residual=abs(observed-byteAt(0,x,y));
+    if(abs(residual-14.)<.5)return 128u;
+    return residual<=14. ? 255u : 0u;
+}
+void main() {
+    uint word=gl_GlobalInvocationID.x;
+    if(word>=uint(p.planeWords))return;
+    int at=int(word)*4;
+    gates[word]=gateAt(at)|(gateAt(at+1)<<8)|(gateAt(at+2)<<16)|(gateAt(at+3)<<24);
+}

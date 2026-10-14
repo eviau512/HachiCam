@@ -18,7 +18,7 @@ try {
         $libs=@('-lopencv_features2d','-lopencv_calib3d')
     }
     $executable=Join-Path $output 'review.exe'
-    $sources=@('research/document_alignment/review_matched.cpp','app/src/main/cpp/local_registration.cpp',
+    $sources=@('research/document_alignment/review_matched.cpp','app/src/main/cpp/local_registration.cpp','app/src/main/cpp/gpu_local_support.cpp',
        'app/src/main/cpp/fusion_pipeline.cpp','app/src/main/cpp/stream_fusion.cpp',
        'app/src/main/cpp/regional_reconstruction.cpp','app/src/main/cpp/regional_refinement.cpp','app/src/main/cpp/burst_fusion.cpp')
     $compile=@('-std=c++17','-O2','-fopenmp','-Wno-deprecated-declarations','-include','tests/native/host/opencv_compat.h',

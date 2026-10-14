@@ -105,6 +105,7 @@ bool sample(const cv::Mat& image,cv::Point2d p,fusion::Color& c) {
 
 cv::Mat BurstFusionEngine::fuseBurstStream(size_t count,const std::function<cv::Mat(size_t)>& loader,
         const std::vector<int>& tiers,const std::vector<double>& exposures,Report* report) {
+    const auto nativeStarted=std::chrono::steady_clock::now();Performance performance;
     if(!count||count>7||tiers.size()!=count||exposures.size()!=count||tiers[0]!=0)
         throw std::invalid_argument("Invalid streamed burst metadata");
     if(std::count(tiers.begin(),tiers.end(),0)>4)throw std::invalid_argument("At most four base frames");
@@ -133,13 +134,17 @@ cv::Mat BurstFusionEngine::fuseBurstStream(size_t count,const std::function<cv::
         const auto srcSmall=analysis(source);cv::Mat warped,h;
         const double gain=exposures[i]>0 ? exposures[reference]/exposures[i] : 0;
         if(tiers[i]!=0 && (gain<=1.25 || !std::isfinite(gain)))continue;
+        const auto globalStarted=std::chrono::steady_clock::now();
         const bool aligned=tiers[i]==0 ? alignBaseFrame(srcSmall,reduced,warped,h):
             alignHighlightFrame(srcSmall,reduced,warped,h,gain);
+        performance.globalRegistrationMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-globalStarted).count();
         if(!aligned||h.empty()||!cv::checkRange(h)||std::abs(cv::determinant(h))<1e-9)continue;
         const auto fullH=fullTransform(h,size,reduced.size());
         if(i==0){achieved.firstToReference=fullH;achieved.geometryKnown=true;}
         const float jpegGain=tiers[i]!=0 ? fusion::responseGain(reduced,warped,gain) : 1;
+        const auto localStarted=std::chrono::steady_clock::now();
         StreamPlate plate{i,fullH.inv(),localPatches(ref,source,fullH,tiers[i]!=0,jpegGain),jpegGain};
+        performance.localRegistrationMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-localStarted).count();
         STREAM_LOG("Stream frame=%zu tier=%d nodeSupport=%.3f detail=%.3f denoiseOnly=%.3f sigma=%.2f",i,tiers[i],plate.local.supportedFraction,plate.local.detailFraction,plate.local.denoiseOnlyFraction,plate.local.noiseSigma);
         if(plate.local.supportedFraction<.005f)continue;
         if(tiers[i]==0) {
@@ -216,8 +221,14 @@ cv::Mat BurstFusionEngine::fuseBurstStream(size_t count,const std::function<cv::
     achieved.anchors=admitted;achieved.highlights=usedHighlights;achieved.crop=crop;
     achieved.multiFrameFraction=double(multiPixels)/output.total();achieved.meanContributors=double(totalContributors)/output.total();
     achieved.recoveredFraction=double(cv::countNonZero(recovered))/output.total();achieved.clippedFraction=double(clippedPixels)/output.total();
+    long long postClipped=0;
+    #pragma omp parallel for reduction(+:postClipped)
+    for(int y=0;y<output.rows;++y)for(int x=0;x<output.cols;++x){const auto p=output.at<cv::Vec3b>(y,x);if(std::max({p[0],p[1],p[2]})>=250)++postClipped;}
+    achieved.postClippedFraction=double(postClipped)/output.total();
     STREAM_LOG("Highlight pixels: recoveredFraction=%.6f clippedFraction=%.6f",achieved.recoveredFraction,achieved.clippedFraction);
-    if(report)*report=achieved;
     STREAM_LOG("Stream fusion: native=%dx%d anchors=%d highlights=%d scale=1 crop=%d,%d,%d,%d multiFrameFraction=%.4f meanContributors=%.3f",size.width,size.height,admitted,usedHighlights,crop.x,crop.y,crop.width,crop.height,achieved.multiFrameFraction,achieved.meanContributors);
+    performance.totalMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-nativeStarted).count();
+    achieved.performance=performance;
+    if(report)*report=achieved;
     return output;
 }

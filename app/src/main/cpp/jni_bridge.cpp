@@ -9,15 +9,17 @@
 #include <cstring>
 #include <jni.h>
 #include <opencv2/opencv.hpp>
+#include <memory>
 
 #define TAG "HachiCam-JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFusionEngine::Report &report) {
-    jlongArray result = env->NewLongArray(42);
+    jlongArray result = env->NewLongArray(50);
     if (!result)
         return nullptr;
-    jlong values[42] = {reinterpret_cast<jlong>(new cv::Mat(std::move(fused))),
+    auto owned=std::make_unique<cv::Mat>(std::move(fused));
+    jlong values[50] = {reinterpret_cast<jlong>(owned.get()),
                         report.anchors,
                         report.highlights,
                         report.scale,
@@ -55,7 +57,16 @@ static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFus
     values[39] = report.fittedTiles;
     std::memcpy(&values[40], &report.initialFitError, sizeof(double));
     std::memcpy(&values[41], &report.finalFitError, sizeof(double));
-    env->SetLongArrayRegion(result, 0, 42, values);
+    values[42]=1; // Independent highlight-metric extension version.
+    std::memcpy(&values[43],&report.postClippedFraction,sizeof(double));
+    values[44]=1;
+    std::memcpy(&values[45],&report.performance.totalMs,sizeof(double));
+    std::memcpy(&values[46],&report.performance.globalRegistrationMs,sizeof(double));
+    std::memcpy(&values[47],&report.performance.localRegistrationMs,sizeof(double));
+    values[48]=report.performance.gpuSupportMaps;values[49]=report.performance.gpuFitProposals;
+    env->SetLongArrayRegion(result, 0, 50, values);
+    if(env->ExceptionCheck())return nullptr;
+    owned.release();
     return result;
 }
 

@@ -1,0 +1,86 @@
+#version 450
+// One workgroup owns one patch; no global floating-point atomics or cross-job state.
+layout(local_size_x=128) in;
+layout(std430,binding=0) readonly buffer Inputs { float image[]; };
+layout(std430,binding=1) readonly buffer Jobs { uvec4 job[]; };
+layout(std430,binding=2) writeonly buffer Fits { vec4 fit[]; };
+layout(push_constant) uniform Limits { int jobs; int iterations; float epsilon; int r0; int r1; int r2; int r3; int r4; } p;
+shared vec4 a[128];shared vec4 b[128];shared vec4 c[128];
+shared float dx;shared float dy;shared float rho;shared float meanI;shared float meanT;
+shared vec3 best;
+shared int state;
+
+float point(uvec4 j,int plane,int x,int y) {
+    if(x<0 || y<0 || x>=int(j.y) || y>=int(j.z))return 0.;
+    return image[j.x+uint(plane)*j.w+uint(y)*j.y+uint(x)];
+}
+vec3 warped(uvec4 j,int x,int y) {
+    vec2 q=vec2(x,y)+floor((roundEven(vec2(dx,dy)*1024.)+16.)/32.)/32.;
+    ivec2 lo=ivec2(floor(q));vec2 f=q-vec2(lo);
+    vec3 s00=vec3(point(j,1,lo.x,lo.y),point(j,2,lo.x,lo.y),point(j,3,lo.x,lo.y));
+    vec3 s10=vec3(point(j,1,lo.x+1,lo.y),point(j,2,lo.x+1,lo.y),point(j,3,lo.x+1,lo.y));
+    vec3 s01=vec3(point(j,1,lo.x,lo.y+1),point(j,2,lo.x,lo.y+1),point(j,3,lo.x,lo.y+1));
+    vec3 s11=vec3(point(j,1,lo.x+1,lo.y+1),point(j,2,lo.x+1,lo.y+1),point(j,3,lo.x+1,lo.y+1));
+    return (1.-f.y)*((1.-f.x)*s00+f.x*s10)+f.y*((1.-f.x)*s01+f.x*s11);
+}
+bool validMask(uvec4 j,int x,int y) {
+    ivec2 step=ivec2(floor((roundEven(vec2(dx,dy)*1024.)+512.)/1024.));
+    return point(j,4,x+step.x,y+step.y)>.5;
+}
+void main() {
+    uint id=gl_WorkGroupID.x,lane=gl_LocalInvocationID.x;
+    if(id>=uint(p.jobs))return;
+    uvec4 j=job[id];
+    if(lane==0){dx=0.;dy=0.;rho=-1.;state=0;best=vec3(0.,0.,-1.);}
+    barrier();
+    for(int iteration=0;iteration<p.iterations;iteration++) {
+        vec4 totals=vec4(0.);
+        for(uint k=lane;k<j.w;k+=128) {
+            int x=int(k%j.y),y=int(k/j.y);
+            if(!validMask(j,x,y))continue;
+            totals+=vec4(warped(j,x,y).x,image[j.x+k],1.,0.);
+        }
+        a[lane]=totals;barrier();
+        for(uint step=64;step>0;step>>=1){if(lane<step)a[lane]+=a[lane+step];barrier();}
+        if(lane==0){if(a[0].z<1.)state=2;else {meanI=a[0].x/a[0].z;meanT=a[0].y/a[0].z;}}
+        barrier();if(state==2)break;
+        vec4 s0=vec4(0.),s1=vec4(0.),s2=vec4(0.);
+        for(uint k=lane;k<j.w;k+=128) {
+            int x=int(k%j.y),y=int(k/j.y);vec3 v=warped(j,x,y);
+            bool mask=validMask(j,x,y);
+            float iz=mask ? v.x-meanI : v.x;
+            float tz=mask ? image[j.x+k]-meanT : 0.;
+            s0+=vec4(mask ? iz*iz : 0.,tz*tz,iz*tz,v.y*v.y);
+            s1+=vec4(v.y*v.z,v.z*v.z,v.y*iz,v.z*iz);
+            s2+=vec4(v.y*tz,v.z*tz,0.,0.);
+        }
+        a[lane]=s0;b[lane]=s1;c[lane]=s2;barrier();
+        for(uint step=64;step>0;step>>=1){if(lane<step){a[lane]+=a[lane+step];b[lane]+=b[lane+step];c[lane]+=c[lane+step];}barrier();}
+        if(lane==0) {
+            float h00=a[0].w,h01=b[0].x,h11=b[0].y;
+            float determinant=h00*h11-h01*h01;
+            if(a[0].x<=0. || a[0].y<=0. || determinant<=max(1e-6,h00*h11*1e-8))state=2;
+            else {
+                mat2 inverse=mat2(h11,-h01,-h01,h00)/determinant;
+                vec2 ip=b[0].zw,tp=c[0].xy,projected=inverse*ip;
+                float denominator=a[0].z-dot(tp,projected);
+                if(denominator<=0.)state=2;
+                else {
+                    float lambda=(a[0].x-dot(ip,projected))/denominator;
+                    vec2 delta=inverse*(lambda*tp-ip);
+                    float nextRho=a[0].z/sqrt(a[0].x*a[0].y);
+                    if(isnan(nextRho)||isinf(nextRho)||any(isnan(delta))||any(isinf(delta)))state=2;
+                    else {
+                        bool converged=abs(nextRho-rho)<p.epsilon;
+                        if(nextRho>best.z)best=vec3(dx,dy,nextRho);
+                        rho=nextRho;dx+=delta.x;dy+=delta.y;
+                        if(length(vec2(dx,dy))>16.)state=2;
+                        else if(converged)state=1;
+                    }
+                }
+            }
+        }
+        barrier();if(state!=0)break;
+    }
+    if(lane==0)fit[id]=state==2 ? vec4(0.,0.,-1.,0.) : vec4(best,1.);
+}

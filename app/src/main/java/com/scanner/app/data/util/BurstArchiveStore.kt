@@ -4,11 +4,12 @@ import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-/** One completed test capture; replacement/export share a lock across callers. */
+/** Bounded completed test captures; replacement/export share a lock across callers. */
 class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
     companion object {
         private val guard = Any()
         const val LIMIT = 192L * 1024 * 1024
+        const val GROUP_LIMIT = 4
     }
     private fun removeChild(file: File) {
         require(file.canonicalFile.parentFile == root.canonicalFile)
@@ -18,7 +19,40 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
         val current = File(root, "current"); val previous = File(root, "previous")
         if (!current.exists() && previous.isDirectory) check(previous.renameTo(current))
     }
-    fun replace(inputs: List<Pair<String, ByteArray>>, output: File, manifest: String, diagnostics: String = ""): Boolean = synchronized(guard) {
+    private fun files(folder: File): List<File> = folder.listFiles()?.filter { it.isFile }?.sortedBy { it.name }.orEmpty().also { entries ->
+        require(entries.all { it.canonicalFile.parentFile == folder.canonicalFile })
+    }
+    private fun history(): List<File> {
+        val directory = File(root, "history")
+        require(directory.canonicalFile.parentFile == root.canonicalFile)
+        return directory.listFiles()?.filter { it.isDirectory && File(it,"manifest.json").isFile }
+            ?.sortedByDescending { it.name.substringBefore('-').toLongOrNull() ?: it.lastModified() }.orEmpty().also { groups ->
+                require(groups.all { it.canonicalFile.parentFile == directory.canonicalFile })
+            }
+    }
+    private fun pruneHistory() {
+        var bytes=files(File(root,"current")).sumOf { it.length() }
+        history().forEachIndexed { index, folder ->
+            val size=files(folder).sumOf { it.length() }
+            if(index>=GROUP_LIMIT-1 || bytes+size>LIMIT) check(folder.deleteRecursively())
+            else bytes+=size
+        }
+    }
+    private fun groupId(folder: File): String {
+        val manifest=File(folder,"manifest.json")
+        require(manifest.length() in 1..128L*1024)
+        val text=manifest.readText()
+        return Regex("\"captureId\"\\s*:\\s*\"([a-fA-F0-9-]{36})\"").find(text)?.groupValues?.get(1)
+            ?: folder.name
+    }
+    fun latestCaptureId(): String? = synchronized(guard) {
+        if(!enabled) return@synchronized null
+        recoverPrevious()
+        File(root,"current").takeIf { File(it,"manifest.json").isFile }?.let(::groupId)
+    }
+    fun replace(inputs: List<Pair<String, ByteArray>>, output: File, manifest: String, diagnostics: String = "",
+        requestNs: Long = System.nanoTime()): Boolean = synchronized(guard) {
+        val acquiredNs=System.nanoTime()
         if (!enabled) return@synchronized false
         require(inputs.isNotEmpty() && inputs.size <= 7)
         require(inputs.map { it.first }.distinct().size == inputs.size &&
@@ -26,9 +60,9 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
         val metadata = manifest.toByteArray(Charsets.UTF_8)
         val context = diagnostics.toByteArray(Charsets.UTF_8)
         require(context.size <= 128 * 1024)
-        require(metadata.size <= 128 * 1024 && output.isFile)
+        require(metadata.isNotEmpty() && metadata.size <= 128 * 1024 && output.isFile && output.length()>0 && inputs.all { it.second.isNotEmpty() })
         val inputBytes = inputs.sumOf { it.second.size.toLong() }
-        val total = inputBytes + output.length() + metadata.size + context.size
+        val total = inputBytes + output.length() + metadata.size + context.size + 1024 // timing footer allowance
         val parent = root.parentFile ?: return@synchronized false
         if (inputBytes > 96L * 1024 * 1024 || total > LIMIT ||
             parent.usableSpace < total * 3 + 64L * 1024 * 1024) return@synchronized false
@@ -42,24 +76,38 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
             check(pending.mkdir())
             inputs.forEach { (name, bytes) -> File(pending, name).writeBytes(bytes) }
             File(pending, "manifest.json").writeBytes(metadata)
-            if (context.isNotEmpty()) File(pending, "diagnostics.txt").writeBytes(context)
             output.copyTo(File(pending, "fused.jpg"))
+            val copiedNs=System.nanoTime()
+            val measured = diagnostics + "\nSnapshot timing: clock=System.nanoTime lockWaitMs=${(acquiredNs-requestNs).coerceAtLeast(0)/1e6} copyMs=${(copiedNs-acquiredNs).coerceAtLeast(0)/1e6}; excludes final metadata/rename\n"
+            require(measured.toByteArray(Charsets.UTF_8).size<=128*1024)
+            File(pending,"diagnostics.txt").writeText(measured)
             if (current.exists()) check(current.renameTo(previous))
             if (!pending.renameTo(current)) {
                 if (previous.exists()) check(previous.renameTo(current))
                 error("Diagnostic snapshot commit failed")
             }
-            removeChild(previous)
+            if(previous.isDirectory) {
+                val older=File(root,"history").apply { check(mkdirs() || isDirectory) }
+                val last=history().mapNotNull { it.name.substringBefore('-').toLongOrNull() }.maxOrNull() ?: 0L
+                val order=maxOf(System.currentTimeMillis(),last+1)
+                check(previous.renameTo(File(older,"${order.toString().padStart(20,'0')}-${java.util.UUID.randomUUID()}")))
+            }
+            pruneHistory()
             true
         } finally { removeChild(pending) }
     }
-    fun export(log: File, output: File): File? = synchronized(guard) {
+    fun export(log: File, output: File, includeHistory: Boolean = false,
+        requestNs: Long = System.nanoTime()): File? = synchronized(guard) {
+        val acquiredNs=System.nanoTime()
         if (!enabled) return@synchronized null
         recoverPrevious()
         val current = File(root, "current")
-        if (!File(current, "manifest.json").isFile) return@synchronized null
-        val files = current.listFiles()?.filter { it.isFile }?.sortedBy { it.name } ?: return@synchronized null
-        val total = files.sumOf { it.length() } + log.length()
+        if (!File(current, "manifest.json").isFile || !File(current,"fused.jpg").isFile) return@synchronized null
+        val groups=listOf(current) + if(includeHistory)history().take(GROUP_LIMIT-1) else emptyList()
+        val selected=groups.flatMapIndexed { index, folder -> files(folder).map { file ->
+            file to if(index==0) "capture/${file.name}" else "captures/$index-${groupId(folder)}/${file.name}"
+        } }
+        val total = selected.sumOf { it.first.length() } + log.length()
         val destination = output.parentFile ?: return@synchronized null
         if (total > LIMIT + 16L * 1024 * 1024 || destination.usableSpace < total + 32L * 1024 * 1024)
             return@synchronized null
@@ -67,9 +115,16 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
         try {
             ZipOutputStream(temporary.outputStream().buffered()).use { zip ->
                 zip.setLevel(0) // JPEG is already compressed; ZIP still supplies entry CRCs.
-                (listOf(log to log.name) + files.map { it to "capture/${it.name}" }).forEach { (file, name) ->
-                    zip.putNextEntry(ZipEntry(name)); file.inputStream().use { it.copyTo(zip) }; zip.closeEntry()
+                (listOf(log to log.name) + selected).forEach { (file, name) ->
+                    zip.putNextEntry(ZipEntry(name))
+                    val copied=file.inputStream().use { it.copyTo(zip) }
+                    check(copied==file.length()) { "Incomplete diagnostic copy" }
+                    zip.closeEntry()
                 }
+                val payloadEndNs=System.nanoTime()
+                val ids=groups.joinToString(",") { "\"${groupId(it)}\"" }
+                val footer="{\"schema\":1,\"clock\":\"System.nanoTime\",\"groups\":[$ids],\"groupCount\":${groups.size},\"payloadBytes\":$total,\"snapshotLockWaitMs\":${(acquiredNs-requestNs).coerceAtLeast(0)/1e6},\"zipPayloadMs\":${(payloadEndNs-acquiredNs).coerceAtLeast(0)/1e6},\"scope\":\"before footer and ZIP close\"}"
+                zip.putNextEntry(ZipEntry("export-timing.json"));zip.write(footer.toByteArray(Charsets.UTF_8));zip.closeEntry()
             }
             check(temporary.renameTo(output))
             output

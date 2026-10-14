@@ -1,5 +1,8 @@
 #include "local_registration.h"
 #include "fusion_math.h"
+#include "local_support.h"
+#include <chrono>
+#include <android/log.h>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video.hpp>
 #include <algorithm>
@@ -177,7 +180,27 @@ bool LocalRegistration::offset(double x, double y, cv::Point2d& delta, float& co
     return confidence > 0;
 }
 
-LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped, bool highlight, bool singlePatch, const cv::Mat& referenceValidity) {
+ReferencePreparation prepareReference(const cv::Mat& reference) {
+    CV_Assert(reference.type()==CV_8UC1 && !reference.empty());
+    ReferencePreparation cache;cache.identity=reference.data;cache.domain=reference.size();
+    cache.highPass=highPass(reference);
+    cv::GaussianBlur(reference,cache.align,cv::Size(0,0),1.2);
+    cv::GaussianBlur(reference,cache.smooth,cv::Size(0,0),.6);
+    cache.noiseSigma=float(estimateNoiseSigma(reference));
+    const int nx=(reference.cols-1+255)/256+1,ny=(reference.rows-1+255)/256+1;
+    cache.noise.create(ny,nx,CV_64F);
+    #pragma omp parallel for schedule(dynamic)
+    for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx) {
+        const int cx=std::min(gx*256,reference.cols-1),cy=std::min(gy*256,reference.rows-1);
+        const cv::Rect roi(std::max(0,cx-160),std::max(0,cy-160),
+            std::min(reference.cols,cx+161)-std::max(0,cx-160),std::min(reference.rows,cy+161)-std::max(0,cy-160));
+        cache.noise.at<double>(gy,gx)=estimateNoiseSigma(reference(roi));
+    }
+    return cache;
+}
+
+LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped, bool highlight, bool singlePatch, const cv::Mat& referenceValidity, const ReferencePreparation* prepared) {
+    const auto started=std::chrono::steady_clock::now();
     CV_Assert(reference.type() == CV_8UC1 && reference.size() == warped.size() && warped.type() == CV_8UC1);
     CV_Assert(referenceValidity.empty() || (referenceValidity.type()==CV_8U && referenceValidity.size()==reference.size()));
     LocalRegistration model;
@@ -187,15 +210,40 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     const int ny = singlePatch ? 1 : (reference.rows - 1 + model.spacing - 1) / model.spacing + 1;
     model.field = cv::Mat::zeros(ny, nx, CV_32FC3);
     model.detail = cv::Mat::zeros(ny,nx,CV_8U);
-    const cv::Mat refHP = highPass(reference), srcHP = highPass(warped);
+    const bool cached=!singlePatch && prepared && prepared->identity==reference.data && prepared->domain==reference.size() && prepared->noise.size()==model.field.size();
+    const cv::Mat refHP = cached ? prepared->highPass : highPass(reference), srcHP = highPass(warped);
     cv::Mat refAlign,srcAlign;
-    cv::GaussianBlur(reference,refAlign,cv::Size(0,0),1.2);
+    if(cached)refAlign=prepared->align;else cv::GaussianBlur(reference,refAlign,cv::Size(0,0),1.2);
     cv::GaussianBlur(warped,srcAlign,cv::Size(0,0),1.2);
     const double noiseGain=[] {
         cv::Mat impulse=cv::Mat::zeros(25,25,CV_32F);impulse.at<float>(12,12)=1;
         const auto band=highPass(impulse);return cv::sum(band.mul(band))[0];
     }();
-    model.noiseSigma=float(estimateNoiseSigma(reference));
+    model.noiseSigma=cached ? prepared->noiseSigma : float(estimateNoiseSigma(reference));
+    const auto preparedAt=std::chrono::steady_clock::now();
+    std::vector<cv::Vec4f> fittedNodes(nx*ny,cv::Vec4f(0,0,-1,0));
+    std::string fitBackend="CPU fitting";
+    if(!singlePatch && gpuFittingAvailable(reference.total(),highlight)) {
+        std::vector<cv::Rect> patches;std::vector<int> indices;
+        for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx) {
+            const int cx=std::min(gx*model.spacing,reference.cols-1),cy=std::min(gy*model.spacing,reference.rows-1);
+            const cv::Rect roi(std::max(0,cx-160),std::max(0,cy-160),
+                std::min(reference.cols,cx+161)-std::max(0,cx-160),std::min(reference.rows,cy+161)-std::max(0,cy-160));
+            if(roi.width<32 || roi.height<32)continue;
+            const cv::Rect interior(roi.x+10,roi.y+10,roi.width-20,roi.height-20);
+            cv::Scalar mean,a,b;cv::meanStdDev(refHP(interior),mean,a);cv::meanStdDev(srcHP(interior),mean,b);
+            // This only selects GPU work. Skipped/failed proposals still use the CPU path below.
+            if(a[0]<2 || b[0]<2 || cv::countNonZero(localFitMask(warped,geometryValidity,roi))<256)continue;
+            patches.push_back(roi);indices.push_back(gy*nx+gx);
+        }
+        std::vector<cv::Vec4f> proposals;
+        if(gpuPatchFits(refAlign,srcAlign,warped,geometryValidity,patches,highlight,proposals,fitBackend))
+            for(size_t i=0;i<indices.size();++i)fittedNodes[indices[i]]=proposals[i];
+    }
+    int gpuFitCount=0;
+    for(const auto& fit:fittedNodes)if(fit[3]==1)++gpuFitCount;
+    model.gpuFitProposals=gpuFitCount;
+    __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","local fit GPU proposals=%d nodes=%d reason=%s",gpuFitCount,nx*ny,fitBackend.c_str());
     #pragma omp parallel for schedule(dynamic)
     for (int gy = 0; gy < ny; ++gy) for (int gx = 0; gx < nx; ++gx) {
         const int cx = singlePatch ? reference.cols/2 : std::min(gx * model.spacing, reference.cols - 1);
@@ -205,7 +253,8 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
             std::min(reference.rows, cy + 161) - std::max(0, cy - 160));
         if (roi.width < 32 || roi.height < 32) continue;
         const cv::Mat ref=refAlign(roi),src=srcAlign(roi);
-        const double refNoise=estimateNoiseSigma(reference(roi)),srcNoise=estimateNoiseSigma(warped(roi));
+        const double refNoise=cached ? prepared->noise.at<double>(gy,gx) : estimateNoiseSigma(reference(roi));
+        const double srcNoise=estimateNoiseSigma(warped(roi));
         const cv::Rect interior(roi.x+10,roi.y+10,roi.width-20,roi.height-20);
         cv::Scalar mean,sd,srcSd;
         cv::meanStdDev(refHP(interior),mean,sd);cv::meanStdDev(srcHP(interior),mean,srcSd);
@@ -234,10 +283,13 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
         }
         try {
             cv::Mat transform = cv::Mat::eye(2, 3, CV_32F);
-            cv::Mat mask = (warped(roi) > 8) & (warped(roi) < 247);
-            if(!geometryValidity.empty())mask &= geometryValidity(roi);
+            cv::Mat mask = localFitMask(warped,geometryValidity,roi);
             if(cv::countNonZero(mask)<256)continue;
-            const double cc = cv::findTransformECC(ref, src, transform, cv::MOTION_TRANSLATION,
+            const auto proposal=fittedNodes[gy*nx+gx];
+            double cc;
+            if(proposal[3]>=1) {
+                transform.at<float>(0,2)=proposal[0];transform.at<float>(1,2)=proposal[1];cc=proposal[2];
+            } else cc=cv::findTransformECC(ref, src, transform, cv::MOTION_TRANSLATION,
                 cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, .0001), mask, 3);
             const float dx = transform.at<float>(0, 2), dy = transform.at<float>(1, 2);
             if (!std::isfinite(cc) || cc < .65 || std::hypot(dx, dy) > 8) continue;
@@ -270,24 +322,37 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     model.detailFraction = float(detailNodes) / (nx * ny);
     model.denoiseOnlyFraction=float(denoiseOnlyNodes)/(nx*ny);
     if(singlePatch) { model.supportedFraction = model.field.at<cv::Vec3f>(0,0)[2]>0 ? 1.f : 0.f; return model; }
-    model.gate = cv::Mat::zeros(reference.size(), CV_8U);
+    const auto fitted=std::chrono::steady_clock::now();
+    if(detailNodes==0 && denoiseOnlyNodes==0) {
+        model.gate=cv::Mat::zeros(reference.size(),CV_8U);
+        __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf",
+            "local support backend=CPU zero-map size=%dx%d prepareMs=%.3f fitVerifyMs=%.3f reason=no qualified local nodes",
+            reference.cols,reference.rows,
+            std::chrono::duration<double,std::milli>(preparedAt-started).count(),
+            std::chrono::duration<double,std::milli>(fitted-preparedAt).count());
+        return model;
+    }
     cv::Mat refSmooth, srcSmooth;
-    cv::GaussianBlur(reference, refSmooth, cv::Size(0, 0), .6);
+    if(cached)refSmooth=prepared->smooth;else cv::GaussianBlur(reference, refSmooth, cv::Size(0, 0), .6);
     cv::GaussianBlur(warped, srcSmooth, cv::Size(0, 0), .6);
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < reference.rows; ++y) {
-        auto* row = model.gate.ptr<uchar>(y);
-        for (int x = 0; x < reference.cols; ++x) {
-            cv::Point2d d; float confidence;
-            if (!model.offset(x, y, d, confidence)) continue;
-            const float observed = graySample(srcSmooth, x + d.x, y + d.y);
-            // Same-exposure photometric check protects occlusions and fine strokes.
-            // Short input has already been projected to reference brightness;
-            // residual gating still rejects occlusions and response mismatches.
-            const bool clippedTarget=highlight && !referenceValidity.empty() && !referenceValidity.at<uchar>(y,x);
-            if (observed >= 0 && (clippedTarget || std::abs(observed - refSmooth.at<uchar>(y, x)) <= (highlight ? 18 : 14))) row[x] = 255;
+    std::string backendReason=highlight ? "HDR patch support remains CPU" : "";
+    const bool gateReady=!highlight && gpuLocalSupport(refSmooth,srcSmooth,model,model.gate,backendReason);
+    model.gpuSupportMap=gateReady && backendReason=="validated packed-byte support kernel";
+    if(!gateReady) {
+        model.gate.create(reference.size(),CV_8U);
+        #pragma omp parallel for schedule(static)
+        for (int y=0;y<reference.rows;++y) {
+            auto* row=model.gate.ptr<uchar>(y);
+            for(int x=0;x<reference.cols;++x)
+                row[x]=supportPixel(refSmooth,srcSmooth,model,x,y,highlight,referenceValidity);
         }
     }
+    const auto finished=std::chrono::steady_clock::now();
+    auto ms=[](auto a,auto b){return std::chrono::duration<double,std::milli>(b-a).count();};
+    __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf",
+        "local support backend=%s size=%dx%d prepareMs=%.3f fitVerifyMs=%.3f gateMs=%.3f reason=%s",
+        gateReady && backendReason=="validated packed-byte support kernel" ? "Vulkan" : "CPU",reference.cols,reference.rows,ms(started,preparedAt),
+        ms(preparedAt,fitted),ms(fitted,finished),backendReason.c_str());
     model.supportedFraction = float(cv::countNonZero(model.gate)) / model.gate.total();
     return model;
 }

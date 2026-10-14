@@ -16,10 +16,12 @@ data class ReconstructionDecision(
 
     companion object {
         fun decode(packet: LongArray): ReconstructionDecision {
-            require(packet.size == 42 && packet[25] == 1L) { "Unsupported fusion packet schema" }
+            require(packet.size in listOf(42,44,50) && packet[25] == 1L) { "Unsupported fusion packet schema" }
             fun fraction(index: Int): Double = Double.fromBits(packet[index]).also { require(it.isFinite() && it in 0.0..1.0) }
             fun count(index: Int): Int = packet[index].also { require(it in 0..Int.MAX_VALUE.toLong()) }.toInt()
             fun error(index: Int): Double = Double.fromBits(packet[index]).also { require(it.isFinite() && it >= 0) }
+            if(packet.size>=44) { require(packet[42]==1L);fraction(43) }
+            FusionPerformance.decode(packet)
             require(packet[26] in 0..1 && packet[31] in 0..1 && packet[27] in 0..255)
             val result = ReconstructionDecision(packet[26] == 1L, count(27), count(28), count(29),
                 fraction(30), packet[31] == 1L, fraction(32), fraction(33), count(34), fraction(35), count(36), fraction(37), fraction(38), count(39), error(40), error(41))

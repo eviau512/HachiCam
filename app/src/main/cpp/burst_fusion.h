@@ -5,9 +5,14 @@
 #include <opencv2/photo.hpp>
 #include <vector>
 #include <functional>
+#include <chrono>
 
 class BurstFusionEngine {
 public:
+    struct Performance {
+        double totalMs=0,globalRegistrationMs=0,localRegistrationMs=0;
+        int gpuSupportMaps=0,gpuFitProposals=0;
+    };
     struct Report {
         int anchors = 1, highlights = 0, scale = 1, reference = 0;
         cv::Rect crop;
@@ -15,12 +20,13 @@ public:
         cv::Matx33d firstToReference = cv::Matx33d::eye();
         bool geometryKnown = true;
         double multiFrameFraction = 0, meanContributors = 1;
-        double recoveredFraction = 0, clippedFraction = 0;
+        double recoveredFraction = 0, clippedFraction = 0, postClippedFraction = 0;
         bool srRequested=false,centrePhases=false;
         int srDenied=32,regionTiles=0,qualifiedTiles=0;
         double meanSupport=0,regionFraction=0,reconstructedFraction=0;
         int fittedTiles=0;
         double initialFitError=0,finalFitError=0;
+        Performance performance;
     };
     // Experimental CPU JPEG fusion. Select a base reference, validate global
     // and sparse local registration, and sample accepted originals directly.

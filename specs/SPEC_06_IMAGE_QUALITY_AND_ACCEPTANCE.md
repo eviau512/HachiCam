@@ -99,7 +99,7 @@ deferred functionality. Status refers to code inspection, not successful testing
 | PHOTO-05 | P1 | Photos, colored art and document white: natural-tone output must not silently apply paper whitening or a forced cinematic curve | Separate future profiles absent; SPEC_02/04 |
 | LIFE-01 | P0 | Rapid A/B filter changes, rotate, navigate and delete during work: only the latest valid page generation publishes; no deleted-page resurrection or native use-after-free | Burst deletion protection partial; full edit generation/ownership incomplete; SPEC_00/04 |
 | LIFE-02 | P0 | Encoding/full-disk/commit failure: preserve source and last valid result; no READY pointing at nonexistent output; pending/failed export is explicit | Capture transactions partial; crop/review writes incomplete; SPEC_01/04 |
-| LIFE-03 | P0 | At admission limit or memory pressure: reject/degrade visibly and release resources; future restart recovery must resume exactly one durable job without losing page recipe | Three-job burst bound present; byte budget and durable recovery absent; SPEC_00/01 |
+| LIFE-03 | P0 | At admission limit or memory pressure: reject/degrade visibly and release resources; recover committed pages after restart and fail interrupted captures explicitly; automatic pending replay requires a separate exactly-once contract | rc10 shared estimates/three-job admission; rc13 committed metadata/checkpoint pins; automatic replay and device/RSS acceptance pending; SPEC_00/01 |
 | UI-01 | P1 | Displayed modes and achieved output agree; no unsupported Photo/dewarp/bilevel/GPU/50 MP guarantee; filter selection does not change crop | Three filters implemented; copy/workflow verification pending; SPEC_05 |
 | UI-02 | P1 | Uncertain crop or failed enhancement: visible manual correction, source comparison and last-valid image; never silent content deletion | Controls partial; transactional comparison workflow incomplete; SPEC_05 |
 | UI-03 | P1 | Steady, focus acknowledgment, requested HDR and processing progress are distinguishable; no one green state implies all quality criteria passed | Steadiness separation implemented; full quality guidance absent; SPEC_05 |
@@ -369,8 +369,55 @@ GPU backend acceptance (2026-10-15; required / not implemented):
   sustained speed, power efficiency or broad device support.
 
 The [GPU assessment](reports/GPU_ROADMAP_2026-10-15.zh-CN.md) records current CPU
-execution and incomplete phone checkpoint timings. None of GPU-01..04 has been
-executed for a product GPU backend; this revision does not enable one.
+execution and incomplete phone checkpoint timings at its earlier baseline.
+rc13 connects two debug kernels and executes host primitive/failure/full-image
+regressions. GPU-03/04 phone/end-to-end/sustained acceptance remains pending;
+release remains CPU and a warm calibration does not replace those criteria.
+
+First support-map implementation acceptance (specified before implementation):
+
+- GPU-GATE-01: compare the actual shader and CPU gate for non-multiple dimensions,
+  padded/ROI row strides, fractional offsets, unsupported nodes, 1.5-pixel motion
+  discontinuities, near-boundary samples and residuals around 14. Ambiguous pixels
+  must be CPU-resolved; resolved byte gates must match on these frozen cases.
+  A device startup self-test does not replace large actual-burst/mobile timing.
+- GPU-GATE-02: no Vulkan loader, software device, initialization/allocation/bind/
+  map/submission/wait failures yield explicit CPU fallback. Test the disabled
+  build and actual hardware path separately; CPU regressions do not prove shader
+  execution. Timeout quarantine stays within <=64 MiB and rejects new GPU work.
+- PERF-01: timing belongs to its capture/export identity and never a global last
+  job. Include failed/fallback stages and distinguish final page readiness,
+  retained diagnostic readiness, log command time and ZIP work. Publish paired
+  metadata and actual final result together; earlier input-only or cached results
+  cannot claim the current final-image diagnostic is ready.
+- DIAG-04: four consecutive completed groups export distinct matching inputs,
+  manifests, contexts and final images. Exercise byte/count eviction, legacy
+  latest-only archive migration, failed replacement/export, disabled release and
+  concurrent snapshot/export. Verify the latest remains valid on failure and
+  the combined steady-state retained data stays <=192 MiB; ZIP timings and IDs
+  must describe the actual exported selection. Worker-idle waiting includes
+  snapshot completion, is cancellable/bounded and does not export an older group
+  as a newer failed or still-processing capture.
+- HDR-DIAG-01: a single changed pixel with no clipped baseline cannot receive a
+  partial-recovery label; weak, zero/unknown and substantial changes remain
+  distinct. Versioned appended post-HDR fractions validate finite [0,1] values;
+  legacy packets remain supported with unknown post clipping. Check normal and
+  streaming native byte-grid clipping against the returned scale=1 image,
+  including all-clipped/no-usable-short evidence. This diagnostic is not a new
+  tone model or an HDR image-quality pass.
+- GPU-FIT-01: actual shader known shifts, non-square/edge patches, masks, flat
+  and singular/periodic/corrupted cases must expose usable/failed proposals and
+  CPU fallback separately. Compare <=0.05 px and <=0.002 correlation only where
+  both optimizers are usable; no failed GPU proposal may silently remove a valid
+  CPU fit. Repeat current full physical detail gates and reconstruction regression,
+  and benchmark complete batches rather than dispatch alone.
+- LIFE-RECOVERY-01: restore page order and committed recipe; truncated metadata
+  uses the previous validated checkpoint, traversal/oversized/nonfinite metadata
+  is rejected. Missing/corrupt masters become FAILED; incomplete captures never
+  stay PROCESSING. Missing derivatives retain the readable master. Concurrent
+  superseded persistence/edit/delete retains the durable files until commit;
+  failed writes warn visibly and never delete the previous checkpoint's image.
+  Process-death device acceptance remains separate from file-store unit tests.
 
 This revision establishes a quality backlog and acceptance contract. It does not
 implement the missing features, add proprietary algorithms, benchmark competitor

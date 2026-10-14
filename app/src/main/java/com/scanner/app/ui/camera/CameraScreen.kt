@@ -330,6 +330,18 @@ fun CameraScreen(
                                     ?.getOutputSizes(android.graphics.ImageFormat.JPEG)?.toList().orEmpty() else emptyList()
                             val summary = "endpoint=$id intrinsicRatio=$ratio compatible=$compatible ordinaryJPEG=$ordinary highJPEG=$slower maximumModeJPEG=$maximum nativeHighPixels=$nativeHigh caps=${c2.getCameraCharacteristic(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contentToString()} pixelArray=${c2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)} boostRange=${c2.getCameraCharacteristic(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE)} afModes=${c2.getCameraCharacteristic(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.contentToString()}"
                             android.util.Log.d("HachiCam-Camera", summary); capabilityLines.add(summary)
+                            val maximumMap=if(android.os.Build.VERSION.SDK_INT>=31)
+                                c2.getCameraCharacteristic(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION) else null
+                            val rawFormats=listOf("RAW_SENSOR" to android.graphics.ImageFormat.RAW_SENSOR,
+                                "RAW10" to android.graphics.ImageFormat.RAW10,"RAW12" to android.graphics.ImageFormat.RAW12)
+                            val rawSummary="endpoint=$id RAW feasibility only; maxRawOutputs=${c2.getCameraCharacteristic(CameraCharacteristics.REQUEST_MAX_NUM_OUTPUT_RAW)}; " +
+                                rawFormats.joinToString("; ") { (name,format) ->
+                                    val ordinaryRaw=runCatching { configuration?.getOutputSizes(format)?.toList()?.toString() }.getOrNull() ?: "unknown/unavailable"
+                                    val highRaw=runCatching { configuration?.getHighResolutionOutputSizes(format)?.toList()?.toString() }.getOrNull() ?: "unknown/unavailable"
+                                    val maximumRaw=runCatching { maximumMap?.getOutputSizes(format)?.toList()?.toString() }.getOrNull() ?: "unknown/unavailable"
+                                    "$name ordinary=$ordinaryRaw high=$highRaw maximumMode=$maximumRaw"
+                                }
+                            capabilityLines.add(rawSummary);android.util.Log.d("HachiCam-Camera",rawSummary)
                         }
                         CameraChoicePolicy.Endpoint(id, ratio, compatible, nativeHigh)
                     }

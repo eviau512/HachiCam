@@ -2,6 +2,7 @@ package com.scanner.app.engine
 
 import org.opencv.core.Mat
 import com.scanner.app.data.camera.ReconstructionDecision
+import com.scanner.app.data.camera.FusionPerformance
 
 class NativeBurstFusion {
     data class Report(val anchors: Int = 1, val highlights: Int = 0, val scale: Int = 1,
@@ -10,7 +11,8 @@ class NativeBurstFusion {
         val firstToReference: DoubleArray = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
         val geometryKnown: Boolean = true, val multiFrameFraction: Double = 0.0, val meanContributors: Double = 1.0,
         val recoveredFraction: Double = 0.0, val clippedFraction: Double = 0.0,
-        val reconstruction: ReconstructionDecision = ReconstructionDecision())
+        val reconstruction: ReconstructionDecision = ReconstructionDecision(), val postClippedFraction: Double? = null,
+        val performance:FusionPerformance?=null)
     var lastReport = Report()
         private set
 
@@ -19,7 +21,7 @@ class NativeBurstFusion {
     }
 
     /**
-     * CPU JPEG fusion with explicit exposure tiers and conditional 2x phase reconstruction.
+     * JPEG fusion with CPU decisions and calibrated experimental debug GPU primitives.
      * Tiers: 0 = reference exposure, 1/2 = shorter exposures; products are ISO * ns.
      * [lastReport] describes accepted plates and actual output scale, including degradation.
      */
@@ -52,7 +54,8 @@ class NativeBurstFusion {
         lastReport = Report(result[1].toInt(), result[2].toInt(), result[3].toInt(), result[4].toInt(),
             result[5].toInt(), result[6].toInt(), result[7].toInt(), result[8].toInt(), result[9].toInt(), result[10].toInt(),
             DoubleArray(9) { Double.fromBits(result[11 + it]) }, result[20] == 1L,
-            Double.fromBits(result[21]), Double.fromBits(result[22]), Double.fromBits(result[23]), Double.fromBits(result[24]), decision)
+            Double.fromBits(result[21]), Double.fromBits(result[22]), Double.fromBits(result[23]), Double.fromBits(result[24]), decision,
+            if(result.size>=44)Double.fromBits(result[43]) else null,FusionPerformance.decode(result))
         return Mat(result[0])
     }
 

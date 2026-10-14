@@ -14,7 +14,7 @@ class CaptureJournal(private val capacity: Int = 6) {
     @Synchronized fun record(id: String, line: String) {
         val group = groups[id] ?: return
         group.lines.addLast(line.take(512))
-        while (group.lines.size > 32) group.lines.removeFirst()
+        while (group.lines.size > 64) group.lines.removeFirst()
     }
     @Synchronized fun snapshot(id: String): String = groups[id]?.let {
         "CaptureId=$id\n${it.context}\n${it.lines.joinToString("\n")}"

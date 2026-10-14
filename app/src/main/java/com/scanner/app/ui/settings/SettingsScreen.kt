@@ -76,6 +76,7 @@ fun SettingsScreen(
     var isHdrEnabled by remember { mutableStateOf(prefs.getBoolean(CapturePolicy.HDR_KEY, true)) }
     val coroutineScope = rememberCoroutineScope()
     var isExportingLogs by remember { mutableStateOf(false) }
+    var exportStage by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -281,7 +282,9 @@ fun SettingsScreen(
                         },
                         supportingContent = {
                             Text(
-                                text = stringResource(if (BuildConfig.SENSITIVE_DIAGNOSTICS) R.string.export_capture_diagnostics_summary else R.string.export_logs_summary),
+                                text = stringResource(if(isExportingLogs && exportStage=="waiting") R.string.diagnostics_waiting
+                                    else if(isExportingLogs) R.string.diagnostics_preparing
+                                    else if (BuildConfig.SENSITIVE_DIAGNOSTICS) R.string.export_capture_diagnostics_summary else R.string.export_logs_summary),
                                 style = MaterialTheme.typography.bodySmall
                             )
                         },
@@ -311,9 +314,10 @@ fun SettingsScreen(
                             coroutineScope.launch {
                                 isExportingLogs = true
                                 try {
-                                    LogCollector.collectAndShareLogs(context)
+                                    LogCollector.collectAndShareLogs(context) { exportStage=it }
                                 } finally {
                                     isExportingLogs = false
+                                    exportStage=""
                                 }
                             }
                         }

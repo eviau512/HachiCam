@@ -129,7 +129,25 @@ suppression, manual override and a visible pending trigger. Preview steadiness
 alone is insufficient. Book, card and other specialized workflows are research
 candidates until separately specified and verified.
 
-### 4.1 Settings character banner
+### 4.1 Diagnostic export and page recovery feedback (rc13)
+
+Test diagnostic export waits off the UI thread for admitted capture/processing
+and completed final-image snapshots, with a bounded/cancellable wait. Settings
+shows separate waiting-for-photos and preparing-archive states; no partial
+current result is presented as ready. Export at most four completed matching
+groups under the SPEC_00 combined byte bound, keeping the legacy latest group's
+`capture/` layout. Earlier groups have separate identities/manifests/contexts and
+final images. A failed newest attempt produces an explicit missing-current warning.
+Each export has a unique identity in its log header and filenames, including
+recreated/concurrent settings callers; a second export may not overwrite the
+first export's context merely because both start in the same wall-clock second.
+Release remains metadata-only and never retains these raw diagnostic photo groups.
+
+Page-checkpoint persistence/recovery failures give a concise visible warning
+while retaining the previous valid state; do not promise the latest unsaved edit
+will survive restart. Completed-page recovery does not resume an interrupted burst.
+
+### 4.2 Settings character banner
 
 **Implemented; artwork inspected and both debug flavors compiled/resources
 checked. Physical-device layout acceptance pending:** the Hachimi edition settings list includes
