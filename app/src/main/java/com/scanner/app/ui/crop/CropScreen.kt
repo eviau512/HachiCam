@@ -5,9 +5,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -38,13 +35,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.scanner.app.R
+import com.scanner.app.data.repository.PageRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.scanner.app.domain.model.AspectRatioPreset
 import com.scanner.app.domain.model.ImageFilter
 import com.scanner.app.ui.components.AspectRatioBanner
@@ -76,12 +76,15 @@ fun CropScreen(
     val customRatioValue by viewModel.customRatioValue.collectAsState()
     val imagePath by viewModel.imagePath.collectAsState()
     val imageVersion by viewModel.imageVersion.collectAsState()
+    val recipeRotation by viewModel.rotation.collectAsState()
+    val editError by viewModel.error.collectAsState()
+    val context = LocalContext.current
+    LaunchedEffect(editError) {
+        editError?.let { android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show(); viewModel.clearError() }
+    }
     val isProcessing by viewModel.isProcessing.collectAsState()
     var isSaving by remember { mutableStateOf(false) }
 
-    val coroutineScope = rememberCoroutineScope()
-    val rotationAngle = remember { Animatable(0f) }
-    var isRotating by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -104,25 +107,8 @@ fun CropScreen(
                 },
                 actions = {
                     IconButton(
-                        enabled = !isRotating && !isSaving && !isProcessing,
-                        onClick = {
-                            isRotating = true
-                            coroutineScope.launch {
-                                val animJob = launch {
-                                    rotationAngle.animateTo(
-                                        targetValue = 90f,
-                                        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing)
-                                    )
-                                }
-                                viewModel.rotateImage {
-                                    coroutineScope.launch {
-                                        animJob.join()
-                                        rotationAngle.snapTo(0f)
-                                        isRotating = false
-                                    }
-                                }
-                            }
-                        }
+                        enabled = !isSaving && !isProcessing,
+                        onClick = { viewModel.rotateImage() }
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
@@ -131,7 +117,7 @@ fun CropScreen(
                         )
                     }
                     IconButton(
-                        enabled = !isRotating && !isSaving && !isProcessing,
+                        enabled = !isSaving && !isProcessing,
                         onClick = { viewModel.resetToFullImage() }
                     ) {
                         Icon(
@@ -141,7 +127,7 @@ fun CropScreen(
                         )
                     }
                     IconButton(
-                        enabled = !isRotating && !isSaving && !isProcessing,
+                        enabled = !isSaving && !isProcessing,
                         onClick = { viewModel.reDetect() }
                     ) {
                         Icon(
@@ -218,12 +204,12 @@ fun CropScreen(
 
                         // Confirm Action Button
                         Button(
-                            enabled = !isSaving && !isRotating && !isProcessing,
+                            enabled = !isSaving && !isProcessing,
                             onClick = {
                                 isSaving = true
-                                viewModel.confirmCrop {
+                                viewModel.confirmCrop { saved ->
                                     isSaving = false
-                                    onConfirm()
+                                    if (saved) onConfirm()
                                 }
                             },
                             shape = RoundedCornerShape(16.dp),
@@ -291,15 +277,20 @@ fun CropScreen(
                     }
                 }
             } else {
-                val (origW, origH) = remember(imagePath, imageVersion) {
-                    imagePath?.let { getUprightDimensions(it) } ?: Pair(0f, 0f)
+                val (origW, origH) = remember(imagePath, imageVersion, recipeRotation) {
+                    val size = imagePath?.let { getUprightDimensions(it) } ?: Pair(0f, 0f)
+                    if (recipeRotation % 180 == 0) size else size.second to size.first
                 }
 
-                val bitmap = remember(imagePath, imageVersion) {
-                    imagePath?.let { path ->
-                        loadUprightBitmap(path)
+                val bitmapState = produceState<Bitmap?>(null, imagePath, imageVersion, recipeRotation) {
+                    value = null
+                    value = withContext(Dispatchers.IO) {
+                        runCatching { PageRepository.readMaster(pageId)?.use { lease ->
+                            loadUprightBitmap(lease.pages.single().originalImagePath, 2048, recipeRotation)
+                        } }.getOrNull()
                     }
                 }
+                val bitmap = bitmapState.value
 
                 LaunchedEffect(bitmap, origW, origH) {
                     if (bitmap != null) {
@@ -307,29 +298,9 @@ fun CropScreen(
                     }
                 }
 
-                // Continuous rotation scale compensation:
-                // When rotating 90 deg, fit the rotated aspect ratio without clipping or layout jumping
-                val targetScale = remember(bitmap, containerW, containerH) {
-                    if (bitmap != null && bitmap.width > 0 && bitmap.height > 0 && containerW > 0 && containerH > 0) {
-                        val bw = bitmap.width.toFloat()
-                        val bh = bitmap.height.toFloat()
-                        val sOrig = kotlin.math.min(containerW / bw, containerH / bh)
-                        val sRot = kotlin.math.min(containerW / bh, containerH / bw)
-                        if (sOrig > 0f) sRot / sOrig else 1.0f
-                    } else 1.0f
-                }
-
-                val rotProgress = (rotationAngle.value / 90f).coerceIn(0f, 1f)
-                val dynamicScale = 1.0f + (targetScale - 1.0f) * rotProgress
-
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = dynamicScale
-                            scaleY = dynamicScale
-                            rotationZ = rotationAngle.value
-                        }
                 ) {
                     QuadCropView(
                         bitmap = bitmap,
@@ -481,7 +452,7 @@ private fun getUprightDimensions(path: String): Pair<Float, Float> {
     }
 }
 
-private fun loadUprightBitmap(path: String, maxDimension: Int = 4096): Bitmap? {
+private fun loadUprightBitmap(path: String, maxDimension: Int = 2048, clockwise: Int = 0): Bitmap? {
     val f = File(path)
     if (!f.exists()) return null
     val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -511,8 +482,10 @@ private fun loadUprightBitmap(path: String, maxDimension: Int = 4096): Bitmap? {
             ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
             ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
             ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-            else -> return bmp
+            else -> Unit
         }
+        matrix.postRotate(clockwise.toFloat())
+        if (matrix.isIdentity) return bmp
         val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
         if (rotated != bmp) {
             bmp.recycle()

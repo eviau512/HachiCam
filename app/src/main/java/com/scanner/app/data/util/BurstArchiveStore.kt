@@ -18,15 +18,17 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
         val current = File(root, "current"); val previous = File(root, "previous")
         if (!current.exists() && previous.isDirectory) check(previous.renameTo(current))
     }
-    fun replace(inputs: List<Pair<String, ByteArray>>, output: File, manifest: String): Boolean = synchronized(guard) {
+    fun replace(inputs: List<Pair<String, ByteArray>>, output: File, manifest: String, diagnostics: String = ""): Boolean = synchronized(guard) {
         if (!enabled) return@synchronized false
         require(inputs.isNotEmpty() && inputs.size <= 7)
         require(inputs.map { it.first }.distinct().size == inputs.size &&
             inputs.all { it.first.matches(Regex("[0-9]{2}-tier[0-2]\\.jpg")) })
         val metadata = manifest.toByteArray(Charsets.UTF_8)
+        val context = diagnostics.toByteArray(Charsets.UTF_8)
+        require(context.size <= 128 * 1024)
         require(metadata.size <= 128 * 1024 && output.isFile)
         val inputBytes = inputs.sumOf { it.second.size.toLong() }
-        val total = inputBytes + output.length() + metadata.size
+        val total = inputBytes + output.length() + metadata.size + context.size
         val parent = root.parentFile ?: return@synchronized false
         if (inputBytes > 96L * 1024 * 1024 || total > LIMIT ||
             parent.usableSpace < total * 3 + 64L * 1024 * 1024) return@synchronized false
@@ -40,6 +42,7 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
             check(pending.mkdir())
             inputs.forEach { (name, bytes) -> File(pending, name).writeBytes(bytes) }
             File(pending, "manifest.json").writeBytes(metadata)
+            if (context.isNotEmpty()) File(pending, "diagnostics.txt").writeBytes(context)
             output.copyTo(File(pending, "fused.jpg"))
             if (current.exists()) check(current.renameTo(previous))
             if (!pending.renameTo(current)) {

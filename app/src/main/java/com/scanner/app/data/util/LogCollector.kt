@@ -37,8 +37,9 @@ object LogCollector {
                     appendLine("Android: ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}")
                     appendLine("ABIs: ${Build.SUPPORTED_ABIS.joinToString()}")
                     appendLine("Root available: ${DiagnosticAccess.rootAvailable}")
-                    appendLine("--- Latest camera capabilities and burst metadata ---")
+                    appendLine("--- Live context; may describe a newer capture than the retained images ---")
                     appendLine(CameraDiagnostics.snapshot())
+                    appendLine("For the exported image set, use capture/manifest.json and capture/diagnostics.txt as its matching evidence.")
                     appendLine("--- App process log ---")
                     appendLine(DiagnosticAccess.command(listOf("logcat", "-d", "-v", "time", "--pid=${android.os.Process.myPid()}", "-t", "3000")))
                     if (DiagnosticAccess.rootAvailable) {

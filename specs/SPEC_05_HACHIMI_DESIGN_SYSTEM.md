@@ -101,8 +101,9 @@ review must expose exactly the same three choices. Paper does not promise
 bilevel output or restored hidden content.
 
 Users must be able to compare with the source and undo appearance changes.
-**Required / not fully implemented:** immutable source edits, stale-render
-rejection, full preview/export parity and a last-valid-image failure state.
+**Implemented in rc10:** immutable source edits, stale-render rejection and a
+last-valid-image failure state. Full appearance-preview/thumbnail parity remains
+required / incomplete; the original master and committed export are distinct images.
 Filtering must not silently change crop or paper ratio.
 
 Automatic book flattening and finger removal are unavailable until their

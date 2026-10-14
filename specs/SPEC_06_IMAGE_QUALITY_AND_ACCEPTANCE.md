@@ -151,31 +151,50 @@ rc9 follow-up ([contract](research/NIGHT_HDR_REVISION_2026-10-14.md)):
   Current rc9 logs explain the observed 36.76% versus 66.54% mean-support outcome
   but overload `phases2D` and omit a complete structured denial record. That
   record is required / not implemented; stable output size is not a quality gate.
-- ARCH-01 (P0, required / not implemented): crop/review rotations and four
+- ARCH-01 (P0, rc10 implemented; helper tests passed, device pending): crop/review rotations and four
   rotations followed by cancel/reopen preserve master checksum and consistent
   geometry. Latest recipe generation wins across filter/aspect/rotation/batch
   work; stale completions cannot replace result bytes or reset newer fields.
-- ARCH-02 (P0, required / incomplete): false encoder result, full disk, null
+- ARCH-02 (P0, rc10 implemented; transaction tests passed, Android storage cases pending): false encoder result, full disk, null
   destination/stream, deletion during render/export and a failed input page do
   not publish ordinary success. Preserve the previous valid rendering; reject
   export or explicitly report partial page counts and roll back unfinished items.
-- ARCH-03 (P1, required / not implemented): normal-size inputs with scale=2,
+- ARCH-03 (P1, rc10 experimental admission implemented; measured RSS pending): normal-size inputs with scale=2,
   multiple queued bursts plus review/export, and canceled work obey a shared byte
   budget. Record dimensions, stage RSS/heap and allocation ownership; no consumer
   failure may leave a silently accepting queue with permanently waiting pages.
-- ARCH-04 (P1, required / not implemented): start B while A completes/exports;
+- ARCH-04 (P1, rc10 implemented; journal tests passed, UI/device cases pending): start B while A completes/exports;
   bundle A has A's manifest and matching per-job evidence, never an unlabeled B
   snapshot. Late edge/line results cannot replace new-page/manual geometry.
-- ARCH-05 (P0, required / incomplete): malformed geometry/type/dimensions and
+- ARCH-05 (P0, rc10 guards/validation implemented; native geometry tests passed, JNI injection pending): malformed geometry/type/dimensions and
   recoverable OpenCV failures at every connected JNI entry point produce managed
-  failures and release buffers. Fusion-only guards do not pass the whole product.
-- ARCH-06 (P1, required / incomplete): failed/timed-out base focus/AE/AWB apply or
+  failures and release buffers. Native pointer corruption/process faults are not recoverable exceptions.
+- ARCH-06 (P1, rc10 acknowledgment/rebind implemented; device failure injection pending): failed/timed-out base focus/AE/AWB apply or
   cleanup has explicit session-bound state; reused capture cannot silently assume
   restoration. Test acknowledgment failure separately from actual ignored settings.
 
 Architecture scope and static evidence are recorded in the
 [2026-10-14 architecture audit](reports/ARCHITECTURE_AUDIT_2026-10-14.zh-CN.md).
-These are future acceptance contracts, not new implemented protections or device passes.
+The [rc10 refactor report](reports/RC10_ARCHITECTURE_REFACTOR_2026-10-14.zh-CN.md)
+records implemented protections and executed checks separately from device passes.
+
+Refactor-specific acceptance (specified before implementation, ongoing device checks):
+
+- Execute controlled old/new completion orders, filter+aspect composition,
+  failed encode/rename, delete/re-add, cancellation before publication and reader
+  retirement using the same production state/commit helpers as the app.
+- Verify four quarter-turns and inverse source/display mapping at pixel centres,
+  portrait/landscape aspect reciprocity, cancel and source hash preservation.
+- An export pins all selected committed files before creating destinations.
+  Missing/undecodable inputs and null/failed destination operations fail the whole
+  requested export; no silently skipped page. MediaStore items stay pending until
+  all content writes complete. Failure rolls back owned destinations; rollback
+  failure is explicitly an error with possible partial items, never normal success.
+  A zero-row delete counts as cleanup only if a follow-up query confirms absence;
+  a surviving row or uncheckable destination is reported as incomplete cleanup.
+- Later page deletion may finish an already leased export of its starting snapshot;
+  it may not remove files mid-read. No restart recovery or multi-URI atomicity is
+  claimed. Test transaction write/publish/rollback errors with a fake gateway.
 - PHOTO-02 / PHOTO-07 device evidence: the same-burst P002 reference/result pair
   supports preliminary texture/noise and stroke inspection at matched scale.
   It does not certify restored resolution, OCR accuracy, night quality or a

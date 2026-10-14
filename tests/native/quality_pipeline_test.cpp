@@ -4,6 +4,7 @@
 #include "edge_detector.h"
 #include <iostream>
 #include <stdexcept>
+#include <limits>
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void runBoundaryTests();
@@ -118,6 +119,20 @@ int runTests() {
     for (int x=180;x<480;x+=50) cv::line(blank,{x,180},{x,460},cv::Scalar(20,20,20),2);
     document = EdgeDetector().detectDocument(blank);
     check(document.found && cv::contourArea(document.corners) > 230000, "Inner table cannot replace the plausible page boundary");
+    // Production geometry rejects invalid evidence before allocation and leaves source intact.
+    cv::Mat geometrySource(2048,2048,CV_8UC3,cv::Scalar(90,100,110));
+    std::vector<cv::Point2f> validCorners{{0,0},{2047,0},{2047,2047},{0,2047}};
+    auto rejectsGeometry=[&](std::vector<cv::Point2f> points,float ratio) {
+        try { filters.correctPerspective(geometrySource,points,ratio); return false; }
+        catch(const std::invalid_argument&) { return true; }
+    };
+    auto crossed=validCorners;std::swap(crossed[1],crossed[2]);
+    check(rejectsGeometry(crossed,0),"Crossed crop rejected before warp");
+    auto nonfinite=validCorners;nonfinite[1].x=std::numeric_limits<float>::quiet_NaN();
+    check(rejectsGeometry(nonfinite,0),"Nonfinite crop rejected before warp");
+    check(rejectsGeometry(validCorners,20),"Expanded perspective output obeys pixel budget");
+    check(rejectsGeometry(validCorners,std::numeric_limits<float>::infinity()),"Nonfinite aspect rejected");
+    check(geometrySource.at<cv::Vec3b>(0,0)==cv::Vec3b(90,100,110),"Invalid edits preserve source pixels");
     runBoundaryTests();
     runNoiseTests();
     runHighlightTests();

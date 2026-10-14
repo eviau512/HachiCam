@@ -262,17 +262,23 @@ SPEC_00 build policy.
 4. Keep PROCESSING pages out of final crop/export. Mark READY only after a valid
    final or explicitly indicated fallback reference is saved. A failed fallback
    save yields FAILED.
+   The refactor installs the unique source JPEG and publishes READY under the
+   repository ownership lock, only while that capture still exists as PROCESSING.
+   Deleting a pending page invalidates installation; a committed READY source is
+   never replaced by a later fallback. Temporary encoding is outside that lock.
 5. Save completed captures under app private scans storage. Source frame data
    remains RAM-resident while pending. Continuing after screen navigation only
    holds while the process lives.
 
-**Required / not implemented:** direct/native pending buffers, a measured byte
+**Implemented in rc10, experimental:** a shared heavy-image permit, queued JPEG
+reservations and output-aware admission/degradation estimates. **Required / not
+implemented:** direct/native pending buffers, a measured byte
 budget and spill policy, durable pending manifests, page metadata persistence
 and restart recovery. The historical 96 MB and seven-day values are unvalidated
 design proposals. Three admitted jobs do not prove bounded memory across all
 review/crop tasks, and onStop alone cannot guarantee survival of process death.
 
-**Required / partly implemented:** cancellation-safe resource release,
+**Implemented in rc10; device failure cases pending:** cancellation-safe resource release,
 transactional source/derivative writes, active-file-aware cleanup, and last-valid
 image preservation. Export or session closure must not implicitly delete source
 photos. Storage UI must distinguish kept scans from disposable temporaries.
@@ -288,16 +294,17 @@ observed exposure and accepted frame counts. Apply CAP-01 through CAP-03,
 GEO-01 and LIFE-01 through LIFE-03 in
 [SPEC_06](./SPEC_06_IMAGE_QUALITY_AND_ACCEPTANCE.md).
 
-**Required / not fully implemented (control-state ownership):** record control
+**Implemented in rc10 (control-state ownership):** record control
 request acknowledgment and actual captured settings separately. If base/focus
 option application or final restore times out/fails, do not equate the elapsed
 timeout with a known restored camera. Record the failure under its capture/session
 identity and restore/rebind or explicitly degrade before normal reuse. The
-current base/focus callers ignore `applyOptions` Boolean results and cleanup
-ignores restore results; actual metadata still determines fusion eligibility.
-This gap does not prove CameraX or an OEM ISP overwrote a successful request.
+base/focus callers inspect acknowledgment results and cleanup records clear/cancel
+results before queue submission. Restore failure blocks normal capture until a
+generation-matched rebind; actual metadata still determines fusion eligibility.
+Acknowledgment alone does not prove the OEM executed the requested settings.
 
 Device acceptance must include unsupported manual control, ignored settings,
 missing EXIF, partial burst loss, all orientations, mirrored imports, zoom/crop,
 flicker lighting, navigation during processing, saturated queues and save
-failure. This specification-only revision does not rerun device or APK tests.
+failure. rc10 build/helper checks do not substitute for this device acceptance.

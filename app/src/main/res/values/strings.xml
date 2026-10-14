@@ -125,4 +125,8 @@
     <string name="camera_rear_number">Rear %1$d</string>
     <string name="camera_change_failed">Could not change the camera or zoom. Please try again.</string>
     <string name="fusion_single_frame">Only one base-exposure frame contributed. The photo was saved without multi-frame noise reduction.</string>
+    <string name="edit_failed">Could not save the edit. Your previous photo is preserved.</string>
+    <string name="export_failed_preserved">Export did not finish. Your scans are preserved; please retry.</string>
+    <string name="export_cleanup_failed">Export did not finish. Some incomplete files may remain in the destination folder.</string>
+    <string name="export_memory_shortage">Not enough memory to export these pages. Try fewer pages at a time.</string>
 </resources>

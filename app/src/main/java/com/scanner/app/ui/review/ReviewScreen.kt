@@ -80,6 +80,11 @@ fun ReviewScreen(
     val selectedPageId by viewModel.selectedPageId.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
     val imageVersion by viewModel.imageVersion.collectAsState()
+    val editError by viewModel.error.collectAsState()
+    val editContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(editError) {
+        editError?.let { android.widget.Toast.makeText(editContext, it, android.widget.Toast.LENGTH_LONG).show(); viewModel.clearError() }
+    }
     var showExportDialog by remember { mutableStateOf(false) }
 
     val selectedPage = remember(pages, selectedPageId) {

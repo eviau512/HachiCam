@@ -6,19 +6,18 @@ import com.scanner.app.BuildConfig
 object CameraDiagnostics {
     private var capabilities = ""
     private var negotiated = ""
-    private var activeBurst = ""
-    private val frames = ArrayDeque<String>()
+    private val journal = CaptureJournal()
     @Synchronized fun capabilities(lines: List<String>) {
         if (BuildConfig.SENSITIVE_DIAGNOSTICS) { capabilities = lines.joinToString("\n").take(32768); negotiated = "" }
     }
     @Synchronized fun negotiated(text: String) { if (BuildConfig.SENSITIVE_DIAGNOSTICS) negotiated = text.take(1024) }
     @Synchronized fun beginBurst(id: String) {
-        if (BuildConfig.SENSITIVE_DIAGNOSTICS) { activeBurst = id; frames.clear() }
+        if (BuildConfig.SENSITIVE_DIAGNOSTICS) journal.begin(id, "$capabilities\nNegotiated: $negotiated")
     }
     @Synchronized fun frame(id: String, text: String) {
-        if (!BuildConfig.SENSITIVE_DIAGNOSTICS || id != activeBurst) return
-        frames.addLast(text.take(4096)); while (frames.size > 16) frames.removeFirst()
+        if (BuildConfig.SENSITIVE_DIAGNOSTICS) journal.record(id, text)
     }
     @Synchronized fun snapshot(): String = if (!BuildConfig.SENSITIVE_DIAGNOSTICS) "" else
-        "$capabilities\nNegotiated: $negotiated\nLatest burst=$activeBurst\n${frames.joinToString("\n")}"
+        "Live context at export, latest STARTED capture:\n${journal.snapshot(journal.latestStarted)}"
+    @Synchronized fun snapshot(id: String): String = if (BuildConfig.SENSITIVE_DIAGNOSTICS) journal.snapshot(id) else ""
 }

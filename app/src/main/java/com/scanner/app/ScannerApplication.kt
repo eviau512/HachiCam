@@ -12,6 +12,7 @@ class ScannerApplication : Application() {
         super.onCreate()
         // Initialize OpenCV
         OpenCVLoader.initLocal()
+        com.scanner.app.data.image.ImageWork.initialize(this)
         com.scanner.app.data.util.DiagnosticAccess.initialize()
 
         // Initialize saved language if configured

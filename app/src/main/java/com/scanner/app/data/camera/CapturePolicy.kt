@@ -30,5 +30,5 @@ class BurstAdmission(private val limit: Int = 3) {
         if (active.values.any { it } || active.size >= limit || (exclusive && active.isNotEmpty())) return null
         return Ticket(++nextId, exclusive).also { active[it.id] = exclusive }
     }
-    @Synchronized fun release(ticket: Ticket) { active.remove(ticket.id) }
+    @Synchronized fun release(ticket: Ticket): Boolean = active.remove(ticket.id) != null
 }

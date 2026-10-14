@@ -20,7 +20,12 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Latest follow-up: [rc9 night/screen contract](research/NIGHT_HDR_REVISION_2026-10-14.md)
+Latest implementation: [rc10 architecture refactor](reports/RC10_ARCHITECTURE_REFACTOR_2026-10-14.zh-CN.md)
+connects immutable edit recipes, unique commits, export rollback/read leases,
+shared experimental memory admission, per-capture diagnostics and control recovery.
+Helper/native tests and APK verification are separate from pending device acceptance.
+
+Previous quality follow-up: [rc9 night/screen contract](research/NIGHT_HDR_REVISION_2026-10-14.md)
 and [Chinese evidence/implementation report](reports/RC9_NIGHT_HDR_REPORT_2026-10-14.zh-CN.md).
 This includes observed output sizes, focus/highlight changes, simplified camera UI,
 test-only paired-input diagnostics and outstanding device acceptance.
@@ -33,7 +38,8 @@ It updates SPEC_02/06 requirements only; no new product build accompanies it.
 The [architecture audit](reports/ARCHITECTURE_AUDIT_2026-10-14.zh-CN.md) checks
 cross-flow ownership, source rotation, edit commits, export failures, JNI bounds,
 resource admission and diagnostic/control identity. SPEC_00/01/04/06 now record
-the corresponding required protections; the audit does not implement them.
+the corresponding protections, implemented in the subsequent rc10 follow-up;
+the audit itself retains its pre-refactor evidence and did not implement them.
 
 | Document | Scope |
 | --- | --- |

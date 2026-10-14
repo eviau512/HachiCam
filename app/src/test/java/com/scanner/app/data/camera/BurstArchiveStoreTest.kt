@@ -49,4 +49,17 @@ class BurstArchiveStoreTest {
             assertFalse(File(base,"outside.jpg").exists())
         } finally { base.deleteRecursively() }
     }
+    @Test fun completedCaptureKeepsItsOwnJournalWhenLiveCaptureHasChanged() {
+        val base=Files.createTempDirectory("capture-journal").toFile()
+        try {
+            val store=BurstArchiveStore(File(base,"archive"),true)
+            val fused=File(base,"fused.jpg").apply { writeText("A result") }
+            assertTrue(store.replace(listOf("00-tier0.jpg" to byteArrayOf(1)),fused,"A manifest","CaptureId=A\nA cleanup and result"))
+            val live=File(base,"live.txt").apply { writeText("Latest started=B") }
+            ZipFile(store.export(live,File(base,"export.zip"))!!).use { zip ->
+                assertEquals("CaptureId=A\nA cleanup and result",zip.getInputStream(zip.getEntry("capture/diagnostics.txt")).reader().readText())
+                assertEquals("Latest started=B",zip.getInputStream(zip.getEntry("live.txt")).reader().readText())
+            }
+        } finally { base.deleteRecursively() }
+    }
 }

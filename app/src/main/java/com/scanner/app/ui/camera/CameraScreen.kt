@@ -103,6 +103,7 @@ fun CameraScreen(
     val curvedModeEnabled by viewModel.curvedModeEnabled.collectAsState()
     val fullHdrEnabled by viewModel.fullHdrEnabled.collectAsState()
     val highRequested by viewModel.highResolutionRequested.collectAsState()
+    val rebindRequest by viewModel.rebindRequest.collectAsState()
     var selectedBackId by rememberSaveable { mutableStateOf<String?>(null) }
     var backChoices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var boundBackId by remember { mutableStateOf<String?>(null) }
@@ -275,7 +276,7 @@ fun CameraScreen(
             .background(Color.Black)
     ) {
         // ─── 1. Fullscreen Viewfinder ───
-        key(selectedBackId, highRequested, highSuppressed) {
+        key(selectedBackId, highRequested, highSuppressed, rebindRequest) {
         val generation = remember { viewModel.beginCameraSession() }
         DisposableEffect(generation) {
             onDispose { viewModel.endCameraSession(generation) }
@@ -440,6 +441,7 @@ fun CameraScreen(
                         cameraControl = camera.cameraControl
                         viewModel.cameraControl = camera.cameraControl
                         viewModel.cameraInfo = camera.cameraInfo
+                        viewModel.controlsBound(generation)
                         boundBackId = selectedView.id
                         val exposure = camera.cameraInfo.exposureState
                         exposureStep = exposure.exposureCompensationStep.toFloat()

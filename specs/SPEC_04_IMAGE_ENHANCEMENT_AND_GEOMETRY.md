@@ -18,23 +18,37 @@ not complete shipping features.
 
 ## 2. Source preservation and processing recipe
 
-**Required / partly implemented:** derive every filter selection from the source
+**Implemented in rc10:** derive every filter selection from the source
 and current geometry, never from the previous filtered JPEG. Original means
 geometry-corrected source appearance; it is not a promise of unchanged source
 bytes or a lossless JPEG transform.
 
 Keep the imported/captured master immutable. Express rotation, crop, aspect
 choice and filter settings as a recipe; save derivative results independently.
-Review generally re-renders from the source, but crop rotation currently rewrites
-its input file. Complete source immutability remains **required / not implemented**.
+Crop, review and batch edits share one renderer and preserve master bytes.
+Device cancel/reopen/source-hash checks remain pending.
 
 Crop and review must use the same rotation convention and immutable source
 coordinate space. Rotation changes the recipe and display transform, not master
 JPEG bytes. Geometry must identify its source revision; leaving crop without
 confirming may not leave an overwritten source with old repository corners.
-The current crop path rewrites JPEG at quality 95 and changes only local corners;
-review re-renders from the source with recipe rotation. Unifying these paths is
-**required / not implemented**; repeated JPEG encoding is not lossless rotation.
+The old crop path rewrote JPEG at quality 95; rc10 removes that write. Derived
+results are newly encoded from the master; this is not lossless JPEG rotation.
+
+The refactor uses source pixel centres (0..width-1, 0..height-1) for persisted
+corners and clockwise quarter-turn recipe rotation. Crop display maps corners
+into rotated source space and maps them back on confirmation. Draft changes,
+including rotation, are discarded on cancel. The aspect value describes the
+final displayed result; inverse it for the pre-rotation rectification at 90/270.
+A rotate operation also reciprocates a selected aspect to retain geometric
+shape. Free aspect remains free. Full-size output always derives from the master;
+only the bounded preview bitmap is rotated for editing display.
+
+Before native allocation reject non-finite/crossed/out-of-source/degenerate quads,
+unsupported pixel types, non-finite ratios and output dimensions above 56 million
+pixels. Custom aspect 1:20..20:1 is the initial explicit supported range; larger
+ratios fail visibly. These resource/shape limits are implementation limits, not
+proof of improved optical detail or calibrated paper proportions.
 
 The recipe shall define algorithm version, parameter units, border handling,
 color space, bit depth and output scale. Native BGR storage order is not a color
@@ -119,7 +133,12 @@ must be an explicit document profile choice, not a generic photographic default.
 
 ## 5. Preview, final rendering and edit transactions
 
-**Required / not fully implemented:**
+**Implemented in rc10:** shared immutable-source rendering, generation rejection,
+unique checked derivative commits, reader protection and analysis freshness.
+**Required / not fully implemented:** full appearance-preview/thumbnail parity,
+algorithm-versioned caches and measured scale-aware preview parameters.
+
+The complete contract remains:
 
 - Render previews from a reduced source with the same recipe and scale-aware
   parameters; final output is independently rendered from the master.
@@ -132,8 +151,8 @@ must be an explicit document profile choice, not a generic photographic default.
 - Isolate concurrent page edits and guarantee native resource ownership,
   including cancellation, JNI failures and page navigation.
 
-A source-based render path and background coroutines already exist in places;
-they do not prove atomic edits, request freshness or complete thumbnail parity.
+State/file helper regressions cover commit ordering, failure and retirement;
+they do not prove complete thumbnail parity or all physical UI interactions.
 
 Implement the shared page ownership contract in SPEC_00 for crop, filter, aspect,
 rotation and batch requests. The same request generation owns file commit and

@@ -18,8 +18,9 @@ archived designs cannot override them.
 - **Research candidate** is outside the current product contract.
 
 Every change follows problem analysis, specification analysis, specification and
-acceptance revision, then implementation and verification. The present revision
-delivers specifications and reports; it does not implement the new requirements.
+acceptance revision, then implementation and verification. The rc10 follow-up
+implements the ownership/refactor contracts below; device acceptance and the
+remaining requirements are recorded separately.
 
 ## 2. Architectural principles
 
@@ -49,7 +50,7 @@ delivers specifications and reports; it does not implement the new requirements.
 | Native vision | C++17 and OpenCV; contour detection, line snapping, perspective correction and three active filters | Heuristic image processing, not semantic document recognition |
 | Burst processing | CPU alignment, experimental sampling reconstruction and short exposure highlight recovery | JPEG inputs; no active RAW or Vulkan fusion path |
 | Page state | In-memory repository with PROCESSING, READY and FAILED | Durable page metadata and process death recovery are not implemented |
-| Image storage | App private scans directory for completed images | Source and derivative edit transactions need stronger guarantees |
+| Image storage | Immutable private masters, unique derivative commits and read leases | Metadata and restart recovery remain in-memory only |
 | Export | Android PDF container with raster scanned pages and image export | No OCR or vectorized text layer |
 | Vulkan / curved geometry | Existing experimental primitives | Presence of code or shader files does not constitute a connected product feature |
 
@@ -65,24 +66,25 @@ orientation, dimensions, valid crop region, color interpretation, pixel type,
 source identity, and output dimensions. SPEC_01 owns decoding and camera mapping;
 SPEC_03 owns crop coordinates; SPEC_04 owns rendering and filter semantics.
 
-A future render request shall identify the page, source revision, crop, output
-rotation, aspect policy, filter and parameter version, output scale and request
+A render request identifies the page, immutable source path, crop, output
+rotation, aspect policy, filter and request
 generation. A result may publish only if those identities still match current
 state. A deleted page must not be recreated by a late result.
+Algorithm/parameter-versioned caches and external source checksum verification
+remain future work; the private master path is the current source revision identity.
 
 Heavy work must run off the UI thread with bounded concurrent decoding and native
 allocations. Cancellation and errors must release image buffers and native
 resources. A replacement file must be successfully encoded and committed before
-its page pointer is changed. Detailed render concurrency and edit transaction
-guarantees remain **required / not fully implemented**.
+its page pointer is changed. **Implemented in rc10:** shared heavy-image admission,
+generation-checked unique file commits, last-valid preservation and read leases.
 
-The 2026-10-14 architecture inspection confirms that the global burst worker
-does **not** serialize crop/review edits or export readers. Those paths currently
-write a shared `crop_<pageId>.jpg`, publish whole page snapshots and lack a page
-revision check. Crop rotation also overwrites the source, unlike review rotation.
-These are implementation gaps, not exceptions to source preservation.
+The pre-refactor 2026-10-14 audit found shared derivative names, stale whole-page
+publication and crop rotation overwriting the source. rc10 replaces those paths
+with one repository ledger and source-based renderer; the historical audit is
+evidence of the previous state, not a description of current behavior.
 
-**Required / not implemented:** one page-edit ownership/commit contract across
+**Implemented; physical-device verification pending:** one page-edit ownership/commit contract across
 crop, review and batch work. Capture an immutable request containing page/source
 identity, source revision, complete recipe and request generation. Render into a
 unique temporary file; recheck identity, deletion and generation before atomic
@@ -91,11 +93,60 @@ Obsolete work may finish computation but cannot replace files or page metadata.
 Preserve the last valid source/result on all failure and cancellation paths.
 Blocking OpenCV completion is not automatically canceled by coroutine `cancel()`.
 
+### Refactor contract, 2026-10-14 (specified before implementation; rc10 implemented)
+
+The shared repository owns committed pages and pending complete edit intents.
+Each request receives a process-monotonic generation; successive changes compose
+against the pending intent, not a stale committed page copy. Failure of the latest
+request restores the last committed recipe; older requests remain obsolete.
+Delete/re-add cannot reuse a request generation. File rename and page publication
+occur under the same ownership lock, after checking generation/source identity.
+Derivative filenames are unique; obsolete temporary output is deleted.
+Only repository retirement may delete a published source/result. Worker cleanup
+may delete its unpublished temporary inputs, never bypass an active read lease.
+No-op status updates preserve pending edit generations; failed queue submission
+must resolve its PROCESSING page as failed rather than leaving an unconsumed job.
+
+Source/result read leases protect files used by rendering or export. Retired
+derivatives and deleted pages are removed only after their last reader closes.
+Exports pin the complete committed starting snapshot; later edits/deletion may
+not truncate that snapshot. Snapshot use is explicit and not a durable transaction
+across process death. Capture publication still checks deleted-page identity.
+
+One process-wide heavy-image permit covers fusion/save, final editing and export
+decoding; preview analysis uses bounded images. Allocation planning includes
+queued compressed inputs and the larger possible reconstructed output. Initial
+byte estimates/safety margins remain experimental and require device RSS tests.
+Control and diagnostic state belongs to capture/session identity, not a ViewModel
+latest-value shortcut. The implementation and executed checks are recorded in the
+[rc10 report](reports/RC10_ARCHITECTURE_REFACTOR_2026-10-14.zh-CN.md).
+
+Initial experimental admission profile for this refactor: use at most two-thirds
+of current available system memory, capped at 2048 MiB for 64-bit and 768 MiB for
+32-bit processes. Reserve 96 MiB for each admitted compressed burst; account for
+retained gray/edge buffers. Fusion working estimates are source pixels times
+(3*decoded frame count +20+24 for possible 2x, or +6 for 1x), plus 128 MiB;
+streaming uses 20*source pixels +128 MiB. Editing preflights the rectifier shape
+and uses 8*source pixels +12*predicted output pixels +128 MiB,
+edge analysis 12*source pixels +128 MiB. PDF estimates include 8*total page pixels
+plus 4*largest page pixels +128 MiB; JPEG export is streamed.
+Recheck under the shared heavy permit before decoding. Ordinary capture may
+degrade from 2x eligibility to native-size fusion, then native-size streaming;
+if all plans fail, use the declared reference/failure outcome. These are
+conservative heuristics, not measured upper bounds or RSS certification.
+
 All product JNI image operations must validate input shape/type/dimensions and
 translate native exceptions into explicit managed failures with released buffers.
-Fusion JNI currently has exception guards; perspective/filter entry points do
-not have equivalent guards. A Kotlin `catch (Exception)` alone does not establish
-that native exceptions are contained. Coverage remains **required / incomplete**.
+Gray/edge lookup requires one-channel 8-bit input; touch/line coordinates and
+search limits must be finite, with search limits bounded by the image dimension.
+Burst tiers are 0..2; exposure products are finite and nonnegative (zero denotes
+unknown metadata). Structural-line source dimensions are finite and nonnegative,
+with zero retaining the preview-size default and effective area at most 56 MP.
+**Implemented in rc10:** all eleven image-operation JNI entry points have managed
+exception guards; perspective/filter geometry and image limits are checked before
+warping, with bitmap locks and temporary Mat ownership released on failure.
+The guards do not validate arbitrary native addresses or prevent process-level
+faults. Android JNI failure injection and broad device coverage remain pending.
 
 Durable metadata, pending manifests, restart recovery and memory spill storage
 remain **required / not implemented**. Screen independent burst processing while
@@ -116,13 +167,13 @@ available for a GPU feature that has not been integrated.
 
 Current burst admission reserves at most three total jobs, including capture,
 queued and executing jobs, with one global processing worker. This bound does not
-establish a measured byte budget for all crop and review work. Additional memory
-and thermal admission policies require implementation and measurement.
+establish a measured byte budget for all crop and review work. rc10 adds shared
+experimental estimates and reservations; thermal policy and measured RSS remain pending.
 
 The native-high profile is selected by **input** size. Ordinary <=16 MP input can
 still produce a roughly 50 MP reconstruction and simultaneous full-size rotation
-buffer; it does not receive native-high exclusive admission. **Required / not
-implemented:** a shared byte reservation covering compressed queued inputs,
+buffer; it does not receive native-high exclusive admission. **Implemented,
+experimental estimates:** a shared byte reservation covering compressed queued inputs,
 decoded inputs, alignment, possible reconstruction output, upright encoding,
 crop/review buffers and export readers. Reconcile allocations before scale=2;
 if resources are unavailable, retain valid native-size fusion and record resource
@@ -160,13 +211,14 @@ diagnostic export explicitly says original photos are included; release never
 retains or bundles those inputs. Export is initiated through the user's share
 chooser, with at most two cached bundles and no automatic network action.
 
-**Required / not implemented:** distinguish latest-started, latest-completed and
+**Implemented in rc10:** distinguish latest-started, latest-completed and
 exported capture identities. Export must label the retained manifest captureId
 and matching per-job control/processing evidence; an active later capture may
 not overwrite the only metadata record for an earlier completed bundle. Snapshot
 log identity and input/result selection consistently, or explicitly identify
 unrelated surrounding log records. A shared image-cache lock alone does not make
-the separately collected live log belong to that image set.
+the separately collected live log belong to that image set. The bounded archive
+includes its own `diagnostics.txt`; live surrounding log context is labeled separately.
 
 Artifact integrity and delivery are separate from build identity. Before sending,
 record the immutable APK filename, byte size and SHA-256, verify ZIP entry CRCs,
@@ -178,8 +230,8 @@ recorded separately when available; neither may be inferred from sender status.
 
 Acceptance: inspect the packaged universal test APK's resolved application and
 launcher labels, including localized entries, and merged release label resources.
-This revision preserves the existing build identity contract; it does not claim
-to have rebuilt or reinstalled the application.
+rc10 preserves this build identity; APK checks and delivery are recorded in the
+linked report, separately from recipient installation and image-quality acceptance.
 
 ## 7. Specification provenance
 
