@@ -2,7 +2,7 @@
 
 > Status: Authoritative acceptance contract. Added 2026-10-12.
 > Language: English.
-> Updated 2026-10-13 with rc8 regression and artifact-delivery acceptance.
+> Updated 2026-10-15 with future GPU migration and benchmark acceptance.
 >
 > Quality revision contract: [2026-10-12 follow-up](research/QUALITY_REVISION_2026-10-12.md). Experimental implementation; numerical tuning and physical-device acceptance remain unverified.
 > Execution status: the initial document-only revision did not run these checks. Subsequent rc4/rc5 reports record bounded synthetic/test-build verification; the full device matrix remains pending.
@@ -335,6 +335,42 @@ For each executed case record fixture revision, application build, device/camera
 recipe and algorithm version, observed metadata, expected outcome, measured
 outcome, pass/fail, fallback reason and residual limitation. Include comparative
 source/output crops where permitted. Tests not run must be marked not run.
+
+GPU backend acceptance (2026-10-15; required / not implemented):
+
+- GPU-01 (P0, fidelity): frozen same-burst CPU/GPU replays must record transforms,
+  masks, accepted tiers, crop/scale, actual corrected/recovered pixels and matched
+  source/output ROIs. Version numerical tolerances before implementation acceptance;
+  preserve discrete rejection/provenance invariants. Include thin Chinese/Latin
+  strokes, punctuation, faint marks, periodic grids, noise-only/identical inputs,
+  clipping, parallax and occlusion. No unsupported recovery/SR or erased valid
+  marks; optimizer accuracy or output megapixels alone cannot pass this case.
+- GPU-02 (P0, resources/failure): run unsupported/software device and capability,
+  budget/allocation/map/submission failure, timeout/device loss, cancellation and
+  changed-generation cases. Verify bounded cleanup, re-admitted CPU fallback,
+  source checksum, no stale/partial output commit and READY only after save.
+  Include ordinary 12 MP with 2x output and native-high streaming separately.
+- GPU-03 (P0, timing): record at least ten paired replay runs per representative
+  scene/mode/backend, separate cold start and warm runs, interleave backends and
+  record throttling/thermal conditions, peak process memory and accounted GPU/
+  staging allocations. Measure p50/p95 processing and live shutter-to-ready
+  separately, including upload, synchronization, readback and saving. GPU query
+  times are optional when unsupported; host monotonic completion timing remains
+  required. A provisional engineering goal is >=30% lower processing p50 with
+  no processing p95 regression against the equal-quality CPU path. This goal is
+  experimental, not a measured result or release SLA; publish variance and all
+  results rather than selecting one fast run. Default enablement also requires
+  improved end-to-end latency beyond observed run variability; otherwise retain
+  CPU for the affected workload/device capability profile.
+- GPU-04 (P1, sustained operation): repeated capture/edit/export under the shared
+  admission contract must remain responsive without unbounded allocations or
+  orphaned jobs. Record at least ten consecutive jobs, RSS/thermal trend and
+  failures, including concurrent camera preview; one cool first run cannot certify
+  sustained speed, power efficiency or broad device support.
+
+The [GPU assessment](reports/GPU_ROADMAP_2026-10-15.zh-CN.md) records current CPU
+execution and incomplete phone checkpoint timings. None of GPU-01..04 has been
+executed for a product GPU backend; this revision does not enable one.
 
 This revision establishes a quality backlog and acceptance contract. It does not
 implement the missing features, add proprietary algorithms, benchmark competitor

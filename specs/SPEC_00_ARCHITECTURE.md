@@ -1,6 +1,6 @@
 # Specification 00: System Architecture and Technology Stack
 
-> Status: Authoritative. Revised 2026-10-14.
+> Status: Authoritative. Revised 2026-10-15.
 > Language: English. Chinese reports are explanatory and do not override this document.
 
 ## 1. Scope and status vocabulary
@@ -181,6 +181,17 @@ degradation. A job-count limit or Java heap reading is not a native/RSS budget.
 Worker failure must leave an explicit unavailable/failed state rather than an
 open admission path with no consumer. Do not promise recovery from process death
 or an unrecoverable allocation failure.
+
+**Required / not implemented (2026-10-15):** future GPU work is a compute-backend
+migration under SPEC_02 section 7.1, not a second capture/page pipeline. Preserve
+the single admitted worker, capture identity, immutable source, request generation,
+read leases, unique output commit and READY-after-save semantics. Reserve host,
+device, staging and scratch allocations together before submission; mobile shared
+physical memory does not make separate live buffers free. CPU estimates above do
+not cover an additional GPU backend. GPU completion, cancellation and fallback
+must retain ownership until in-flight work has stopped; failed or obsolete GPU
+outputs cannot commit. The current CPU pipeline is the fallback implementation
+to connect and test, not an already integrated automatic GPU fallback.
 
 The rc6 experimental native-high-resolution profile is exclusive: no other
 capture/queued job may coexist from its admission through cleanup. It bounds

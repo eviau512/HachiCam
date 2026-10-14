@@ -1,6 +1,6 @@
 # Specification 02: Computational Photography and HDR Reconstruction
 
-> Status: Authoritative. Revised 2026-10-13.
+> Status: Authoritative. Revised 2026-10-15.
 > Filename retained for compatibility; Vulkan HDR is not integrated.
 > Language: English.
 > Noise follow-up: [2026-10-13 contract](research/NOISE_REVISION_2026-10-13.md).
@@ -391,6 +391,85 @@ seven-frame or fixed 50 MP success claim.
 Vulkan HDR/LTM, RAW fusion, dense motion compensation and guaranteed OEM hardware
 temporal processing remain **not implemented / unverified**. Their presence in
 earlier diagrams, metadata or static library inventories is not acceptance.
+
+### 7.1 Future GPU compute backend (2026-10-15; required / not implemented)
+
+The user requests faster processing in subsequent versions. Vulkan compute is
+the initial backend candidate; CPU remains the current product implementation.
+The linked `vulkan_compute_engine.cpp` and embedded shader have no execution
+caller in the inspected product source. Their old two-frame luma-graft/LTM
+semantics omit current registration, photometric, clipping and recovery masks.
+Do not activate that shader as an implementation of this contract.
+
+The first migration preserves the current JPEG input and accepted mathematics.
+It does not activate RAW, native-high capture, new LK registration or new tone
+mapping. Upscan's separately gated research is not accepted merely by moving its
+computation to GPU. AF/AE, capture scheduling and ISP remain SPEC_01 concerns;
+JPEG decoding/encoding, queue delay and storage are measured separately.
+
+Implement and validate in this order, with bounded experiments per stage:
+
+1. **Profiling and backend boundary.** Add monotonic, per-capture timers for
+   shutter-to-input-complete, queue, decode/reference selection, global fitting,
+   local fitting and verification, native fusion/HDR, reconstruction, rotation,
+   encoding and successful save. Add upload, submission, fence wait and readback
+   timings for GPU jobs. Record execution backend and explicit fallback reason.
+   Overlapping work must not be presented as additive wall time. Existing log
+   timestamps are checkpoint evidence, not complete profiling.
+2. **Bounded Vulkan infrastructure and regular image kernels.** Probe a hardware
+   compute device, API/features/formats/workgroup and storage limits at runtime;
+   do not select by phone model or assume optional extensions. Reuse pipelines,
+   descriptor/command resources and bounded buffer pools. Start with grayscale,
+   pyramids, gradients, warps, masks and batched residual/reduction operations
+   consumed by current registration; keep transform selection and eligibility
+   policy on CPU initially. Batch patches and return compact reductions, avoiding
+   full-resolution transfers after each kernel.
+3. **Registration acceleration.** Profile and port the hot iterative fitting and
+   verification kernels while preserving ambiguity, noise, motion and detail
+   safeguards. Keep any global optimizer/control on CPU until its GPU variant is
+   separately qualified. Failed correspondence must not receive SR/HDR credit to
+   make the GPU path appear faster. Compare equal patch sizes and masks as in
+   ALIGN-R04, then test the full field and renderer, not only optimizer residuals.
+4. **Contiguous fusion and reconstruction.** Keep admitted image/field/mask data
+   resident across native-size multi-frame denoising, short-exposure recovery and
+   bounded regional backprojection. Preserve output/crop provenance, original
+   observations, protected highlights, per-pixel gates and source/output limits.
+   Gather/reduce in bounded tiles without assuming floating-point atomic support;
+   keep halos and border treatment equivalent. Native-high streaming must retain
+   its reference-plus-one-candidate bound; it cannot allocate all native-high
+   decoded frames to imitate the ordinary backend.
+
+The phases describe scope, not four guaranteed releases. The profiling results
+may change kernel priority, but not the quality and ownership contracts.
+CPU and GPU implementations require explicit channel order, pixel type/stride,
+linearization, interpolation, border and precision conventions. Establish a
+versioned numerical tolerance and fidelity profile before calling a port
+verified. Initial experiments use FP32 for image arithmetic; any CPU higher-
+precision decision/reduction that cannot be matched must remain on CPU or
+receive a separately tested equivalent. FP16 is not an assumed optimization.
+Do not equate a small pixel error with unchanged punctuation or HDR eligibility.
+
+Input validation precedes allocation: checked dimensions/byte arithmetic,
+matching input geometry, safe strides and finite parameters. Unsupported memory
+types must return unsupported, not silently select memory type zero. Check all
+allocation/map/descriptor/command/submit results. Use explicit memory barriers
+and host visibility rules, with per-job completion fences and bounded polling;
+avoid a whole-queue idle wait per image kernel. No allocations or buffers may be
+released while their work is in flight. Timeout/device loss disables that backend
+for subsequent jobs; use a bounded completion/reset path, then re-admit CPU work
+with the retained immutable inputs. If safe resource recovery is unavailable,
+produce an explicit failure rather than race cleanup or commit a partial image.
+
+GPU fallback must cover unsupported/software devices, unavailable features,
+budget failure, initialization/submission/device failure and unfavorable measured
+performance. Recheck the shared SPEC_00 heavy permit before CPU fallback; do not
+keep full GPU and CPU working sets resident concurrently outside the reservation.
+Do not repeatedly retry a failed device for every frame. Backend choice and
+technical status belong in diagnostics, without adding clutter to the camera UI.
+Detailed capability/device logging follows the existing test-build privacy rule.
+
+Acceptance is GPU-01 through GPU-04 in SPEC_06. No phone speedup, GPU image-quality
+pass or connected GPU fallback is claimed by this specification revision.
 
 ## 8. Acceptance and limits
 

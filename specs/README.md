@@ -1,6 +1,6 @@
 # HachiCam Specifications
 
-> Revised 2026-10-14. Authoritative specifications are written in English.
+> Revised 2026-10-15. Authoritative specifications are written in English.
 > Chinese reports explain the changes and do not override the English contracts.
 
 ## 1. Required workflow and status
@@ -19,6 +19,11 @@ next-device checks and remaining implementation work. It does not override the
 authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
+
+Future performance work: [GPU assessment and phased migration](reports/GPU_ROADMAP_2026-10-15.zh-CN.md).
+SPEC_00/02/06 define profiling, backend ownership, batched registration work,
+resident fusion/reconstruction and CPU fallback acceptance. The current product
+still runs CPU processing; this plan does not enable the old Vulkan shader.
 
 Latest follow-up: [rc12 shutter metering continuity](reports/RC12_TARGET_METERING_2026-10-14.zh-CN.md)
 addresses the paired bright-slide capture by retaining target AE with shutter AF,
@@ -61,7 +66,7 @@ the audit itself retains its pre-refactor evidence and did not implement them.
 | --- | --- |
 | [SPEC_00: Architecture](./SPEC_00_ARCHITECTURE.md) | Local processing, component/status boundaries, image lifecycle, resources and build identity |
 | [SPEC_01: Camera and capture](./SPEC_01_CAMERA_AND_CAPTURE_PIPELINE.md) | Capabilities, focus/exposure/motion, actual brackets, image normalization and pending work |
-| [SPEC_02: Photography and HDR](./SPEC_02_COMPUTATIONAL_PHOTOGRAPHY_AND_VULKAN_HDR.md) | CPU JPEG reconstruction, registration, highlight evidence, detail claims and failure |
+| [SPEC_02: Photography and HDR](./SPEC_02_COMPUTATIONAL_PHOTOGRAPHY_AND_VULKAN_HDR.md) | CPU JPEG reconstruction, registration, highlight evidence, detail claims, failure and future GPU migration |
 | [SPEC_03: Detection and crop](./SPEC_03_DOCUMENT_DETECTION_AND_INTERACTIVE_CROP.md) | Outer boundaries, confidence/freshness, coordinate validity, manual crop and snapping |
 | [SPEC_04: Enhancement and geometry](./SPEC_04_IMAGE_ENHANCEMENT_AND_GEOMETRY.md) | Three filters, lighting/color/detail preservation, source recipes and planar/curved limits |
 | [SPEC_05: Design and experience](./SPEC_05_HACHIMI_DESIGN_SYSTEM.md) | Accurate mode guidance, manual correction, processing feedback and unavailable features |
