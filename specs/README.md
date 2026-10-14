@@ -24,6 +24,10 @@ Latest implementation: [rc10 architecture refactor](reports/RC10_ARCHITECTURE_RE
 connects immutable edit recipes, unique commits, export rollback/read leases,
 shared experimental memory admission, per-capture diagnostics and control recovery.
 Helper/native tests and APK verification are separate from pending device acceptance.
+The subsequent [13:25 screen analysis](reports/RC10_SCREEN_ANALYSIS_2026-10-14.zh-CN.md)
+explains the 0.4873 whole-image SR denial, paired native-scale text comparison and
+production-code ROI probes. It updates research acceptance and the checklist;
+it does not change the reconstruction algorithm or deliver another APK.
 
 Previous quality follow-up: [rc9 night/screen contract](research/NIGHT_HDR_REVISION_2026-10-14.md)
 and [Chinese evidence/implementation report](reports/RC9_NIGHT_HDR_REPORT_2026-10-14.zh-CN.md).

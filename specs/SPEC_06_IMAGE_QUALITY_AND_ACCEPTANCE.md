@@ -151,6 +151,13 @@ rc9 follow-up ([contract](research/NIGHT_HDR_REVISION_2026-10-14.md)):
   Current rc9 logs explain the observed 36.76% versus 66.54% mean-support outcome
   but overload `phases2D` and omit a complete structured denial record. That
   record is required / not implemented; stable output size is not a quality gate.
+- PHOTO-13 (P1, research / not implemented): text-ROI eligibility versus global
+  coverage. The paired 13:25 screen burst fails the 0.50 global gate at 0.4873;
+  host production probes show 72..91% support in the inspected text ROI and a
+  passing centre phase heuristic. Validate distributed tile phases, strokes,
+  aliases and noise on independent fixtures; include usable text with invalid
+  background and invalid text with usable background. Unsupported regions retain
+  a valid reference estimate. Centre phases and output MP alone are not passes.
 - ARCH-01 (P0, rc10 implemented; helper tests passed, device pending): crop/review rotations and four
   rotations followed by cancel/reopen preserve master checksum and consistent
   geometry. Latest recipe generation wins across filter/aspect/rotation/batch

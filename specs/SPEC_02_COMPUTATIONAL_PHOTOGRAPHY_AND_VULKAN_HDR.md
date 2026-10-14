@@ -92,6 +92,13 @@ Neither capture order nor camera warm-up is an eligibility condition. The
 whole-image support fraction is distinct from final per-pixel multi-frame
 coverage; neither certifies a particular text region.
 
+The 2026-10-14 13:25 paired screen evidence has mean support 0.4873 with the
+other global conditions passing. A production-code host probe finds substantially
+higher support in a text ROI, with a passing phase check at its centre. This
+demonstrates the global gate's target-region limitation, not recovered detail or
+a calibrated replacement threshold. See the
+[screen analysis](reports/RC10_SCREEN_ANALYSIS_2026-10-14.zh-CN.md).
+
 **Required / not implemented:** retain a structured per-job SR decision with
 each eligibility check, measured value, threshold and denial reason in test
 diagnostics. Distinguish actual phase diversity from the combined SR decision;
@@ -101,6 +108,10 @@ separate. This diagnostic requirement does not restore viewfinder MP captions
 removed by SPEC_05. Do not lower gates or unconditionally enlarge an image merely
 to make successive files carry the same megapixel count. Region-specific
 eligibility and measured improvement remain research / unimplemented work.
+Regional research acceptance must check phases and support throughout eligible
+text tiles, preserve the reference in unsupported/moving regions, and compare
+stroke fidelity with same-size single-frame interpolation. A single ROI-centre
+phase check or lowered whole-image threshold does not satisfy that acceptance.
 
 Output dimensions must be derived from the accepted data and resource limits.
 Upscaling, edge contrast or a larger megapixel label alone must never be reported
