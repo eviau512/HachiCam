@@ -121,7 +121,7 @@
     <string name="camera_tele_view">Tele %1$.1f×</string>
     <string name="camera_zoom">Zoom</string>
     <string name="hdr_preview_hint">SDR preview · HDR processed after capture</string>
-    <string name="hdr_no_recovery">The photo was saved, but highlights could not be recovered. Tap the bright area or lower EV for a retake.</string>
+    <string name="hdr_no_recovery">The photo was saved, but highlights could not be recovered. Tap the bright area to meter before a retake.</string>
     <string name="camera_rear_number">Rear %1$d</string>
     <string name="camera_change_failed">Could not change the camera or zoom. Please try again.</string>
     <string name="fusion_single_frame">Only one base-exposure frame contributed. The photo was saved without multi-frame noise reduction.</string>

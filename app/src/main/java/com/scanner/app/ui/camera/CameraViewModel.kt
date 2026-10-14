@@ -64,6 +64,8 @@ class CameraViewModel : ViewModel() {
     private val _lastOutputSize = MutableStateFlow<CapturePolicy.Size?>(null)
     val lastOutputSize = _lastOutputSize.asStateFlow()
     private val captureEvidence = CaptureEvidenceStore()
+    private var latestMetering: MeteringObservation? = null
+    private var meteringRevision = 0L
     private val focusTarget = TapFocusTarget<MeteringPoint>()
     private var previewWidth = 0
     private var previewHeight = 0
@@ -111,7 +113,7 @@ class CameraViewModel : ViewModel() {
             imageCapture = null; imageAnalysis = null; frameAnalyzer = null; cameraControl = null; cameraInfo = null
             cropTracker.reset(); _detectedQuad.value = null; _isStable.value = false
             _highResolutionActive.value = false; capturePixels = 0; zoomPending = false; evidenceAfterMs = 0
-            _captureSize.value = null; captureEvidence.clear()
+            _captureSize.value = null; captureEvidence.clear(); latestMetering = null; meteringRevision = 0
             controlsReady = false
             focusTarget.clear(); previewWidth = 0; previewHeight = 0
             cameraGeneration
@@ -137,10 +139,17 @@ class CameraViewModel : ViewModel() {
         val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
         val boost = result.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST)?.takeIf { it > 0 }
         val observed = if (time != null && time > 0 && iso != null && iso > 0) ManualExposure(time, iso, boost) else null
+        val regions = result.request.get(CaptureRequest.CONTROL_AE_REGIONS)
         val sample = CaptureEvidence(timestamp, observed, result.get(CaptureResult.CONTROL_AF_STATE),
-            result.get(CaptureResult.LENS_STATE), result.get(CaptureResult.LENS_FOCUS_DISTANCE))
+            result.get(CaptureResult.LENS_STATE), result.get(CaptureResult.LENS_FOCUS_DISTANCE),
+            result.get(CaptureResult.CONTROL_AE_STATE), result.get(CaptureResult.CONTROL_AE_LOCK),
+            result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION), regions?.size,
+            regions?.joinToString(";") { "${it.rect.left},${it.rect.top},${it.rect.right},${it.rect.bottom},${it.meteringWeight}" },
+            result.get(CaptureResult.CONTROL_AE_REGIONS)?.size)
         synchronized(evidenceLock) { if (isCameraSession(generation)) {
             captureEvidence.record(sample)
+            latestMetering = MeteringObservation(generation, ++meteringRevision,
+                android.os.SystemClock.elapsedRealtime(), sample)
         } }
     }
     fun rememberFocusPoint(point: MeteringPoint, generation: Long): Boolean {
@@ -154,34 +163,69 @@ class CameraViewModel : ViewModel() {
         if (width != previewWidth || height != previewHeight) focusTarget.clear()
         previewWidth = width; previewHeight = height
     }
-    private suspend fun focusForBurst(control: CameraControl?, info: Camera2CameraInfo?, context: Context, id: String, generation: Long): Boolean {
-        if (!isCameraSession(generation)) { CameraDiagnostics.frame(id, "shutterTargetRejected=old_session"); return false }
+    private data class MeteringActionResult(val focused: Boolean = false, val acknowledged: Boolean = false)
+    private fun meteringSnapshot(generation: Long): MeteringObservation? = synchronized(evidenceLock) {
+        latestMetering?.takeIf { isCameraSession(generation) && it.session == generation }
+    }
+    private fun meteringLog(id: String, stage: String, sample: MeteringObservation?) {
+        val frame = sample?.frame
+        CameraDiagnostics.frame(id, "$stage revision=${sample?.revision} ageMs=${sample?.let { android.os.SystemClock.elapsedRealtime() - it.observedAtMs }} timestamp=${frame?.timestamp} exposure=${frame?.exposure} ae=${frame?.aeState} lock=${frame?.aeLocked} compensation=${frame?.aeCompensation} requestRegions=${frame?.aeRegionCount} resultRegions=${frame?.aeResultRegionCount} regionSignature=${frame?.aeRegionSignature}")
+    }
+    private suspend fun settledMetering(generation: Long, needsRegions: Boolean): MeteringObservation? {
+        val boundary = meteringSnapshot(generation)?.revision ?: 0
+        return withTimeoutOrNull(BurstMeteringPolicy.WAIT_MS) {
+            var previous: MeteringObservation? = null
+            var examined = boundary
+            while (true) {
+                check(isCameraSession(generation)) { "Camera session changed during metering" }
+                val sample = meteringSnapshot(generation)
+                if (sample != null && sample.revision > examined) {
+                    if (BurstMeteringPolicy.settled(previous, sample, boundary, generation,
+                            android.os.SystemClock.elapsedRealtime(), needsRegions)) return@withTimeoutOrNull sample
+                    previous = sample; examined = sample.revision
+                }
+                delay(15)
+            }
+            @Suppress("UNREACHABLE_CODE") null
+        }
+    }
+    private suspend fun focusForBurst(control: CameraControl?, info: Camera2CameraInfo?, context: Context, id: String, generation: Long): MeteringActionResult {
+        if (!isCameraSession(generation)) { CameraDiagnostics.frame(id, "shutterTargetRejected=old_session"); return MeteringActionResult() }
         val selected = focusTarget.select(android.os.SystemClock.elapsedRealtime(), generation)
         CameraDiagnostics.frame(id, "shutterTarget=${if (selected != null) "tap" else "centre"} x=${selected?.x ?: .5f} y=${selected?.y ?: .5f} tapAgeMs=${selected?.ageMs ?: -1} session=$generation")
-        if (control == null || (info?.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) <= 0) {
-            CameraDiagnostics.frame(id, "shutterAFSupported=false"); return false
+        meteringLog(id, "beforeShutterMetering", meteringSnapshot(generation))
+        val supportsAf = (info?.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) > 0
+        val supportsAe = (info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0) > 0
+        if (control == null || !supportsAf && !supportsAe) {
+            CameraDiagnostics.frame(id, "shutterMeteringSupported=false"); return MeteringActionResult()
         }
         val point = selected?.point
             ?: SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(.5f, .5f)
-        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).disableAutoCancel().build()
+        val flags = FocusMeteringAction.FLAG_AE or if (supportsAf) FocusMeteringAction.FLAG_AF else 0
+        val action = FocusMeteringAction.Builder(point, flags).disableAutoCancel().build()
+        CameraDiagnostics.frame(id, "shutterMeteringFlags=$flags afSupported=$supportsAf aeRegionsSupported=$supportsAe")
         return withTimeoutOrNull(1500) {
-            suspendCancellableCoroutine<Boolean> { continuation ->
+            suspendCancellableCoroutine<MeteringActionResult> { continuation ->
                 try {
                     val future = control.startFocusAndMetering(action)
                     continuation.invokeOnCancellation { future.cancel(false) }
                     future.addListener({
-                        val success = runCatching { future.get().isFocusSuccessful }.getOrDefault(false)
-                        if (continuation.isActive) continuation.resume(success)
+                        val result = runCatching {
+                            val outcome = future.get()
+                            MeteringActionResult(supportsAf && outcome.isFocusSuccessful, true)
+                        }
+                            .getOrDefault(MeteringActionResult())
+                        if (continuation.isActive) continuation.resume(result)
                     }, ContextCompat.getMainExecutor(context))
-                } catch (_: Exception) { if (continuation.isActive) continuation.resume(false) }
+                } catch (_: Exception) { if (continuation.isActive) continuation.resume(MeteringActionResult()) }
             }
-        } ?: false
+        } ?: MeteringActionResult()
     }
     fun setZoom(context: Context, ratio: Float, onChanged: () -> Unit) {
         changeCameraControl(context, onChanged, geometryChange = true) { it.setZoomRatio(ratio) }
     }
-    fun setExposure(context: Context, index: Int, onChanged: () -> Unit) {
-        changeCameraControl(context, onChanged) { it.setExposureCompensationIndex(index) }
+    fun resetExposure(context: Context) {
+        changeCameraControl(context, {}) { it.setExposureCompensationIndex(0) }
     }
     private fun changeCameraControl(context: Context, onChanged: () -> Unit, geometryChange: Boolean = false,
         apply: (CameraControl) -> com.google.common.util.concurrent.ListenableFuture<*>) {
@@ -312,8 +356,14 @@ class CameraViewModel : ViewModel() {
                     encodedBytes += frame.bytes.size; frames.add(frame)
                 }
                 val info = capturedInfo?.let { Camera2CameraInfo.from(it) }
-                val focusConfirmed = focusForBurst(control, info, app, captureId, captureGeneration)
+                val meteringAction = focusForBurst(control, info, app, captureId, captureGeneration)
+                val focusConfirmed = meteringAction.focused
                 check(isCameraSession(captureGeneration)) { "Camera session changed during focus" }
+                val hasAeRegions = (info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0) > 0
+                val settled = if (meteringAction.acknowledged && hasAeRegions) settledMetering(captureGeneration, true) else null
+                val lockTargetAe = hdr && settled != null && info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+                CameraDiagnostics.frame(captureId, "shutterMeteringAcknowledged=${meteringAction.acknowledged} targetExposureSettled=${settled != null} aeLockRequested=$lockTargetAe waitBoundMs=${BurstMeteringPolicy.WAIT_MS}")
+                meteringLog(captureId, if (settled != null) "settledTargetExposure" else "targetExposureUnknown", settled ?: meteringSnapshot(captureGeneration))
                 val minimumFocus = info?.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
                 val supportsFocusOff = info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)
                     ?.contains(CaptureRequest.CONTROL_AF_MODE_OFF) == true
@@ -329,7 +379,7 @@ class CameraViewModel : ViewModel() {
                 }
                 fun baseOptions(): CaptureRequestOptions {
                     val builder = focusOptions(CaptureRequestOptions.Builder())
-                    if (info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true)
+                    if (lockTargetAe)
                         builder.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, true)
                     if (info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true)
                         builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
@@ -482,7 +532,7 @@ class CameraViewModel : ViewModel() {
         val exposure = evidence?.exposure ?: exifExposure
         Log.i("HachiCam-Burst", "tier=$tier elapsed=${android.os.SystemClock.elapsedRealtime() - start}ms rotation=${data.second} exposure=$exposure")
         if (BuildConfig.SENSITIVE_DIAGNOSTICS) {
-            val line = "tier=$tier timestamp=${data.third} sensor=${evidence?.exposure} exif=$exifExposure af=${evidence?.afState} lens=${evidence?.lensState} focusDistance=${evidence?.focusDistance}"
+            val line = "tier=$tier timestamp=${data.third} sensor=${evidence?.exposure} exif=$exifExposure af=${evidence?.afState} lens=${evidence?.lensState} focusDistance=${evidence?.focusDistance} ae=${evidence?.aeState} aeLock=${evidence?.aeLocked} compensation=${evidence?.aeCompensation} requestAeRegions=${evidence?.aeRegionCount} resultAeRegions=${evidence?.aeResultRegionCount} aeRegionSignature=${evidence?.aeRegionSignature}"
             Log.d("HachiCam-Burst", line); CameraDiagnostics.frame(captureId,line)
         }
         return Frame(data.first, data.second, tier, exposure, exifExposure, evidence)
@@ -527,6 +577,12 @@ class CameraViewModel : ViewModel() {
                         .put("tier", frame.tier).put("rotation", frame.rotation)
                         .put("sensorTimestamp", frame.evidence?.timestamp ?: JSONObject.NULL)
                         .put("sensorExposure", frame.evidence?.exposure?.toString() ?: JSONObject.NULL)
+                        .put("aeState", frame.evidence?.aeState ?: JSONObject.NULL)
+                        .put("aeLocked", frame.evidence?.aeLocked ?: JSONObject.NULL)
+                        .put("aeCompensation", frame.evidence?.aeCompensation ?: JSONObject.NULL)
+                        .put("requestAeRegionCount", frame.evidence?.aeRegionCount ?: JSONObject.NULL)
+                        .put("requestAeRegionSignature", frame.evidence?.aeRegionSignature ?: JSONObject.NULL)
+                        .put("resultAeRegionCount", frame.evidence?.aeResultRegionCount ?: JSONObject.NULL)
                         .put("exifExposure", frame.exifExposure?.toString() ?: JSONObject.NULL)
                         .put("afState", frame.evidence?.afState ?: JSONObject.NULL)
                         .put("lensState", frame.evidence?.lensState ?: JSONObject.NULL)

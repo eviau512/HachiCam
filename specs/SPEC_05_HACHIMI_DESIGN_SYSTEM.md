@@ -1,6 +1,6 @@
 # Specification 05: Hachimi Design System and User Experience
 
-> Status: Authoritative. Revised 2026-10-13.
+> Status: Authoritative. Revised 2026-10-14.
 > Language: English.
 >
 > Quality revision contract: [2026-10-12 follow-up](research/QUALITY_REVISION_2026-10-12.md). Experimental implementation; numerical tuning and physical-device acceptance remain unverified.
@@ -41,9 +41,12 @@ experimental native-high limits in settings; Full HDR alone promises no 50 MP.
 rc7 groups metadata-derived views rather than numbering every system endpoint.
 Use circular real-view selectors containing 1x/0.7x/etc from intrinsic ratios;
 do not assert a hardware count or show an additional digital zoom preset row.
-The preview remains SDR without a permanent explanatory caption. A supported EV
-menu offers -2, -1, 0, +1 EV (clamped/deduplicated to the driver range).
-Exposure changes are disabled during capture and only acknowledged after success.
+The preview remains SDR without a permanent explanatory caption. The user's rc12
+request supersedes the rc7 manual exposure aid: remove the EV button and menu,
+including advice to adjust EV. Retain only the circular real-view choices in that
+row. Supported compensation resets to zero on bind; target AF/AE and bounded
+exposure settling follow SPEC_01. This does not remove HDR brackets or add
+technical metering captions to the viewfinder.
 Text capsules, menus and progress panels follow the window orientation; rotating
 long pills with a graphics transform must not make them overlap controls. Only
 bounded square icons may rotate to follow physical device orientation.

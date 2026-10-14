@@ -1,6 +1,6 @@
 # Specification 01: Camera Subsystem and Capture Pipeline
 
-> Status: Authoritative. Revised 2026-10-13.
+> Status: Authoritative. Revised 2026-10-14.
 > Language: English.
 
 ## 1. Modes and achieved outcome
@@ -58,10 +58,10 @@ Separate lens/view selection from supported logical/digital zoom controls.
 Record endpoint characteristics and grouping in test builds only.
 
 The live preview is a single-exposure SDR stream; Full HDR describes post-capture
-processing. Provide supported exposure compensation with an explicit EV value,
-reset on lens rebind, and lock changes during capture. Apply only after the
-control future succeeds. This is a manual exposure aid, not live HDR or an
-automatic clipping/readiness detector.
+processing. The user's rc12 revision removes the manual EV button/menu. Reset
+supported compensation to zero on rebind, acknowledging failure, and retain
+achieved compensation in test diagnostics. Automatic metering at the selected
+target replaces the manual aid; zero compensation does not mean constant exposure.
 
 The [2026-10-13 revision](research/NOISE_REVISION_2026-10-13.md) additionally
 requires supported back-camera selection and logical zoom controls, with
@@ -116,6 +116,41 @@ Fixed-focus/missing AF support remains unknown, with manual capture available.
 Capture snapshots its control/info under the session identity; an obsolete
 session cannot refocus or clean up the subsequently bound camera. Actual device
 target selection and optical sharpness still need verification.
+
+### rc12 target metering continuity (specified before implementation; implemented, device checks pending)
+
+The paired 19:50 rc11 slide sample reused the tap (age 1338 ms), held focus and
+recorded EV compensation zero, yet its base JPEG already has weak screen detail.
+Code and the installed CameraX 1.4.1 control confirm that a new AF-only action
+replaces AE regions with an empty set. Locking AE afterward can freeze a different
+metering result. Previous diagnostics do not establish the exact preview-to-base
+exposure increase; this is a confirmed control discontinuity, not a measured EV jump.
+
+At shutter retain both AF and AE at the same stored metering point (or centre when
+invalid), with auto-cancel disabled through acquisition. Fixed-focus cameras may
+still meter AE; unsupported modes remain unknown rather than blocking manual
+capture. Separate action acknowledgment from optical AF success. Keep the existing
+1500 ms action bound, then wait at most 750 ms for two new, timestamp-distinct
+results after the action acknowledgment, in the same active session. Both must be
+observed within 500 ms, AE CONVERGED with no pre-existing AE lock, and have positive
+finite exposure products within 0.15 stops, with consistent boost availability.
+For cameras with AE regions, require nonempty identical actual request-region
+signatures on both observations. Lack of region support cannot certify metering
+at a tap and uses the unknown fallback. These freshness/stability values are experimental.
+
+Request burst AE lock only when that measured target exposure settled and the
+device advertises lock support. Otherwise keep target AE active without claiming
+a successful lock, record bounded fallback, and permit capture. Options futures
+still require acknowledgment; result AE state/lock is evidence of execution.
+Record before-action, settled/timeout, lock request and actual first JPEG AE state,
+compensation, region count/signature and ISO/time/boost under the capture identity.
+Never use repeating preview evidence as JPEG exposure evidence; exact timestamp
+matching and first-JPEG focus hold remain mandatory. Session invalidation/cancel
+must restore owned controls without operating a new camera.
+
+This fixes control continuity, not emissive-screen tone response, flicker, optical
+bloom, target tracking or all-source clipping. Verify the same device with a small
+bright slide on a dark surround; compare preview, first base and final result.
 
 **Required / not implemented as an integrated readiness profile:** separately
 evaluate usable document boundary, focus/sharpness, motion/blur risk, clipping

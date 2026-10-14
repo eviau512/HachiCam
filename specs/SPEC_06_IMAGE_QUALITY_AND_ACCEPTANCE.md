@@ -140,7 +140,8 @@ rc9 follow-up ([contract](research/NIGHT_HDR_REVISION_2026-10-14.md)):
   survives in normal/streaming paths; existing all-clipped, occlusion, midtone,
   noise, phase and crop protections pass. Real-device quality remains pending.
 - UI-08: no separate zoom presets or capture/output/native/SDR-HDR captions in
-  the viewfinder; circular real-view selectors and supported EV remain usable.
+  the viewfinder; circular real-view selectors remain usable. rc12 removes the
+  EV button/menu per the user's subsequent request.
 - DIAG-01: bounded latest completed burst and matching manifest, atomic replacement
   and ZIP export, original-photo label, previous snapshot survives failure,
   and release retains/exports no input photos. The 2026-10-14 10:07 diagnostic ZIP
@@ -257,8 +258,8 @@ Additional rc7 checks ([contract](research/CAMERA_HDR_REVISION_2026-10-13.md)):
   with useful short exposure and a small supported bright region; require actual
   recovered pixels, retained midtones and no false recovery for ignored exposure,
   all-clipped/flat evidence or displaced/occluded content. Record pixel coverage.
-- UI-05: SDR preview and HDR achieved outcome are distinguishable; exposure menu
-  respects support/range/busy state; long status labels cannot overlap shutter or
+- UI-05: SDR preview and HDR achieved outcome are distinguishable in diagnostics;
+  rc12 removes the manual EV menu and its advice; long status labels cannot overlap shutter or
   view controls in either window orientation or with OS rotation locked.
 
 These are acceptance requirements, not claims of physical-device verification.
@@ -276,6 +277,28 @@ Additional rc5 boundary checks ([contract](research/BOUNDARY_REVISION_2026-10-12
 | SCAN-06 | P0 | Stacked sheets/clip/curl/right edge outside preview: show supported partial suggestion or manual guidance; never apply an extrapolated quad as an automatic crop | Experimental native fixtures, screenshot tuning and tracker tests pass; capture/import/re-detect guards inspected; device UI/crop pending; SPEC_03/05 |
 | SCAN-07 | P0 | Desk-sized hull, uniform field and opposing side polarity: reject unsupported document proposals; complete blank/dark/receipt pages remain eligible | Production C++ synthetic fixtures pass; mixed-background recall and field accuracy uncalibrated; SPEC_03 |
 | SCAN-08 | P1 | Test logs separate raw miss, tracker acquisition/dropout, partial/complete and shutter fallback with bounded output | Implemented behind test-build diagnostics flag; debug/release compile/privacy tests pass; rc5 device log pending; SPEC_03 |
+
+rc12 target-exposure acceptance (specified before implementation; helper/build checks passed):
+
+- CAP-10 (P0, implemented rc12; physical-device acceptance pending): shutter AF/AE keeps the selected point and disables auto-cancel;
+  fixed-focus AE remains usable. AF success does not imply AE convergence. Require
+  the fresh paired metadata contract in SPEC_01 before requesting AE lock; stale,
+  changed-session/region, searching, already-locked and varying exposure/boost
+  observations cannot certify settled target metering. Timeout remains bounded
+  and preserves target regions without a false success claim.
+- DIAG-03: paired evidence separates before-action preview, acknowledgment,
+  convergence/timeout, lock requested, and exactly matched JPEG AE state/lock/
+  compensation/regions/exposure. Null remains unknown. Pure metadata tests do not
+  certify device AE regions, preview brightness, flicker or optical readiness.
+- UI-08: no EV button/menu or lower-EV retake advice in either UI flavor/language;
+  real circular lens controls, HDR brackets and capture-time switching guards remain.
+- PHOTO-14 (P0, research/required): same-device small bright slide/dark background
+  ROI comparisons for base, short and final detail/color/clipping. Whole-frame
+  JPEG response gain must not be treated as calibrated screen radiometry. Record
+  target short support and source limits before any response-model change; do not
+  lower alignment/occlusion gates or force sharpening solely to accept these frames.
+  The rc11 sample's source/short comparison does not establish a validated new
+  tone model. The other two user-accepted scenes are regression references.
 
 For each executed case record fixture revision, application build, device/camera,
 recipe and algorithm version, observed metadata, expected outcome, measured

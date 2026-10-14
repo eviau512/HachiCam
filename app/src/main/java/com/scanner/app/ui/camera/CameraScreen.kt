@@ -107,10 +107,6 @@ fun CameraScreen(
     var selectedBackId by rememberSaveable { mutableStateOf<String?>(null) }
     var backChoices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var boundBackId by remember { mutableStateOf<String?>(null) }
-    var exposureOptions by remember { mutableStateOf<List<Int>>(emptyList()) }
-    var exposureStep by remember { mutableFloatStateOf(0f) }
-    var exposureIndex by remember { mutableIntStateOf(0) }
-    var exposureMenu by remember { mutableStateOf(false) }
     var highSuppressed by remember(highRequested, selectedBackId) { mutableStateOf(false) }
     val isStable by viewModel.isStable.collectAsState()
     val isCapturing by viewModel.isCapturing.collectAsState()
@@ -453,13 +449,8 @@ fun CameraScreen(
                         viewModel.controlsBound(generation)
                         boundBackId = selectedView.id
                         val exposure = camera.cameraInfo.exposureState
-                        exposureStep = exposure.exposureCompensationStep.toFloat()
-                        exposureOptions = if (exposure.isExposureCompensationSupported)
-                            CameraChoicePolicy.exposureIndices(exposureStep, exposure.exposureCompensationRange.lower, exposure.exposureCompensationRange.upper) else emptyList()
-                        exposureIndex = exposure.exposureCompensationIndex
-                        exposureMenu = false
-                        if (exposure.isExposureCompensationSupported && exposureIndex != 0)
-                            viewModel.setExposure(ctx, 0) { exposureIndex = 0 }
+                        if (exposure.isExposureCompensationSupported && exposure.exposureCompensationIndex != 0)
+                            viewModel.resetExposure(ctx)
                         imageCapture.resolutionInfo?.resolution?.let { viewModel.negotiatedCapture(it.width, it.height) }
                         camera.cameraControl.enableTorch(isTorchOn)
                     } catch (e: Exception) {
@@ -670,7 +661,7 @@ fun CameraScreen(
                 .padding(bottom = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (backChoices.isNotEmpty() || exposureOptions.isNotEmpty()) {
+            if (backChoices.isNotEmpty()) {
                 Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     backChoices.forEach { (id, label) ->
@@ -682,17 +673,6 @@ fun CameraScreen(
                             Box(contentAlignment = Alignment.Center) {
                                 Text(label, color = if (chosen) Color.Black else Color.White,
                                     fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-                    }
-                    if (exposureOptions.isNotEmpty()) Box {
-                        val ev = exposureIndex * exposureStep
-                        AssistChip(enabled = !isCapturing, onClick = { exposureMenu = true },
-                            label = { Text(String.format(java.util.Locale.US, "EV %+.1f", ev)) })
-                        DropdownMenu(expanded = exposureMenu && !isCapturing, onDismissRequest = { exposureMenu = false }) {
-                            exposureOptions.forEach { index ->
-                                DropdownMenuItem(text = { Text(String.format(java.util.Locale.US, "EV %+.1f", index * exposureStep)) },
-                                    onClick = { exposureMenu = false; viewModel.setExposure(context, index) { exposureIndex = index } })
                             }
                         }
                     }

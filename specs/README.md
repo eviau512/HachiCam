@@ -20,7 +20,13 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Latest implementation: [rc11 regional reconstruction and focus](reports/RC11_REGIONAL_RECONSTRUCTION_2026-10-14.zh-CN.md)
+Latest follow-up: [rc12 shutter metering continuity](reports/RC12_TARGET_METERING_2026-10-14.zh-CN.md)
+addresses the paired bright-slide capture by retaining target AE with shutter AF,
+bounded fresh exposure settling and separately recorded actual JPEG AE evidence.
+Manual EV is removed per the user's request. The rc11 native fusion is unchanged;
+device brightness/detail acceptance and screen-response research remain pending.
+
+Previous implementation: [rc11 regional reconstruction and focus](reports/RC11_REGIONAL_RECONSTRUCTION_2026-10-14.zh-CN.md)
 replaces whole-image SR authority with distributed local evidence, bounded
 observation-driven correction, protected native HDR and persistent shutter tap
 intent. Structured decisions and model parameters accompany test-only paired

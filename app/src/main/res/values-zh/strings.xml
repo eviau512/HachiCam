@@ -121,7 +121,7 @@
     <string name="camera_tele_view">远摄 %1$.1f×</string>
     <string name="camera_zoom">变焦</string>
     <string name="hdr_preview_hint">SDR 取景 · 拍摄后进行 HDR 合成</string>
-    <string name="hdr_no_recovery">照片已保存，但本次未恢复高光。可点击亮部测光或降低 EV 后重拍。</string>
+    <string name="hdr_no_recovery">照片已保存，但本次未恢复高光。可点击亮部测光后重拍。</string>
     <string name="camera_rear_number">后置 %1$d</string>
     <string name="camera_change_failed">摄像头或倍率切换失败，请重试。</string>
     <string name="fusion_single_frame">仅一张基础曝光参与，照片已保存；本次未进行多帧降噪。</string>

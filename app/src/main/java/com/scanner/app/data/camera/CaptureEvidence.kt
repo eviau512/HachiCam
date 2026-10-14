@@ -1,7 +1,10 @@
 package com.scanner.app.data.camera
 
 data class CaptureEvidence(val timestamp: Long, val exposure: ManualExposure?,
-    val afState: Int?, val lensState: Int?, val focusDistance: Float?)
+    val afState: Int?, val lensState: Int?, val focusDistance: Float?,
+    val aeState: Int? = null, val aeLocked: Boolean? = null, val aeCompensation: Int? = null,
+    val aeRegionCount: Int? = null, val aeRegionSignature: String? = null,
+    val aeResultRegionCount: Int? = null)
 
 /** Exact timestamp matching; no nearest-frame substitution or unbounded history. */
 class CaptureEvidenceStore(private val capacity: Int = 96) {

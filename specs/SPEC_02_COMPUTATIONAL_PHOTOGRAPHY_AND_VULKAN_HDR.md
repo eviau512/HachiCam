@@ -193,6 +193,18 @@ and allocations before processing.
 
 ## 5. Highlight, noise and tone behavior
 
+**rc12 screen follow-up, required/research:** the paired 19:50 slide has useful
+short-frame text but only about 0.000843% recovered native pixels. A global JPEG
+response estimate of 64.55 versus metadata exposure ratio 5.66 is not automatically
+an invalid request; ISP response is unknown. Screen-region probes yield different
+gains and do not establish that another single scalar fixes alignment/support.
+SPEC_01 first repairs target AE continuity at acquisition. Retain the rc11 fusion
+guards until an independently validated local/response model passes PHOTO-14;
+do not substitute blanket darkening, copied unaligned short frames or sharpening.
+The other two new scenes are accepted provisionally by the user and remain
+regression references. Output MP/whole-image reconstruction coverage cannot
+certify small distant screen text.
+
 The [night/screen revision](research/NIGHT_HDR_REVISION_2026-10-14.md) separates
 clipped-target radiometry from independently observed neighboring geometry. Keep
 unclipped outer-boundary samples; a proposed blanket erosion failed the existing
