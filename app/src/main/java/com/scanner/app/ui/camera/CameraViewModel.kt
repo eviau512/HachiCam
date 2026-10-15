@@ -695,6 +695,8 @@ class CameraViewModel : ViewModel() {
                 .put("contrastRangeFloor", 12).put("noiseSigmaFactor", 6).put("patchHalo", 8)
                 .put("maximumPatchObservations", 50_000).put("maximumSourceSearch", 128)
             srRecord.put("registrationParameterVersion","masked-ecc-edges-v1").put("optimizerMargin",10)
+            srRecord.put("gpuFitParameterVersion","ecc-return-parity-v2-tiled-resident")
+                .put("highlightScheduling",if(hdr && !useStreaming) "native-demand-v1" else "not-used")
             srRecord.put("nativePerformance",report.performance?.let { perf ->
                 JSONObject().put("schema",1).put("totalMs",perf.totalMs)
                     .put("globalRegistrationMs",perf.globalRegistrationMs).put("localRegistrationMs",perf.localRegistrationMs)

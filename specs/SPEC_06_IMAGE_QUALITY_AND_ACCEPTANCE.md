@@ -399,6 +399,10 @@ First support-map implementation acceptance (specified before implementation):
   must describe the actual exported selection. Worker-idle waiting includes
   snapshot completion, is cancellable/bounded and does not export an older group
   as a newer failed or still-processing capture.
+  rc14 layout acceptance: latest and history use `captures/<captureId>/` only,
+  with no `capture/` alias or duplicate ID; newest duplicate wins. Check a
+  repeated-ID cache, single-group export and concurrent replacement, keep
+  input/manifest/final pairing, and verify footer latest ID and actual paths.
 - HDR-DIAG-01: a single changed pixel with no clipped baseline cannot receive a
   partial-recovery label; weak, zero/unknown and substantial changes remain
   distinct. Versioned appended post-HDR fractions validate finite [0,1] values;
@@ -406,12 +410,33 @@ First support-map implementation acceptance (specified before implementation):
   streaming native byte-grid clipping against the returned scale=1 image,
   including all-clipped/no-usable-short evidence. This diagnostic is not a new
   tone model or an HDR image-quality pass.
+- PERF-HDR-01 (2026-10-15, required before implementation): derive demand from
+  the actual native merged byte image (>230 in any channel). Retain all nodes
+  the existing highlight lookup could consult, including conflicting neighbors
+  and non-multiple edge centres. Compare exhaustive/pruned offsets and gates
+  at demanded pixels, and run full-node admission for a nonzero demanded support
+  count below 1024. A gate count outside demand is not a certified lower bound.
+  Empty demand skips short work without changing output; sparse, single-channel,
+  clipped-hole, occluded and border fixtures preserve recovery/rejection and
+  actual metrics. Frozen ordinary CPU replays must remain byte-identical with
+  the exhaustive contract; streaming remains unchanged. Record retained-node
+  work and full-stage timing; no shutter-speed claim from host timings alone.
 - GPU-FIT-01: actual shader known shifts, non-square/edge patches, masks, flat
   and singular/periodic/corrupted cases must expose usable/failed proposals and
   CPU fallback separately. Compare <=0.05 px and <=0.002 correlation only where
   both optimizers are usable; no failed GPU proposal may silently remove a valid
   CPU fit. Repeat current full physical detail gates and reconstruction regression,
   and benchmark complete batches rather than dispatch alone.
+- GPU-FIT-02 (2026-10-15, required before implementation): CPU and GPU use the
+  same final-update return convention and unchanged convergence/numerical limits.
+  Include textured/periodic, masked and non-monotonic/iteration-limited patches,
+  not just clean shifted noise. Optimizer correlation remains a diagnostic;
+  actual returned transforms still pass the independent physical detail checks.
+  Report real-batch conformance and complete CPU/GPU costs before activation;
+  replacing best-pose selection must not hide failed or CPU-only workloads.
+  Iteration-limited/missing GPU fits complete on CPU; every successful GPU fit
+  still requires <=0.05 px /0.002 agreement. Test <=16-patch mixed batches and
+  include CPU completion of missing fits in calibration cost and fallback counts.
 - LIFE-RECOVERY-01: restore page order and committed recipe; truncated metadata
   uses the previous validated checkpoint, traversal/oversized/nonfinite metadata
   is rejected. Missing/corrupt masters become FAILED; incomplete captures never

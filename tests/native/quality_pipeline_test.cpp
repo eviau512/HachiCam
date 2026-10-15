@@ -29,9 +29,45 @@ static double error(const cv::Mat& a, const cv::Mat& b, const cv::Mat& mask) {
     difference.convertTo(difference, CV_32F); difference = difference.mul(difference);
     return cv::mean(difference, mask)[0];
 }
+static void runHighlightDemandTests() {
+    cv::Mat native(41,63,CV_8UC3,cv::Scalar::all(230));
+    native.at<cv::Vec3b>(4,5)={231,20,20};
+    const auto demand=fusion::highlightDemand(native,{17,23,63,41},{777,533});
+    check(cv::countNonZero(demand)==1 && demand.at<uchar>(27,22),"HDR demand uses actual rounded byte channels and crop coordinates");
+    cv::Mat requested=cv::Mat::zeros(533,777,CV_8U);
+    for(auto p:{cv::Point(0,0),cv::Point(128,128),cv::Point(256,256),cv::Point(776,532)})
+        cv::circle(requested,p,9,cv::Scalar(255),cv::FILLED);
+    fusion::LocalRegistration full;full.domain=requested.size();full.patchSupport=true;
+    const auto selected=fusion::highlightFitNodes(requested,full.spacing);
+    full.field.create(selected.size(),CV_32FC3);
+    for(int y=0;y<full.field.rows;++y)for(int x=0;x<full.field.cols;++x)
+        full.field.at<cv::Vec3f>(y,x)={float(x%3)*.9f,float(y%3)*.8f,.95f};
+    auto pruned=full;pruned.field=full.field.clone();
+    for(int y=0;y<selected.rows;++y)for(int x=0;x<selected.cols;++x)
+        if(!selected.at<uchar>(y,x))pruned.field.at<cv::Vec3f>(y,x)={0,0,0};
+    int compared=0;
+    for(int y=0;y<requested.rows;++y)for(int x=0;x<requested.cols;++x)if(requested.at<uchar>(y,x)) {
+        cv::Point2d a,b;float ca=0,cb=0;
+        const bool old=full.offset(x,y,a,ca),now=pruned.offset(x,y,b,cb);
+        check(old==now,"Pruning must preserve conflicting neighbor rejection, including clamped edge nodes");
+        if(old)check(cv::norm(a-b)<1e-12 && ca==cb,"Pruning must preserve selected demanded offsets");
+        ++compared;
+    }
+    check(compared>300,"Demand footprint regression needs meaningful border and conflict coverage");
+    const auto chart=textChart();cv::Mat gray;cv::cvtColor(chart,gray,cv::COLOR_BGR2GRAY);
+    const auto exhaustive=fusion::registerLocal(gray,gray,true);
+    cv::Mat small=cv::Mat::zeros(gray.size(),CV_8U);small(cv::Rect(250,250,10,10)).setTo(255);
+    const auto fallback=fusion::registerLocal(gray,gray,true,false,cv::Mat(),nullptr,small);
+    check(cv::norm(exhaustive.field,fallback.field,cv::NORM_INF)==0 &&
+        cv::norm(exhaustive.gate,fallback.gate,cv::NORM_INF)==0,"Small supported demand must retain exhaustive plate admission");
+    const auto none=fusion::registerLocal(gray,gray,true,false,cv::Mat(),nullptr,cv::Mat::zeros(gray.size(),CV_8U));
+    check(cv::countNonZero(none.gate)==0,"Empty highlight demand cannot perform or invent recovery");
+    std::cout<<"HDR demand footprint/border/conflict/admission/empty checks PASS\n";
+}
 int runTests() {
     std::cout << std::unitbuf;
     cv::setNumThreads(2);
+    runHighlightDemandTests();
     auto chart = textChart();
     cv::Mat blurred; cv::GaussianBlur(chart, blurred, cv::Size(0, 0), 1.8);
     check(fusion::referenceQuality(chart) > fusion::referenceQuality(blurred) * 2, "Sharp reference must outrank blurred arrival");

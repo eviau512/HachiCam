@@ -2,6 +2,7 @@
 #include "local_registration.h"
 #include <cmath>
 #include <string>
+#include <array>
 
 namespace fusion {
 inline cv::Mat localFitMask(const cv::Mat& raw,const cv::Mat& validity,const cv::Rect& patch) {
@@ -32,10 +33,12 @@ bool gpuLocalSupport(const cv::Mat& ref, const cv::Mat& src, const LocalRegistra
                      cv::Mat& output, std::string& reason);
 bool gpuPatchFits(const cv::Mat& refAlign,const cv::Mat& srcAlign,const cv::Mat& rawSrc,
     const cv::Mat& validity,const std::vector<cv::Rect>& patches,bool highlight,
-    std::vector<cv::Vec4f>& fits,std::string& reason);
+    std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs=0);
 bool gpuFittingAvailable(size_t sourcePixels,bool highlight);
 #ifdef HACHICAM_GPU_TEST_CONTROL
 struct GpuTestState { bool healthy=false,inFlight=false; unsigned long long allocation=0; };
 GpuTestState gpuTestState();
+bool gpuTestPreparedPlanes(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,
+    const cv::Mat& validity,const std::vector<cv::Rect>& patches,std::vector<std::array<cv::Mat,5>>& planes);
 #endif
 }

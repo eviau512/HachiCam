@@ -76,7 +76,7 @@ object LogCollector {
                     appendLine("Latest requested capture: $latestRequested; latest retained final capture: $latestRetained")
                     if(latestRequested.isNotBlank() && latestRetained!=latestRequested)
                         appendLine("Latest attempt has no retained complete final diagnostic; any included images belong to earlier completed captures.")
-                    appendLine("For the exported image set, use capture/manifest.json and capture/diagnostics.txt as its matching evidence.")
+                    appendLine("Use export-timing.json for the latest capture ID and ordered groups; each group's matching evidence is in captures/<captureId>/manifest.json and diagnostics.txt.")
                     appendLine("--- App process log ---")
                     appendLine(logs.first)
                     if (logs.second!=null) {

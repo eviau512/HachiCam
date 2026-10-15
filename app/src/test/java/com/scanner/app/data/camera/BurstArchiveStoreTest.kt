@@ -8,6 +8,12 @@ import java.nio.file.Files
 import java.util.zip.ZipFile
 
 class BurstArchiveStoreTest {
+    private fun latestEntry(zip: ZipFile, name: String): java.util.zip.ZipEntry {
+        val footer=zip.getInputStream(zip.getEntry("export-timing.json")).reader().readText()
+        val id=Regex("\"latestCaptureId\":\"([^\"]+)\"").find(footer)!!.groupValues[1]
+        return zip.getEntry("captures/$id/$name") ?: error("Missing latest entry")
+    }
+
     @Test fun disabledStoreNeverCreatesOrExportsPhotoFiles() {
         val base = Files.createTempDirectory("burst-disabled").toFile()
         try {
@@ -29,9 +35,9 @@ class BurstArchiveStoreTest {
             val exported = store.export(log,File(base,"capture.zip"))!!
             ZipFile(exported).use { zip ->
                 assertEquals(7,zip.size())
-                assertEquals("latest",zip.getInputStream(zip.getEntry("capture/manifest.json")).reader().readText())
-                assertArrayEquals(byteArrayOf(3,4),zip.getInputStream(zip.getEntry("capture/00-tier0.jpg")).readBytes())
-                assertArrayEquals(byteArrayOf(5,6),zip.getInputStream(zip.getEntry("capture/01-tier2.jpg")).readBytes())
+                assertEquals("latest",zip.getInputStream(latestEntry(zip,"manifest.json")).reader().readText())
+                assertArrayEquals(byteArrayOf(3,4),zip.getInputStream(latestEntry(zip,"00-tier0.jpg")).readBytes())
+                assertArrayEquals(byteArrayOf(5,6),zip.getInputStream(latestEntry(zip,"01-tier2.jpg")).readBytes())
             }
         } finally { base.deleteRecursively() }
     }
@@ -57,7 +63,7 @@ class BurstArchiveStoreTest {
             assertTrue(store.replace(listOf("00-tier0.jpg" to byteArrayOf(1)),fused,"A manifest","CaptureId=A\nA cleanup and result"))
             val live=File(base,"live.txt").apply { writeText("Latest started=B") }
             ZipFile(store.export(live,File(base,"export.zip"))!!).use { zip ->
-                assertTrue(zip.getInputStream(zip.getEntry("capture/diagnostics.txt")).reader().readText().startsWith("CaptureId=A\nA cleanup and result"))
+                assertTrue(zip.getInputStream(latestEntry(zip,"diagnostics.txt")).reader().readText().startsWith("CaptureId=A\nA cleanup and result"))
                 assertEquals("Latest started=B",zip.getInputStream(zip.getEntry("live.txt")).reader().readText())
             }
         } finally { base.deleteRecursively() }
@@ -76,13 +82,39 @@ class BurstArchiveStoreTest {
             ZipFile(store.export(log,File(base,"four.zip"),includeHistory=true)!!).use { zip ->
                 val inputs=zip.entries().asSequence().filter { it.name.endsWith("00-tier0.jpg") }.toList()
                 assertEquals(4,inputs.size)
+                assertFalse(zip.entries().asSequence().any { it.name.startsWith("capture/") })
+                assertEquals(4,inputs.map { it.name.substringBeforeLast('/') }.distinct().size)
                 assertEquals(setOf(2,3,4,5),inputs.map { zip.getInputStream(it).readBytes().single().toInt() }.toSet())
-                assertEquals("result 5",zip.getInputStream(zip.getEntry("capture/fused.jpg")).reader().readText())
+                assertEquals("result 5",zip.getInputStream(latestEntry(zip,"fused.jpg")).reader().readText())
                 val footer=zip.getInputStream(zip.getEntry("export-timing.json")).reader().readText()
                 assertTrue(footer.contains("\"groupCount\":4"))
                 assertTrue(footer.contains("\"snapshotLockWaitMs\""))
             }
             assertEquals(3,File(root,"history").listFiles()!!.size)
+        } finally { base.deleteRecursively() }
+    }
+    @Test fun repeatedCaptureIdsExportOnlyNewestCommittedPayload() {
+        val base=Files.createTempDirectory("capture-dedup").toFile()
+        try {
+            val root=File(base,"archive");val store=BurstArchiveStore(root,true)
+            val fused=File(base,"fused.jpg")
+            val first="00000000-0000-0000-0000-000000000001"
+            val second="00000000-0000-0000-0000-000000000002"
+            for((id,value) in listOf(first to "old",second to "other",first to "new")) {
+                fused.writeText(value)
+                assertTrue(store.replace(listOf("00-tier0.jpg" to value.toByteArray()),fused,"{\"captureId\":\"$id\"}"))
+            }
+            val log=File(base,"live.txt").apply { writeText("context") }
+            ZipFile(store.export(log,File(base,"export.zip"),includeHistory=true)!!).use { zip ->
+                val inputs=zip.entries().asSequence().filter { it.name.endsWith("00-tier0.jpg") }.toList()
+                assertEquals(2,inputs.size)
+                assertEquals("new",zip.getInputStream(zip.getEntry("captures/$first/fused.jpg")).reader().readText())
+                val footer=zip.getInputStream(zip.getEntry("export-timing.json")).reader().readText()
+                assertTrue(footer.contains("\"latestCaptureId\":\"$first\""))
+                assertTrue(footer.contains("\"schema\":2"))
+                assertFalse(zip.entries().asSequence().any { it.name.startsWith("capture/") })
+            }
+            assertEquals(1,File(root,"history").listFiles()!!.size)
         } finally { base.deleteRecursively() }
     }
     @Test fun byteEvictionAndFailedExportKeepLatestCompletedSnapshot() {
@@ -105,7 +137,7 @@ class BurstArchiveStoreTest {
             try { store.export(log,blocked);fail("Directory exported over") } catch(_:Exception){}
             assertEquals("newest",File(root,"current/manifest.json").readText())
             ZipFile(store.export(log,File(base,"valid.zip"),includeHistory=true)!!).use { zip ->
-                assertEquals("newest",zip.getInputStream(zip.getEntry("capture/manifest.json")).reader().readText())
+                assertEquals("newest",zip.getInputStream(latestEntry(zip,"manifest.json")).reader().readText())
             }
         } finally { base.deleteRecursively() }
     }
@@ -121,9 +153,9 @@ class BurstArchiveStoreTest {
             val error=java.util.concurrent.atomic.AtomicReference<Throwable?>()
             val writer=Thread { try { for(n in 1..8)replace(n) } catch(t:Throwable){error.set(t)} }.apply { start() }
             for(n in 1..8)ZipFile(store.export(log,File(base,"export-$n.zip"),includeHistory=true)!!).use { zip ->
-                val manifest=zip.getInputStream(zip.getEntry("capture/manifest.json")).reader().readText()
-                assertEquals(manifest,zip.getInputStream(zip.getEntry("capture/00-tier0.jpg")).reader().readText())
-                assertEquals(manifest,zip.getInputStream(zip.getEntry("capture/fused.jpg")).reader().readText())
+                val manifest=zip.getInputStream(latestEntry(zip,"manifest.json")).reader().readText()
+                assertEquals(manifest,zip.getInputStream(latestEntry(zip,"00-tier0.jpg")).reader().readText())
+                assertEquals(manifest,zip.getInputStream(latestEntry(zip,"fused.jpg")).reader().readText())
             }
             writer.join();error.get()?.let { throw it }
         } finally { base.deleteRecursively() }

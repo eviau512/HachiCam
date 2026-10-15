@@ -10,7 +10,8 @@
 ## 1. Scope and superseded claims
 
 The current capture pipeline consumes ISP processed JPEG frames, not RAW sensor
-samples. It performs CPU processing. Experimental multi-frame reconstruction and
+samples. The CPU pipeline has experimental Vulkan registration primitives in
+test builds; HDR/reconstruction are not a complete GPU pipeline. Experimental multi-frame reconstruction and
 highlight recovery must be evaluated independently of output pixel count.
 
 This revision supersedes the conflicting historical Mertens, fixed 50 MP,
@@ -321,6 +322,49 @@ Neither the label nor a global clipping reduction establishes readable screen
 text or restored lamp shape. Keep the requested Full HDR mode separate from the
 achieved outcome and preserve reference white balance.
 
+### Demand-bounded highlight registration (2026-10-15; rc14 implementation, device acceptance pending)
+
+The rc13 16:19 screen capture records 26.265 s native processing, including
+15.284 s local registration. Short plates fit the complete grid although HDR
+consumes only native-merge pixels with any channel >230. Preserve the existing
+pixel formula, physical correspondence gates and plate admission requirements.
+This is a scheduling optimization, not a new tone model or a relaxed HDR gate.
+
+For the ordinary in-memory path, finish base registration and native-size
+denoising before evaluating short plates. Freeze the existing base crop and
+derive a reference-coordinate byte demand mask from the actual rounded native
+merge, with any channel >230; do not substitute luma, reference-only clipping,
+an estimated screen rectangle or output megapixels. The mask must not become a
+geometry-validity mask or remove unclipped context from the fitting patches.
+
+Retain every local node that the existing highlight offset lookup can consult
+at any demanded pixel, including conflicting neighboring nodes and clamped
+edge-node centres. The current footprint is <=140 source pixels per axis; keep
+the existing nearest-node selection and 1.5-pixel disagreement rejection. Fit
+each retained node using its full original patch, masks, noise and thresholds.
+The bounded GPU proposal path remains subject to existing numerical/physical
+checks and CPU fallback. No missing conflict node may turn rejection into
+acceptance. Unrequested nodes can remain unavailable.
+
+A pruned field's gate is a lower bound on the complete gate only at demanded
+pixels (removing conflicts elsewhere need not be monotonic). For the existing
+>=1024-pixel plate admission, count only demanded supported pixels as a certified
+lower bound: >=1024 proves admission; zero means the plate cannot affect the
+output. For 1..1023 supported demanded pixels, run the original full-node path
+to decide admission. Never drop a useful small target solely because pruning
+reduced whole-image coverage. Record retained/total nodes and exhaustive fallback.
+
+Do not enable pruning in the separate streaming/native-high path until its
+loading, crop, ownership and demand propagation receive independent acceptance.
+Account for overlapping native byte output and demand-mask lifetime under the
+shared memory reservation. Release demand/workspaces before 2x reconstruction;
+avoid allocating another full-size native color output or float demand map.
+Acceptance requires frozen ordinary CPU outputs identical to the exhaustive
+path, including clipping/recovered counts, crop and scale; test sparse/border/
+single-channel demand, conflicting nodes, admission fallback and no demand.
+Actual GPU fidelity checks remain required; host timing does not certify phone
+latency, thermal behavior or a new resolving-power gain.
+
 **Required / partly implemented:**
 
 1. Detect individual color-channel clipping as well as luminance clipping.
@@ -597,7 +641,7 @@ discard its unused normalized-color warp, then warp the original short once.
 
 The first native phase timers show fitting/verification dominates support-map
 construction on the executed host fixtures. Prototype translation ECC on GPU,
-with at most six <=321x321 patches per batch and the existing 30-iteration,
+with at most sixteen <=321x321 patches per batch and the existing 30-iteration,
 1e-4 convergence, 3x3 Gaussian/input-mask preprocessing and source-gradient
 semantics. Preserve the optimizer's fixed interpolation/nearest-mask convention,
 bounded original observations and CPU high-pass/noise/detail/residual checks.
@@ -615,12 +659,115 @@ and retained GPU buffers must fit the reserved overhead together. No large
 image-wide five-plane float upload is permitted. End-to-end text/ghost/noise and
 phone p50/p95 acceptance remain required; an accurate patch is not that pass.
 
-Keep a proposal paired with the correlation measured at that proposal. The GPU
-experiment retains the highest observed masked ECC pose, rather than reporting
-a pre-update score with a later unscored pose at an oscillating iteration limit.
-This is an explicit numerical selection difference; it still requires the stated
-CPU discrepancy profile and all independent physical acceptance gates. Do not
-relax that profile merely because a test fails.
+**rc14 parity follow-up (specified before implementation; experimental debug integration):** rc13's GPU solver
+selected the best earlier scored pose while calibration compared it with the
+CPU optimizer's returned transform after its final update. These are different
+return contracts, especially for oscillating masks or iteration-limited patches.
+The GPU proposal must follow the same final-update and termination convention as
+the current OpenCV CPU path. Its returned correlation is an optimizer diagnostic
+from the final evaluated iteration, not an independent score of the updated pose.
+The existing physical high-pass/noise/detail check independently evaluates that
+pose before admission. Record `ecc-return-parity-v2`; keep <=0.05 px /0.002
+calibration limits and fallback unchanged. Exercise non-monotonic and limited
+iterations in addition to easy known shifts. This supersedes rc13 best-pose
+selection, without changing the CPU algorithm or granting recovery/SR eligibility.
+The return convention is verified against the
+[OpenCV 4.10 implementation](https://github.com/opencv/opencv/blob/4.10.0/modules/video/src/ecc.cpp).
+
+An iteration-limited GPU solve is unavailable and uses the original CPU solve;
+it is not a converged GPU proposal. Calibration must compare every GPU-returned
+usable proposal with a usable, numerically matching CPU proposal. A missing GPU
+proposal may use the already measured CPU fit, without disqualifying the other
+matching GPU proposals. Include actual CPU completion of missing proposals in
+the GPU-path cost, preserve it on subsequent batches, and record usable/missing
+counts. A mismatching successful GPU proposal still disables that profile; this
+does not loosen discrepancy limits or remove any valid CPU evidence. Calibrate
+the complete <=16-patch batch rather than dispatch alone. Sixteen five-plane
+321x321 patches use <=33 MiB packed storage; persistent old allocations and
+staging/preprocessing must still satisfy the existing 64 MiB GPU pool and shared
+host reservation. Larger batches require a revised resource/cost contract.
+
+GPU scheduling may restrict proposals to already strongly matched two-frame
+structure while leaving every other node on the unchanged CPU path. The initial
+experimental selector uses the existing noise-corrected high-pass correlation
+>=0.90, detail ratio >=0.68 and both signal variances >=max(2.25, four times
+noise variance), with the original valid patch mask. These are GPU scheduling
+conditions, never replacement acceptance gates or reasons to remove CPU evidence.
+Large/multimodal residuals and noisy/weak correspondence stay CPU; no wider GPU
+discrepancy tolerance is permitted. Include selector/noise preparation in timing,
+cache each computed source noise estimate for the subsequent physical check,
+and preserve deterministic original node ordering in GPU batches.
+If a usable GPU proposal fails the independent physical detail/geometry check,
+retry that node with the original CPU fit and check before dropping evidence;
+reused CPU calibration fits need no duplicate retry. Count these completions in
+diagnostics and complete registration time, not as GPU-admitted detail.
+
+**Tiled ECC execution follow-up (specified before implementation; experimental debug integration):** one workgroup
+per 321x321 patch serializes hundreds of samples per lane and exposes few groups
+per dispatch. Split each patch into <=1024-sample chunks, with up to 128 lanes
+per chunk. Keep the packed reference/source/gradients/mask resident throughout
+all thirty bounded iterations. Each chunk computes local masked means and
+centered moments in one workgroup; a per-patch workgroup combines them with
+weighted mean-difference corrections and performs the 2x2 solve. Preserve
+unmasked gradient/input contributions and masked gradient sums when changing
+the centering origin; avoid subtracting large raw intensity-square sums.
+This uses two dispatches per iteration, separated by explicit
+compute-write to compute-read/write barriers. Record all dispatches in one
+bounded command submission and wait/read back only once per batch; no CPU
+per-iteration synchronization. Converged/failed patches skip later arithmetic,
+and a final stage publishes only converged proposals.
+
+The temporary state/partial reductions share the existing output storage buffer
+and pool cap; initialization must precede every reuse, index every variable-size
+patch safely and keep published results separate from scratch. Track complete
+packing/submission/wait/readback cost, preserve timeout quarantine and CPU
+fallback, and regenerate checked-in shader artifacts. Run the actual tiled
+shader on known shifts, non-square/partial chunks, masks and mixed/failed batches
+before phone activation. Existing numerical and physical checks remain unchanged.
+Specialize the six fixed ECC stages at pipeline creation, rather than selecting
+all stage branches at runtime inside one compiled kernel. Reuse the six bounded
+pipelines across batches; do not compile per patch or iteration. Preserve the
+same descriptor/workspace/barrier contract and include one-time creation in
+actual cold-capture timing. The explicit buffer pool cap is not a measurement
+of opaque driver pipeline memory, which remains covered by the shared overhead
+estimate and requires device memory acceptance.
+
+**Resident preprocessing follow-up (specified before implementation; experimental debug integration):** ECC input
+packing currently repeats float conversion, Gaussian filtering, source gradients
+and mask filtering on CPU for every overlapping patch. Upload packed reference/
+source/mask bytes (one 32-bit word per pixel) instead. Keep the original >=256
+input-mask requirement, and generate the five float planes on GPU once per batch.
+The 3x3 Gaussian on float-converted bytes uses the exact binomial coefficients
+and isolated patch BORDER_REFLECT_101 convention; gradient filtering follows
+Gaussian completion, with the same central derivative and binary smoothed mask.
+For the 3x3 binary mask, the existing 0.5/0.95 scale and rounding retain a pixel
+only when all nine samples are valid. Do not erode the source image's actual
+clipped boundaries beyond this existing optimizer-mask operation.
+
+Device-written float planes, packed bytes, job headers, states and reductions
+remain under the shared 64 MiB pool including previous capacities. Two explicit
+preprocessing stages precede iteration reads, with compute barriers; no CPU
+float-plane round trip. Host-test-only inspection must compare all five actual
+GPU planes against CPU preprocessing, including masked holes, non-square/edge
+patches and small masks, before accepting this optimization. Shipping builds
+must not contain the inspection hook. End-to-end cost still includes CPU byte
+packing, transfers, synchronization, readback and CPU completion/fallback.
+
+Keep fitting cost profiles separate for <=8, <=16 and larger eligible workloads,
+and for base/short proposals. A small CPU-preferred batch must not disable larger
+GPU batches. Charge the entire selector duration to the GPU workload estimate.
+At first calibration measure one cold and one reused-buffer GPU batch against
+the unchanged CPU batch, validate successful proposals from both GPU runs, and
+include measured CPU completion of missing proposals. A conservative workload
+estimate uses the actual number of GPU batches (including the partial last batch)
+and fractionally scales CPU batch cost by actual patch count. Cold GPU allocation
+is charged once, warm call cost to subsequent batches; no dispatch-only estimate.
+Enable only if this complete estimate is <=90% of CPU and proposals conform.
+Report both measured batch costs and the explicitly estimated workload costs;
+end-to-end paired/device acceptance remains independent of this policy estimate.
+The estimate describes workload execution after validation, not calibration
+capture latency: actual capture timing must include the extra CPU baseline and
+repeated GPU validation call. Do not subtract those costs from measured latency.
 
 The optimizer mask excludes the same ten-pixel **patch boundary** already excluded
 by the independent high-pass check. This prevents constant-border resampling at

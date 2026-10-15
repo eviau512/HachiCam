@@ -81,6 +81,45 @@ bool cropForPlate(const Plate &plate, cv::Rect &crop) {
     return true;
 }
 
+cv::Mat mergeAnchors(const std::vector<Plate>& anchors,const cv::Mat& ref,const cv::Rect& commonCrop,
+                     long long& contributorCount,long long& multiFramePixels) {
+    cv::Mat native(commonCrop.size(),CV_8UC3);
+#pragma omp parallel for schedule(static) reduction(+ : contributorCount, multiFramePixels)
+    for (int y = 0; y < native.rows; ++y)
+        for (int x = 0; x < native.cols; ++x) {
+            const double rx = commonCrop.x + x, ry = commonCrop.y + y;
+            fusion::Color base, sum{};
+            sample(ref, rx, ry, base);
+            float weights = 0;
+            int contributors = 0;
+            for (const auto &plate : anchors) {
+                if (!plate.local.gate.empty() && !plate.local.gate.at<uchar>(int(ry), int(rx)))
+                    continue;
+                cv::Point2d delta;
+                float confidence;
+                if (!plate.local.offset(rx, ry, delta, confidence))
+                    continue;
+                const auto point = project(plate.inverse, rx + delta.x, ry + delta.y);
+                fusion::Color color;
+                if (!sample(plate.image, point.x, point.y, color))
+                    continue;
+                for (int c = 0; c < 3; ++c)
+                    sum[c] += color[c] * confidence;
+                weights += confidence;
+                ++contributors;
+            }
+            if (weights > 1e-5f)
+                for (int c = 0; c < 3; ++c)
+                    base[c] = sum[c] / weights;
+            for (int c = 0; c < 3; ++c)
+                native.at<cv::Vec3b>(y, x)[c] = cv::saturate_cast<uchar>(base[c]);
+            contributorCount += std::max(1, contributors);
+            if (contributors >= 2)
+                ++multiFramePixels;
+        }
+    return native;
+}
+
 } // namespace
 
 cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, bool removeGlare,
@@ -125,12 +164,23 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
     bool geometryKnown = reference == 0;
     std::vector<std::array<double, 2>> phases;
     double reliableCoverage = 0;
+    cv::Mat native,highlightDemand,result;
+    long long contributorCount=0,multiFramePixels=0,recoveredPixels=0,clippedPixels=0,postClippedPixels=0,reconstructedPixels=0;
+    unsigned usedHighlightMask=0;
+    for(int pass=0;pass<2;++pass) {
+    if(pass==1) {
+        native=mergeAnchors(anchors,ref,commonCrop,contributorCount,multiFramePixels);
+        if(!isScreenMode)continue;
+        highlightDemand=fusion::highlightDemand(native,commonCrop,ref.size());
+        if(!cv::countNonZero(highlightDemand))continue;
+    }
     for (size_t i = 0; i < frames.size(); ++i) {
         if (i == reference)
             continue;
         if (frames[i].empty() || frames[i].size() != ref.size() || frames[i].type() != ref.type())
             continue;
         const int tier = tiers.empty() ? 0 : tiers[i];
+        if((tier==0)!=(pass==0))continue;
         const double exposureGain = (!exposureProducts.empty() && exposureProducts[i] > 0)
                                         ? exposureProducts[reference] / exposureProducts[i]
                                         : 0;
@@ -168,7 +218,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
                      cv::COLOR_BGR2GRAY);
         const auto localStarted=std::chrono::steady_clock::now();
         plate.local =
-            fusion::registerLocal(refGray, gray, tier != 0, false, tier != 0 ? highlightValidity : cv::Mat(), &referencePreparation);
+            fusion::registerLocal(refGray, gray, tier != 0, false, tier != 0 ? highlightValidity : cv::Mat(), &referencePreparation, tier != 0 ? highlightDemand : cv::Mat());
         performance.localRegistrationMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-localStarted).count();
         performance.gpuSupportMaps+=plate.local.gpuSupportMap ? 1 : 0;
         performance.gpuFitProposals+=plate.local.gpuFitProposals;
@@ -204,6 +254,8 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
             }
         }
     }
+    } // Base merge is frozen before demand-bounded short registration.
+    highlightDemand.release();
     referencePreparation={}; // No retained full-size workspace during output reconstruction.
     // Prefer the least underexposed valid plate (better SNR); use the deeper
     // bracket only where the brighter plate is still clipped.
@@ -252,43 +304,6 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
          "source=%dx%d; glare flag=%d",
          reference, anchors.size(), highlights.size(), centrePhases, scale, commonCrop.x, commonCrop.y,
          commonCrop.width, commonCrop.height, ref.cols, ref.rows, removeGlare);
-    cv::Mat native(commonCrop.height, commonCrop.width, CV_8UC3), result;
-    long long contributorCount = 0, multiFramePixels = 0, recoveredPixels = 0, clippedPixels = 0, postClippedPixels=0,
-              reconstructedPixels = 0;
-    unsigned usedHighlightMask = 0;
-#pragma omp parallel for schedule(static) reduction(+ : contributorCount, multiFramePixels)
-    for (int y = 0; y < native.rows; ++y)
-        for (int x = 0; x < native.cols; ++x) {
-            const double rx = commonCrop.x + x, ry = commonCrop.y + y;
-            fusion::Color base, sum{};
-            sample(ref, rx, ry, base);
-            float weights = 0;
-            int contributors = 0;
-            for (const auto &plate : anchors) {
-                if (!plate.local.gate.empty() && !plate.local.gate.at<uchar>(int(ry), int(rx)))
-                    continue;
-                cv::Point2d delta;
-                float confidence;
-                if (!plate.local.offset(rx, ry, delta, confidence))
-                    continue;
-                const auto point = project(plate.inverse, rx + delta.x, ry + delta.y);
-                fusion::Color color;
-                if (!sample(plate.image, point.x, point.y, color))
-                    continue;
-                for (int c = 0; c < 3; ++c)
-                    sum[c] += color[c] * confidence;
-                weights += confidence;
-                ++contributors;
-            }
-            if (weights > 1e-5f)
-                for (int c = 0; c < 3; ++c)
-                    base[c] = sum[c] / weights;
-            for (int c = 0; c < 3; ++c)
-                native.at<cv::Vec3b>(y, x)[c] = cv::saturate_cast<uchar>(base[c]);
-            contributorCount += std::max(1, contributors);
-            if (contributors >= 2)
-                ++multiFramePixels;
-        }
     const double nativePixels = native.total();
     cv::Mat preserve = scale == 2 ? cv::Mat::zeros(native.size(), CV_8U) : cv::Mat();
 #pragma omp parallel for schedule(static) reduction(+ : recoveredPixels, clippedPixels, postClippedPixels)                      \

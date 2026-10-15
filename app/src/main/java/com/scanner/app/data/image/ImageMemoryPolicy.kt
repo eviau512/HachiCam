@@ -10,7 +10,7 @@ object ImageMemoryPolicy {
     fun fusionBytes(pixels: Long, frames: Int, streaming: Boolean, superResolution: Boolean): Long {
         require(pixels in 1..56_000_000 && frames in 1..7)
         return if (streaming) pixels * 20 + OVERHEAD
-        else pixels * (frames * 3L + 20L + if (superResolution) 24L else 6L) + OVERHEAD
+        else pixels * (frames * 3L + 24L + if (superResolution) 24L else 6L) + OVERHEAD
     }
     fun fusionPlan(pixels: Long, frames: Int, nativeHigh: Boolean, budget: Long, reserved: Long): Plan? {
         val variants = if (nativeHigh) listOf(true to false) else listOf(false to true, false to false, true to false)

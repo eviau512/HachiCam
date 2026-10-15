@@ -5,7 +5,7 @@ bool gpuLocalSupport(const cv::Mat&,const cv::Mat&,const LocalRegistration&,cv::
     reason="Vulkan backend not built"; return false;
 }
 bool gpuPatchFits(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const std::vector<cv::Rect>&,bool,
-    std::vector<cv::Vec4f>&,std::string& reason){reason="Vulkan backend not built";return false;}
+    std::vector<cv::Vec4f>&,std::string& reason,double){reason="Vulkan backend not built";return false;}
 bool gpuFittingAvailable(size_t,bool){return false;}
 }
 #else
@@ -77,6 +77,7 @@ struct Context {
     VkPipelineLayout layout=VK_NULL_HANDLE;
     VkPipeline pipeline=VK_NULL_HANDLE;
     VkPipeline eccPipeline=VK_NULL_HANDLE;
+    std::array<VkPipeline,8> eccStages{};
     VkCommandPool commands=VK_NULL_HANDLE;
     VkCommandBuffer command=VK_NULL_HANDLE;
     VkDescriptorPool descriptors=VK_NULL_HANDLE;
@@ -182,7 +183,14 @@ struct Context {
         sm.codeSize=local_ecc_spv_size;sm.pCode=local_ecc_spv;
         r=vkCreateShaderModule(device,&sm,nullptr,&eccShader);if(r!=VK_SUCCESS)return error("ECC shader",r);
         pc.stage.module=eccShader;
-        r=vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pc,nullptr,&eccPipeline);if(r!=VK_SUCCESS)return error("ECC pipeline",r);
+        const VkSpecializationMapEntry specializationEntry{0,0,sizeof(int)};
+        for(int stage:{0,1,4,5,6,7}) {
+            const VkSpecializationInfo specialization{1,&specializationEntry,sizeof(stage),&stage};
+            pc.stage.pSpecializationInfo=&specialization;
+            r=vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pc,nullptr,&eccStages[stage]);
+            if(r!=VK_SUCCESS)return error("ECC specialized pipeline",r);
+        }
+        eccPipeline=eccStages[1];
         VkCommandPoolCreateInfo pool{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};pool.queueFamilyIndex=family;pool.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         r=vkCreateCommandPool(device,&pool,nullptr,&commands);if(r!=VK_SUCCESS)return error("command pool",r);
         VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ca.commandPool=commands;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
@@ -211,7 +219,9 @@ struct Context {
         if(device) {
 #define X(fn,obj) if(obj && fn)fn(device,obj,nullptr)
             X(vkDestroyFence,fence);X(vkDestroyDescriptorPool,descriptors);X(vkDestroyCommandPool,commands);
-            X(vkDestroyPipeline,pipeline);X(vkDestroyPipeline,eccPipeline);X(vkDestroyShaderModule,eccShader);X(vkDestroyPipelineLayout,layout);
+            X(vkDestroyPipeline,pipeline);
+            for(auto stage:eccStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
+            X(vkDestroyShaderModule,eccShader);X(vkDestroyPipelineLayout,layout);
             X(vkDestroyDescriptorSetLayout,descriptorLayout);X(vkDestroyShaderModule,shader);
 #undef X
             if(!vkDestroyDevice)return; // Broken loader: retain the child context rather than destroy its parent.
@@ -259,7 +269,27 @@ struct Context {
         VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};before.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT;before.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&before,0,nullptr,0,nullptr);
         vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,selected);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,layout,0,1,&descriptor,0,nullptr);
-        vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());vkCmdDispatch(command,groups,1,1);
+        if(selected==eccPipeline) {
+            auto constants=shape;
+            VkMemoryBarrier dependency{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            dependency.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+            dependency.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
+            auto stage=[&](int number,bool tiled) {
+                constants[3]=number;
+                vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,eccStages[number]);
+                vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,constants.data());
+                vkCmdDispatch(command,tiled ? uint32_t(shape[4]) : groups,tiled ? groups : 1,1);
+                vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    0,1,&dependency,0,nullptr,0,nullptr);
+            };
+            stage(0,false);stage(6,true);stage(7,true);
+            for(int iteration=0;iteration<shape[1];++iteration) {
+                stage(1,true);stage(4,false);
+            }
+            stage(5,false);
+        } else {
+            vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());vkCmdDispatch(command,groups,1,1);
+        }
         VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};after.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;after.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&after,0,nullptr,0,nullptr);
         r=vkEndCommandBuffer(command);if(r!=VK_SUCCESS)return error("end",r);
@@ -301,35 +331,38 @@ struct Context {
     }
     bool runFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
                  const std::vector<cv::Rect>& patches,std::vector<cv::Vec4f>& results) {
-        if(patches.empty() || patches.size()>6){failure="unsupported fitting batch";return false;}
-        std::vector<float> packed;
-        std::vector<std::array<uint32_t,4>> jobs;
-        size_t pixels=0;for(const auto& roi:patches)pixels+=roi.area();
-        packed.reserve(pixels*5);jobs.reserve(patches.size());
-        for(const auto& roi:patches) {
-            const uint32_t offset=uint32_t(packed.size()),n=uint32_t(roi.area());
-            cv::Mat t,s,m,mask,gx,gy;
-            ref(roi).convertTo(t,CV_32F);src(roi).convertTo(s,CV_32F);
-            cv::GaussianBlur(t,t,{3,3},0);cv::GaussianBlur(s,s,{3,3},0);
-            mask=localFitMask(raw,validity,roi);
-            mask.convertTo(m,CV_32F,1./255);cv::GaussianBlur(m,m,{3,3},0);m *= .5/.95;
-            m.convertTo(mask,CV_8U);mask.convertTo(m,CV_32F);
-            const cv::Matx13f derivative(-.5f,0,.5f);
-            cv::filter2D(s,gx,-1,derivative);cv::filter2D(s,gy,-1,derivative.t());
-            gx=gx.mul(m);gy=gy.mul(m);
-            for(const auto& plane:{t,s,gx,gy,m})for(int y=0;y<plane.rows;++y)
-                packed.insert(packed.end(),plane.ptr<float>(y),plane.ptr<float>(y)+plane.cols);
-            jobs.push_back({offset,uint32_t(roi.width),uint32_t(roi.height),n});
+        if(patches.empty() || patches.size()>16){failure="unsupported fitting batch";return false;}
+        std::vector<uint32_t> packed;
+        size_t pixels=0,largest=0;
+        for(const auto& roi:patches){pixels+=roi.area();largest=std::max(largest,size_t(roi.area()));}
+        packed.reserve(patches.size()*4+pixels);packed.resize(patches.size()*4);
+        size_t floatOffset=0;
+        for(size_t index=0;index<patches.size();++index) {
+            const auto& roi=patches[index];
+            const uint32_t offset=uint32_t(floatOffset),n=uint32_t(roi.area());
+            cv::Mat mask=localFitMask(raw,validity,roi);
+            if(cv::countNonZero(mask)<256)mask.setTo(0);
+            packed[index*4]=offset;packed[index*4+1]=uint32_t(roi.width);
+            packed[index*4+2]=uint32_t(roi.height);packed[index*4+3]=n;
+            for(int y=0;y<roi.height;++y) {
+                const auto* t=ref.ptr<uchar>(roi.y+y)+roi.x;
+                const auto* source=src.ptr<uchar>(roi.y+y)+roi.x;
+                const auto* m=mask.ptr<uchar>(y);
+                for(int x=0;x<roi.width;++x)packed.push_back(uint32_t(t[x]) | uint32_t(source[x])<<8 | uint32_t(m[x])<<16);
+            }
+            floatOffset+=size_t(n)*5;
         }
-        const VkDeviceSize sizes[]{packed.size()*sizeof(float),jobs.size()*16,jobs.size()*16};
-        if(sizes[0]>properties.limits.maxStorageBufferRange){failure="fitting storage range";return false;}
+        const size_t chunks=(largest+1023)/1024;
+        const VkDeviceSize sizes[]{floatOffset*sizeof(float),packed.size()*sizeof(uint32_t),patches.size()*(3+4*chunks)*16};
+        for(auto size:sizes)if(size>properties.limits.maxStorageBufferRange){failure="fitting storage range";return false;}
+        if(chunks>properties.limits.maxComputeWorkGroupCount[0] || patches.size()>properties.limits.maxComputeWorkGroupCount[1]){failure="fitting dispatch limit";return false;}
         for(int i=0;i<3;++i)if(!reserve(i,sizes[i]))return false;
-        std::memcpy(buffers[0].mapped,packed.data(),sizes[0]);std::memcpy(buffers[1].mapped,jobs.data(),sizes[1]);
-        std::array<int,8> shape{int(patches.size()),30,0,0,0,0,0,0};const float epsilon=.0001f;
+        std::memcpy(buffers[1].mapped,packed.data(),sizes[1]);
+        std::array<int,8> shape{int(patches.size()),30,0,0,int(chunks),0,0,0};const float epsilon=.0001f;
         std::memcpy(&shape[2],&epsilon,sizeof(float));
         if(!dispatch(eccPipeline,sizes,shape,uint32_t(patches.size())))return false;
         results.resize(patches.size());static_assert(sizeof(cv::Vec4f)==16);
-        std::memcpy(results.data(),buffers[2].mapped,sizes[2]);
+        std::memcpy(results.data(),buffers[2].mapped,results.size()*sizeof(cv::Vec4f));
         for(auto& fit:results)if(fit[3]!=1 || !std::isfinite(fit[0]) || !std::isfinite(fit[1]) || !std::isfinite(fit[2]) || fit[2]<.65f || std::hypot(fit[0],fit[1])>8)
             fit={0,0,-1,0};
         return true;
@@ -416,24 +449,24 @@ bool gpuLocalSupport(const cv::Mat& ref,const cv::Mat& src,const LocalRegistrati
     context->healthy=false;reason=context->failure;output.release();return false;
 }
 bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
-    const std::vector<cv::Rect>& patches,bool highlight,std::vector<cv::Vec4f>& fits,std::string& reason) {
+    const std::vector<cv::Rect>& patches,bool highlight,std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs) {
     if(ref.empty() || ref.dims!=2 || src.dims!=2 || raw.dims!=2 || (!validity.empty() && validity.dims!=2) ||
         ref.type()!=CV_8U || src.type()!=CV_8U || raw.type()!=CV_8U || ref.size()!=src.size() || ref.size()!=raw.size() ||
-        ref.total()>16000000 || patches.empty() || patches.size()>4096 ||
+        ref.total()>16000000 || patches.empty() || patches.size()>4096 || !std::isfinite(selectionMs) || selectionMs<0 ||
         (!validity.empty() && (validity.type()!=CV_8U || validity.size()!=ref.size()))){reason="unsupported ECC workload";return false;}
     for(const auto& patch:patches)if(patch.width<32 || patch.height<32 || patch.width>321 || patch.height>321 ||
         patch.x<0 || patch.y<0 || patch.x>ref.cols-patch.width || patch.y>ref.rows-patch.height){reason="invalid ECC patch";return false;}
     auto* context=sharedContext();if(!context){reason="GPU context unavailable";return false;}
     std::lock_guard<std::mutex> lock(context->guard);
     if(!context->healthy || !context->eccReady){reason=context->healthy ? "ECC startup conformance unavailable" : context->failure;return false;}
-    const int key=(ref.total()<=1000000 ? 0 : ref.total()<=4000000 ? 1 : 2)+(highlight ? 3 : 0);
+    const int key=(patches.size()<=8 ? 0 : patches.size()<=16 ? 1 : 2)+(highlight ? 3 : 0);
 #if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
     if(context->fitPolicy[key]<0){reason="calibrated CPU fitting preference";return false;}
 #endif
     fits.assign(patches.size(),cv::Vec4f(0,0,-1,0));
     try {
-        for(size_t begin=0;begin<patches.size();begin+=6) {
-            const size_t end=std::min(begin+6,patches.size());
+        for(size_t begin=0;begin<patches.size();begin+=16) {
+            const size_t end=std::min(begin+16,patches.size());
             const std::vector<cv::Rect> batch(patches.begin()+begin,patches.begin()+end);
             std::vector<cv::Vec4f> output;
             const auto start=std::chrono::steady_clock::now();
@@ -447,10 +480,18 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
                 #pragma omp parallel for schedule(dynamic)
                 for(int i=0;i<int(batch.size());++i)cpu[i]=cpuPatchFit(ref,src,raw,validity,batch[i]);
                 const auto cpuEnd=std::chrono::steady_clock::now();
-                bool match=true;int usable=0;
+                const auto warmStart=std::chrono::steady_clock::now();
+                std::vector<cv::Vec4f> warm;
+                if(!context->runFits(ref,src,raw,validity,batch,warm)){context->healthy=false;reason=context->failure;fits.clear();return false;}
+                const double warmMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-warmStart).count();
+                bool match=true;int usable=0,missing=0;
                 for(size_t i=0;i<batch.size();++i) {
-                    if(cpu[i][3]!=output[i][3])match=false;
-                    if(cpu[i][3]){++usable;if(std::hypot(cpu[i][0]-output[i][0],cpu[i][1]-output[i][1])>.05 || std::abs(cpu[i][2]-output[i][2])>.002)match=false;}
+                    if(output[i][3]) {
+                        ++usable;
+                        if(!cpu[i][3] || std::hypot(cpu[i][0]-output[i][0],cpu[i][1]-output[i][1])>.05 || std::abs(cpu[i][2]-output[i][2])>.002)match=false;
+                    } else ++missing;
+                    if(warm[i][3] && (!cpu[i][3] || std::hypot(cpu[i][0]-warm[i][0],cpu[i][1]-warm[i][1])>.05 || std::abs(cpu[i][2]-warm[i][2])>.002))match=false;
+                    if(output[i][3]!=warm[i][3])match=false;
 #ifdef HACHICAM_GPU_TEST_CONTROL
                     __android_log_print(ANDROID_LOG_INFO,"HachiCam-GPU-Test","ECC probe i=%zu CPU=%g,%g,%g,%g GPU=%g,%g,%g,%g",
                         i,cpu[i][0],cpu[i][1],cpu[i][2],cpu[i][3],output[i][0],output[i][1],output[i][2],output[i][3]);
@@ -458,14 +499,25 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
                 }
                 const double gpuMs=std::chrono::duration<double,std::milli>(gpuEnd-start).count();
                 const double cpuMs=std::chrono::duration<double,std::milli>(cpuEnd-gpuEnd).count();
-                context->fitPolicy[key]=match && usable && gpuMs<=cpuMs*.90 ? 1 : -1;
+                // Measure the hybrid path's real CPU completion cost. The CPU
+                // baseline above is reused for results, never lost on GPU misses.
+                const auto fallbackStart=std::chrono::steady_clock::now();
+                std::vector<cv::Vec4f> fallback(batch.size());
+                #pragma omp parallel for schedule(dynamic)
+                for(int i=0;i<int(batch.size());++i)if(!output[i][3])fallback[i]=cpuPatchFit(ref,src,raw,validity,batch[i]);
+                const double fallbackMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-fallbackStart).count();
+                const double batches=double((patches.size()+15)/16);
+                const double estimatedGpu=gpuMs+(batches-1)*warmMs+batches*fallbackMs+selectionMs;
+                const double estimatedCpu=cpuMs*double(patches.size())/batch.size();
+                context->fitPolicy[key]=match && usable && estimatedGpu<=estimatedCpu*.90 ? 1 : -1;
                 __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf",
-                    "GPU ECC calibration key=%d patches=%zu gpuCallMs=%.3f cpuMs=%.3f conforming=%d usable=%d preferred=%s",
-                    key,batch.size(),gpuMs,cpuMs,int(match),usable,context->fitPolicy[key]>0 ? "Vulkan" : "CPU");
+                    "GPU ECC calibration v3 key=%d patches=%zu/%zu coldCallMs=%.3f warmCallMs=%.3f cpuBatchMs=%.3f fallbackMs=%.3f selectorMs=%.3f estimatedGpuMs=%.3f estimatedCpuMs=%.3f conforming=%d usable=%d missing=%d preferred=%s",
+                    key,batch.size(),patches.size(),gpuMs,warmMs,cpuMs,fallbackMs,selectionMs,estimatedGpu,estimatedCpu,int(match),usable,missing,context->fitPolicy[key]>0 ? "Vulkan" : "CPU");
                 if(context->fitPolicy[key]<0) {
                     for(size_t i=0;i<cpu.size();++i){if(cpu[i][3])cpu[i][3]=2;fits[begin+i]=cpu[i];}
                     reason="calibration reused CPU fits; remaining patches use CPU";return true;
                 }
+                for(size_t i=0;i<cpu.size();++i)if(!output[i][3] && cpu[i][3]){output[i]=cpu[i];output[i][3]=2;}
             }
 #endif
             std::copy(output.begin(),output.end(),fits.begin()+begin);
@@ -480,14 +532,33 @@ bool gpuFittingAvailable(size_t pixels,bool highlight) {
     if(pixels>16000000)return false;
     auto* context=sharedContext();if(!context)return false;
     std::lock_guard<std::mutex> lock(context->guard);
-    const int key=(pixels<=1000000 ? 0 : pixels<=4000000 ? 1 : 2)+(highlight ? 3 : 0);
-    return context->healthy && context->eccReady && context->fitPolicy[key]>=0;
+    const int base=highlight ? 3 : 0;
+    return context->healthy && context->eccReady && (context->fitPolicy[base]>=0 || context->fitPolicy[base+1]>=0 || context->fitPolicy[base+2]>=0);
 }
 #ifdef HACHICAM_GPU_TEST_CONTROL
 GpuTestState gpuTestState() {
     auto* c=sharedContext();if(!c)return {};
     std::lock_guard<std::mutex> lock(c->guard);GpuTestState s;s.healthy=c->healthy;s.inFlight=c->inFlight;
     for(const auto& b:c->buffers)s.allocation+=b.allocation;return s;
+}
+bool gpuTestPreparedPlanes(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,
+    const cv::Mat& validity,const std::vector<cv::Rect>& patches,std::vector<std::array<cv::Mat,5>>& planes) {
+    auto* context=sharedContext();if(!context)return false;
+    std::lock_guard<std::mutex> lock(context->guard);
+    if(!context->healthy || !context->eccReady)return false;
+    std::vector<cv::Vec4f> fits;
+    if(!context->runFits(ref,src,raw,validity,patches,fits))return false;
+    planes.resize(patches.size());size_t offset=0;
+    const auto* data=static_cast<const float*>(context->buffers[0].mapped);
+    for(size_t i=0;i<patches.size();++i) {
+        const auto count=patches[i].area();
+        for(int plane=0;plane<5;++plane) {
+            planes[i][plane].create(patches[i].size(),CV_32F);
+            std::memcpy(planes[i][plane].data,data+offset+plane*count,count*sizeof(float));
+        }
+        offset+=size_t(count)*5;
+    }
+    return true;
 }
 #endif
 }

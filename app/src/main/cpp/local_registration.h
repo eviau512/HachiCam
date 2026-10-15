@@ -26,7 +26,9 @@ struct LocalRegistration {
     bool offset(double x, double y, cv::Point2d& delta, float& confidence) const;
     bool hasDetail(double x, double y) const;
 };
-LocalRegistration registerLocal(const cv::Mat& referenceGray, const cv::Mat& warpedGray, bool highlight = false, bool singlePatch = false, const cv::Mat& referenceValidity = cv::Mat(), const ReferencePreparation* prepared = nullptr);
+LocalRegistration registerLocal(const cv::Mat& referenceGray, const cv::Mat& warpedGray, bool highlight = false, bool singlePatch = false, const cv::Mat& referenceValidity = cv::Mat(), const ReferencePreparation* prepared = nullptr, const cv::Mat& requestedPixels = cv::Mat());
+cv::Mat highlightDemand(const cv::Mat& native, const cv::Rect& crop, cv::Size domain);
+cv::Mat highlightFitNodes(const cv::Mat& requestedPixels, int spacing);
 cv::Mat unclippedReference(const cv::Mat& image);
 cv::Mat highlightNeighborhood(const cv::Mat& image, float gain);
 double referenceQuality(const cv::Mat& image);

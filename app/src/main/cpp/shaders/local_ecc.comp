@@ -1,21 +1,20 @@
 #version 450
-// One workgroup owns one patch; no global floating-point atomics or cross-job state.
+// Tiled reductions keep complete ECC iterations resident on the compute device.
 layout(local_size_x=128) in;
-layout(std430,binding=0) readonly buffer Inputs { float image[]; };
-layout(std430,binding=1) readonly buffer Jobs { uvec4 job[]; };
-layout(std430,binding=2) writeonly buffer Fits { vec4 fit[]; };
-layout(push_constant) uniform Limits { int jobs; int iterations; float epsilon; int r0; int r1; int r2; int r3; int r4; } p;
+layout(constant_id=0) const int kernelStage=1;
+layout(std430,binding=0) buffer Inputs { float image[]; };
+layout(std430,binding=1) readonly buffer Jobs { uint raw[]; };
+layout(std430,binding=2) buffer Workspace { vec4 work[]; };
+layout(push_constant) uniform Limits { int jobs; int iterations; float epsilon; int stage; int chunks; int r2; int r3; int r4; } p;
 shared vec4 a[128];shared vec4 b[128];shared vec4 c[128];
-shared float dx;shared float dy;shared float rho;shared float meanI;shared float meanT;
-shared vec3 best;
-shared int state;
-
+shared vec4 center;
+uint base(uint id) {return uint(p.jobs)+id*(2u+uint(p.chunks)*4u);}
 float point(uvec4 j,int plane,int x,int y) {
     if(x<0 || y<0 || x>=int(j.y) || y>=int(j.z))return 0.;
     return image[j.x+uint(plane)*j.w+uint(y)*j.y+uint(x)];
 }
-vec3 warped(uvec4 j,int x,int y) {
-    vec2 q=vec2(x,y)+floor((roundEven(vec2(dx,dy)*1024.)+16.)/32.)/32.;
+vec3 warped(uvec4 j,int x,int y,vec2 delta) {
+    vec2 q=vec2(x,y)+floor((roundEven(delta*1024.)+16.)/32.)/32.;
     ivec2 lo=ivec2(floor(q));vec2 f=q-vec2(lo);
     vec3 s00=vec3(point(j,1,lo.x,lo.y),point(j,2,lo.x,lo.y),point(j,3,lo.x,lo.y));
     vec3 s10=vec3(point(j,1,lo.x+1,lo.y),point(j,2,lo.x+1,lo.y),point(j,3,lo.x+1,lo.y));
@@ -23,64 +22,124 @@ vec3 warped(uvec4 j,int x,int y) {
     vec3 s11=vec3(point(j,1,lo.x+1,lo.y+1),point(j,2,lo.x+1,lo.y+1),point(j,3,lo.x+1,lo.y+1));
     return (1.-f.y)*((1.-f.x)*s00+f.x*s10)+f.y*((1.-f.x)*s01+f.x*s11);
 }
-bool validMask(uvec4 j,int x,int y) {
-    ivec2 step=ivec2(floor((roundEven(vec2(dx,dy)*1024.)+512.)/1024.));
+bool validMask(uvec4 j,int x,int y,vec2 delta) {
+    ivec2 step=ivec2(floor((roundEven(delta*1024.)+512.)/1024.));
     return point(j,4,x+step.x,y+step.y)>.5;
 }
-void main() {
-    uint id=gl_WorkGroupID.x,lane=gl_LocalInvocationID.x;
-    if(id>=uint(p.jobs))return;
-    uvec4 j=job[id];
-    if(lane==0){dx=0.;dy=0.;rho=-1.;state=0;best=vec3(0.,0.,-1.);}
+int reflected(int x,int size) {
+    if(x<0)return -x;
+    return x>=size ? 2*size-2-x : x;
+}
+uint pixel(uvec4 j,int x,int y) {
+    x=reflected(x,int(j.y));y=reflected(y,int(j.z));
+    return raw[uint(p.jobs)*4u+j.x/5u+uint(y)*j.y+uint(x)];
+}
+float prepared(uvec4 j,int plane,int x,int y) {
+    return point(j,plane,reflected(x,int(j.y)),reflected(y,int(j.z)));
+}
+void reduceAll(uint lane) {
     barrier();
-    for(int iteration=0;iteration<p.iterations;iteration++) {
-        vec4 totals=vec4(0.);
-        for(uint k=lane;k<j.w;k+=128) {
+    for(uint step=64;step>0;step>>=1) {
+        if(lane<step){a[lane]+=a[lane+step];b[lane]+=b[lane+step];c[lane]+=c[lane+step];}
+        barrier();
+    }
+}
+void main() {
+    bool tiled=kernelStage==1 || kernelStage==6 || kernelStage==7;
+    uint id=tiled ? gl_WorkGroupID.y : gl_WorkGroupID.x;
+    uint lane=gl_LocalInvocationID.x;
+    if(id>=uint(p.jobs))return;
+    uint at=base(id);uint header=id*4u;uvec4 j=uvec4(raw[header],raw[header+1u],raw[header+2u],raw[header+3u]);
+    if(kernelStage==0) {
+        if(lane==0){work[id]=vec4(0.,0.,-1.,0.);work[at]=vec4(0.,0.,-1.,0.);work[at+1u]=vec4(0.);}
+        return;
+    }
+    if(kernelStage==6 || kernelStage==7) {
+        uint end=min(j.w,(gl_WorkGroupID.x+1u)*1024u);
+        for(uint k=gl_WorkGroupID.x*1024u+lane;k<end;k+=128u) {
             int x=int(k%j.y),y=int(k/j.y);
-            if(!validMask(j,x,y))continue;
-            totals+=vec4(warped(j,x,y).x,image[j.x+k],1.,0.);
-        }
-        a[lane]=totals;barrier();
-        for(uint step=64;step>0;step>>=1){if(lane<step)a[lane]+=a[lane+step];barrier();}
-        if(lane==0){if(a[0].z<1.)state=2;else {meanI=a[0].x/a[0].z;meanT=a[0].y/a[0].z;}}
-        barrier();if(state==2)break;
-        vec4 s0=vec4(0.),s1=vec4(0.),s2=vec4(0.);
-        for(uint k=lane;k<j.w;k+=128) {
-            int x=int(k%j.y),y=int(k/j.y);vec3 v=warped(j,x,y);
-            bool mask=validMask(j,x,y);
-            float iz=mask ? v.x-meanI : v.x;
-            float tz=mask ? image[j.x+k]-meanT : 0.;
-            s0+=vec4(mask ? iz*iz : 0.,tz*tz,iz*tz,v.y*v.y);
-            s1+=vec4(v.y*v.z,v.z*v.z,v.y*iz,v.z*iz);
-            s2+=vec4(v.y*tz,v.z*tz,0.,0.);
-        }
-        a[lane]=s0;b[lane]=s1;c[lane]=s2;barrier();
-        for(uint step=64;step>0;step>>=1){if(lane<step){a[lane]+=a[lane+step];b[lane]+=b[lane+step];c[lane]+=c[lane+step];}barrier();}
-        if(lane==0) {
-            float h00=a[0].w,h01=b[0].x,h11=b[0].y;
-            float determinant=h00*h11-h01*h01;
-            if(a[0].x<=0. || a[0].y<=0. || determinant<=max(1e-6,h00*h11*1e-8))state=2;
-            else {
-                mat2 inverse=mat2(h11,-h01,-h01,h00)/determinant;
-                vec2 ip=b[0].zw,tp=c[0].xy,projected=inverse*ip;
-                float denominator=a[0].z-dot(tp,projected);
-                if(denominator<=0.)state=2;
-                else {
-                    float lambda=(a[0].x-dot(ip,projected))/denominator;
-                    vec2 delta=inverse*(lambda*tp-ip);
-                    float nextRho=a[0].z/sqrt(a[0].x*a[0].y);
-                    if(isnan(nextRho)||isinf(nextRho)||any(isnan(delta))||any(isinf(delta)))state=2;
-                    else {
-                        bool converged=abs(nextRho-rho)<p.epsilon;
-                        if(nextRho>best.z)best=vec3(dx,dy,nextRho);
-                        rho=nextRho;dx+=delta.x;dy+=delta.y;
-                        if(length(vec2(dx,dy))>16.)state=2;
-                        else if(converged)state=1;
-                    }
+            if(kernelStage==6) {
+                uint t=0u,s=0u;bool valid=true;
+                for(int yy=-1;yy<=1;++yy)for(int xx=-1;xx<=1;++xx) {
+                    uint v=pixel(j,x+xx,y+yy);
+                    uint weight=uint((xx==0 ? 2 : 1)*(yy==0 ? 2 : 1));
+                    t+=(v&255u)*weight;s+=((v>>8)&255u)*weight;
+                    valid=valid && ((v>>16)&255u)>0u;
                 }
+                image[j.x+k]=float(t)/16.;image[j.x+j.w+k]=float(s)/16.;
+                image[j.x+4u*j.w+k]=valid ? 1. : 0.;
+            } else {
+                float mask=point(j,4,x,y);
+                image[j.x+2u*j.w+k]=.5*(prepared(j,1,x+1,y)-prepared(j,1,x-1,y))*mask;
+                image[j.x+3u*j.w+k]=.5*(prepared(j,1,x,y+1)-prepared(j,1,x,y-1))*mask;
             }
         }
-        barrier();if(state!=0)break;
+        return;
     }
-    if(lane==0)fit[id]=state==2 ? vec4(0.,0.,-1.,0.) : vec4(best,1.);
+    vec4 state=work[at];
+    if(kernelStage==5) {
+        if(lane==0)work[id]=state.w==1. ? vec4(state.xyz,1.) : vec4(0.,0.,-1.,0.);
+        return;
+    }
+    if(state.w!=0.)return;
+    uint chunk=gl_WorkGroupID.x;
+    vec4 v0=vec4(0.),v1=vec4(0.),v2=vec4(0.),v3=vec4(0.);
+    vec4 totals=vec4(0.);
+    uint end=min(j.w,(chunk+1u)*1024u);
+    if(kernelStage==1) {
+        for(uint k=chunk*1024u+lane;k<end;k+=128u) {
+            int x=int(k%j.y),y=int(k/j.y);
+            if(validMask(j,x,y,state.xy))totals+=vec4(warped(j,x,y,state.xy).x,image[j.x+k],1.,0.);
+        }
+    } else if(lane<uint(p.chunks)) {
+        uint start=at+2u+lane*4u;
+        v0=work[start];v1=work[start+1u];v2=work[start+2u];v3=work[start+3u];
+        totals=vec4(v1.w*v0.w,v3.z*v0.w,v0.w,0.);
+    }
+    a[lane]=totals;b[lane]=vec4(0.);c[lane]=vec4(0.);reduceAll(lane);
+    if(lane==0)center=vec4(a[0].z>0. ? a[0].xy/a[0].z : vec2(0.),a[0].z,0.);
+    barrier();
+    if(kernelStage==4 && center.z<1.){if(lane==0)work[at].w=2.;return;}
+    vec4 s0=vec4(0.),s1=vec4(0.),s2=vec4(0.);
+    if(kernelStage==1) {
+        for(uint k=chunk*1024u+lane;k<end;k+=128u) {
+            int x=int(k%j.y),y=int(k/j.y);vec3 v=warped(j,x,y,state.xy);
+            bool mask=validMask(j,x,y,state.xy);
+            float iz=mask ? v.x-center.x : v.x;
+            float tz=mask ? image[j.x+k]-center.y : 0.;
+            s0+=vec4(mask ? iz*iz : 0.,tz*tz,iz*tz,v.y*v.y);
+            s1+=vec4(v.y*v.z,v.z*v.z,v.y*iz,v.z*iz);
+            s2+=vec4(v.y*tz,v.z*tz,mask ? v.y : 0.,mask ? v.z : 0.);
+        }
+    } else {
+        float di=v1.w-center.x,dt=v3.z-center.y;
+        s0=vec4(v0.x+v0.w*di*di,v0.y+v0.w*dt*dt,v0.z+v0.w*di*dt,v1.x);
+        s1=vec4(v1.y,v1.z,v2.xy+di*v3.xy);
+        s2=vec4(v2.zw+dt*v3.xy,0.,0.);
+    }
+    a[lane]=s0;b[lane]=s1;c[lane]=s2;reduceAll(lane);
+    if(lane!=0)return;
+    if(kernelStage==1) {
+        uint start=at+2u+chunk*4u;
+        work[start]=vec4(a[0].xyz,center.z);
+        work[start+1u]=vec4(a[0].w,b[0].xy,center.x);
+        work[start+2u]=vec4(b[0].zw,c[0].xy);
+        work[start+3u]=vec4(c[0].zw,center.y,0.);
+    } else {
+        float h00=a[0].w,h01=b[0].x,h11=b[0].y;
+        float determinant=h00*h11-h01*h01;
+        if(a[0].x<=0. || a[0].y<=0. || determinant<=max(1e-6,h00*h11*1e-8)){work[at].w=2.;return;}
+        mat2 inverse=mat2(h11,-h01,-h01,h00)/determinant;
+        vec2 ip=b[0].zw,tp=c[0].xy,projected=inverse*ip;
+        float denominator=a[0].z-dot(tp,projected);
+        if(denominator<=0.){work[at].w=2.;return;}
+        float lambda=(a[0].x-dot(ip,projected))/denominator;
+        vec2 delta=inverse*(lambda*tp-ip);
+        float rho=a[0].z/sqrt(a[0].x*a[0].y);
+        if(isnan(rho)||isinf(rho)||any(isnan(delta))||any(isinf(delta))){work[at].w=2.;return;}
+        bool converged=abs(rho-state.z)<p.epsilon;
+        state.xy+=delta;state.z=rho;
+        state.w=length(state.xy)>16. ? 2. : converged ? 1. : 0.;
+        work[at]=state;
+    }
 }

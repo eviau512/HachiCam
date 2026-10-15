@@ -30,7 +30,7 @@ independent/identical phases, excessive source border loss, colored/faint ink,
 blank paper and an internal table. Outputs are in `.tools/native-quality-tests.log`.
 The launcher suppresses Windows modal loader/error dialogs and captures failures.
 
-## Experimental GPU primitives (rc13)
+## Experimental GPU primitives (rc14)
 
 Run `scripts/test-gpu-native.ps1` on a host with a hardware Vulkan compute device.
 It builds the actual packed-byte support/ECC shaders against the production
@@ -40,6 +40,19 @@ regression. Missing hardware is an explicit failure of GPU execution, not a
 CPU pass reported as GPU. Timeout injection completes real work first and then
 simulates the unresolved policy state; it tests bounded quarantine without
 deliberately hanging a driver. Real Android driver failure/thermal tests remain pending.
+
+The rc14 ECC solver uses six cached specialized pipelines, resident byte-input
+Gaussian/gradient/mask preparation and two tiled reduction dispatches per bounded
+iteration. Actual GPU tests compare all five prepared float planes exactly with
+CPU, check known shifts and 16 mixed non-square patches with partial chunks, and
+reject flat, insufficient-mask and overflowing inputs. Numerical proposal limits
+remain 0.05 source pixel and 0.002 correlation. Production workload calibration
+can still select CPU; executing the test shader does not prove a phone speedup.
+
+The quality suite also checks native-byte highlight demand coordinates, all
+potential conflict/edge nodes and exhaustive admission for small supported target
+regions. These checks protect the demand-bounded scheduling optimization without
+changing the recovery thresholds or claiming new lamp recovery.
 
 `scripts/build-compute-shaders.ps1` rebuilds the checked-in SPIR-V and C++ headers
 using the installed NDK's glslc, targeting Vulkan 1.0. Android debug integration

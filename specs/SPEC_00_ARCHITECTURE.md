@@ -232,6 +232,15 @@ used by the two connected kernels when unsupported, unhealthy or unqualified.
 The rest of the migration remains unimplemented; phone latency/thermal acceptance
 has not been established by the host tests.
 
+The demand-bounded HDR follow-up in SPEC_02 finishes the ordinary native byte
+merge before short registration. Its native output and one CV_8U reference-sized
+demand mask overlap reference/local preparation. Reserve these explicit lifetimes
+before work; reuse the final native buffer rather than allocating a second color
+merge. Demand is temporary, never a retained per-plate float map, and is released
+with reference preparation before allocating the optional 2x output.
+Increase the ordinary-path estimate by four bytes per source pixel for this new
+overlap (three native color bytes and one demand byte); streaming is unchanged.
+
 The rc6 experimental native-high-resolution profile is exclusive: no other
 capture/queued job may coexist from its admission through cleanup. It bounds
 encoded burst bytes and estimates available memory before capture/decoding.
@@ -285,8 +294,13 @@ budget. Preserve each group's own final image, inputs, captureId and paired
 context. Evict the oldest retained group by byte/count limits; a failed new
 snapshot must preserve the latest complete one. Transient pending/replacement
 copies require separate free-space checks. Default final-image diagnostic export
-may include the four retained completed groups; use `capture/` for the latest and
-distinct `captures/<group>/` paths for older groups. The root live log is context,
+may include the four retained completed groups. **rc14 export layout revision:**
+write every selected group exactly once under `captures/<captureId>/`, latest
+and history alike; remove the legacy `capture/` alias. Deduplicate valid capture
+IDs with the newest committed snapshot winning, including old caches containing
+repeated IDs. Record layout version, ordered IDs and latest capture ID in the
+export footer; log guidance must point to these paths. Legacy cache directories
+remain readable without copying them into a second exported layout. The root live log is context,
 not older groups' matching log. Report retained IDs and per-export command,
 snapshot-lock and ZIP times; no input-only snapshot may be called a final result.
 Keep the release no-retention rule and source read leases while copying a READY

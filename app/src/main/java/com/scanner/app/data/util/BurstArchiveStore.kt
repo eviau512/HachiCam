@@ -32,10 +32,12 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
     }
     private fun pruneHistory() {
         var bytes=files(File(root,"current")).sumOf { it.length() }
-        history().forEachIndexed { index, folder ->
+        val seen=mutableSetOf(groupId(File(root,"current")))
+        var kept=0
+        history().forEach { folder ->
             val size=files(folder).sumOf { it.length() }
-            if(index>=GROUP_LIMIT-1 || bytes+size>LIMIT) check(folder.deleteRecursively())
-            else bytes+=size
+            if(!seen.add(groupId(folder)) || kept>=GROUP_LIMIT-1 || bytes+size>LIMIT) check(folder.deleteRecursively())
+            else { bytes+=size; kept++ }
         }
     }
     private fun groupId(folder: File): String {
@@ -103,9 +105,9 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
         recoverPrevious()
         val current = File(root, "current")
         if (!File(current, "manifest.json").isFile || !File(current,"fused.jpg").isFile) return@synchronized null
-        val groups=listOf(current) + if(includeHistory)history().take(GROUP_LIMIT-1) else emptyList()
-        val selected=groups.flatMapIndexed { index, folder -> files(folder).map { file ->
-            file to if(index==0) "capture/${file.name}" else "captures/$index-${groupId(folder)}/${file.name}"
+        val groups=(listOf(current) + if(includeHistory)history() else emptyList()).distinctBy(::groupId).take(GROUP_LIMIT)
+        val selected=groups.flatMap { folder -> files(folder).map { file ->
+            file to "captures/${groupId(folder)}/${file.name}"
         } }
         val total = selected.sumOf { it.first.length() } + log.length()
         val destination = output.parentFile ?: return@synchronized null
@@ -123,7 +125,7 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
                 }
                 val payloadEndNs=System.nanoTime()
                 val ids=groups.joinToString(",") { "\"${groupId(it)}\"" }
-                val footer="{\"schema\":1,\"clock\":\"System.nanoTime\",\"groups\":[$ids],\"groupCount\":${groups.size},\"payloadBytes\":$total,\"snapshotLockWaitMs\":${(acquiredNs-requestNs).coerceAtLeast(0)/1e6},\"zipPayloadMs\":${(payloadEndNs-acquiredNs).coerceAtLeast(0)/1e6},\"scope\":\"before footer and ZIP close\"}"
+                val footer="{\"schema\":2,\"layout\":\"captures-by-id-v2\",\"latestCaptureId\":\"${groupId(current)}\",\"clock\":\"System.nanoTime\",\"groups\":[$ids],\"groupCount\":${groups.size},\"payloadBytes\":$total,\"snapshotLockWaitMs\":${(acquiredNs-requestNs).coerceAtLeast(0)/1e6},\"zipPayloadMs\":${(payloadEndNs-acquiredNs).coerceAtLeast(0)/1e6},\"scope\":\"before footer and ZIP close\"}"
                 zip.putNextEntry(ZipEntry("export-timing.json"));zip.write(footer.toByteArray(Charsets.UTF_8));zip.closeEntry()
             }
             check(temporary.renameTo(output))
