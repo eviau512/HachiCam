@@ -54,6 +54,13 @@ potential conflict/edge nodes and exhaustive admission for small supported targe
 regions. These checks protect the demand-bounded scheduling optimization without
 changing the recovery thresholds or claiming new lamp recovery.
 
+rc15 updates highlight demand to the revised >=247 channel-clipping contract.
+The math regression checks adversarial single-channel JPEG response and exact
+preservation of unclipped channels; the full pipeline retains clipped colored
+text/rings and normal/streaming rejection cases. Cached/uncached node preparation
+is compared with identical registration fields/gates. Medium-correlation GPU
+scheduling failed frozen conformance and is not activated.
+
 `scripts/build-compute-shaders.ps1` rebuilds the checked-in SPIR-V and C++ headers
 using the installed NDK's glslc, targeting Vulkan 1.0. Android debug integration
 adds startup and real-workload CPU/timing calibration. Test force/failure hooks

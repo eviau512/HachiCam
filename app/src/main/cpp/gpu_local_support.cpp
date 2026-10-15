@@ -511,7 +511,7 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
                 const double estimatedCpu=cpuMs*double(patches.size())/batch.size();
                 context->fitPolicy[key]=match && usable && estimatedGpu<=estimatedCpu*.90 ? 1 : -1;
                 __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf",
-                    "GPU ECC calibration v3 key=%d patches=%zu/%zu coldCallMs=%.3f warmCallMs=%.3f cpuBatchMs=%.3f fallbackMs=%.3f selectorMs=%.3f estimatedGpuMs=%.3f estimatedCpuMs=%.3f conforming=%d usable=%d missing=%d preferred=%s",
+                    "GPU ECC calibration v4 key=%d patches=%zu/%zu coldCallMs=%.3f warmCallMs=%.3f cpuBatchMs=%.3f fallbackMs=%.3f selectorMs=%.3f estimatedGpuMs=%.3f estimatedCpuMs=%.3f conforming=%d usable=%d missing=%d preferred=%s",
                     key,batch.size(),patches.size(),gpuMs,warmMs,cpuMs,fallbackMs,selectionMs,estimatedGpu,estimatedCpu,int(match),usable,missing,context->fitPolicy[key]>0 ? "Vulkan" : "CPU");
                 if(context->fitPolicy[key]<0) {
                     for(size_t i=0;i<cpu.size();++i){if(cpu[i][3])cpu[i][3]=2;fits[begin+i]=cpu[i];}

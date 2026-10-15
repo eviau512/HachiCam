@@ -50,7 +50,7 @@ inline bool compatibleHighlight(const Color& base,const Color& shorter,float gai
 inline Color recoverHighlight(const Color& base, const Color& shorter, float gain, bool observedDark = false) {
     const float peak = *std::max_element(base.begin(), base.end());
     const float shortPeak = *std::max_element(shorter.begin(), shorter.end());
-    if (peak <= 230.0f || (!observedDark && shortPeak < 3.0f) || shortPeak >= 246.0f || gain <= 1.1f)
+    if (peak < 247.0f || (!observedDark && shortPeak < 3.0f) || shortPeak >= 246.0f || gain <= 1.1f)
         return base;
     Color radiance;
     for (int c = 0; c < 3; ++c) radiance[c] = linear(shorter[c]) * gain;
@@ -66,7 +66,8 @@ inline Color recoverHighlight(const Color& base, const Color& shorter, float gai
     const float weight = u * u * (3.0f - 2.0f * u);
     Color out;
     for (int c = 0; c < 3; ++c)
-        out[c] = base[c] * (1.0f - weight) + encoded(radiance[c] * scale) * weight;
+        out[c] = base[c] < 247.f ? base[c] :
+            base[c] * (1.0f - weight) + encoded(radiance[c] * scale) * weight;
     return out;
 }
 } // namespace fusion

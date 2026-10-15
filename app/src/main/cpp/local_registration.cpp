@@ -207,7 +207,7 @@ cv::Mat highlightDemand(const cv::Mat& native,const cv::Rect& crop,cv::Size doma
     #pragma omp parallel for schedule(static)
     for(int y=0;y<native.rows;++y)for(int x=0;x<native.cols;++x) {
         const auto p=native.at<cv::Vec3b>(y,x);
-        if(std::max({p[0],p[1],p[2]})>230)mask.at<uchar>(y+crop.y,x+crop.x)=255;
+        if(std::max({p[0],p[1],p[2]})>=247)mask.at<uchar>(y+crop.y,x+crop.x)=255;
     }
     return mask;
 }
@@ -244,17 +244,35 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     cv::Mat refAlign,srcAlign;
     if(cached)refAlign=prepared->align;else cv::GaussianBlur(reference,refAlign,cv::Size(0,0),1.2);
     cv::GaussianBlur(warped,srcAlign,cv::Size(0,0),1.2);
-    const double noiseGain=[] {
+    static const double noiseGain=[] {
         cv::Mat impulse=cv::Mat::zeros(25,25,CV_32F);impulse.at<float>(12,12)=1;
         const auto band=highPass(impulse);return cv::sum(band.mul(band))[0];
     }();
     model.noiseSigma=cached ? prepared->noiseSigma : float(estimateNoiseSigma(reference));
+    struct NodePreparation {double refNoise=0,srcNoise=0,refVariance=0,srcVariance=0;};
+    std::vector<NodePreparation> nodes(nx*ny);
+    int preparedNodes=0;
+    #pragma omp parallel for schedule(dynamic) reduction(+:preparedNodes)
+    for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx) {
+        if(!activeNodes.empty() && !activeNodes.at<uchar>(gy,gx))continue;
+        const int cx=singlePatch ? reference.cols/2 : std::min(gx*model.spacing,reference.cols-1);
+        const int cy=singlePatch ? reference.rows/2 : std::min(gy*model.spacing,reference.rows-1);
+        const cv::Rect roi(std::max(0,cx-160),std::max(0,cy-160),
+            std::min(reference.cols,cx+161)-std::max(0,cx-160),std::min(reference.rows,cy+161)-std::max(0,cy-160));
+        if(roi.width<32 || roi.height<32)continue;
+        auto& node=nodes[gy*nx+gx];
+        ++preparedNodes;
+        node.refNoise=cached ? prepared->noise.at<double>(gy,gx) : estimateNoiseSigma(reference(roi));
+        node.srcNoise=estimateNoiseSigma(warped(roi));
+        const cv::Rect interior(roi.x+10,roi.y+10,roi.width-20,roi.height-20);
+        cv::Scalar mean,a,b;cv::meanStdDev(refHP(interior),mean,a);cv::meanStdDev(srcHP(interior),mean,b);
+        node.refVariance=a[0]*a[0];node.srcVariance=b[0]*b[0];
+    }
     const auto preparedAt=std::chrono::steady_clock::now();
     std::vector<cv::Vec4f> fittedNodes(nx*ny,cv::Vec4f(0,0,-1,0));
-    std::vector<double> sourceNoise(nx*ny,std::numeric_limits<double>::quiet_NaN());
     std::string fitBackend="CPU fitting";
     if(!singlePatch && gpuFittingAvailable(reference.total(),highlight)) {
-        std::vector<cv::Rect> patches;std::vector<int> indices;
+        const auto selectionStarted=std::chrono::steady_clock::now();
         std::vector<uchar> eligible(nx*ny,0);
         #pragma omp parallel for schedule(dynamic)
         for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx) {
@@ -263,37 +281,35 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
             const cv::Rect roi(std::max(0,cx-160),std::max(0,cy-160),
                 std::min(reference.cols,cx+161)-std::max(0,cx-160),std::min(reference.rows,cy+161)-std::max(0,cy-160));
             if(roi.width<32 || roi.height<32)continue;
-            const cv::Rect interior(roi.x+10,roi.y+10,roi.width-20,roi.height-20);
-            cv::Scalar mean,a,b;cv::meanStdDev(refHP(interior),mean,a);cv::meanStdDev(srcHP(interior),mean,b);
-            // Restrict GPU proposals to strong initial correspondence. Every
-            // other node still runs the original CPU optimizer and checks.
-            if(a[0]<2 || b[0]<2)continue;
+            const auto& node=nodes[gy*nx+gx];
+            const double rn=node.refNoise,sn=node.srcNoise;
+            const double rs=node.refVariance-noiseGain*rn*rn,ss=node.srcVariance-noiseGain*sn*sn;
+            if(node.refVariance<4 || node.srcVariance<4 ||
+               rs<std::max(2.25,4*noiseGain*rn*rn) || ss<std::max(2.25,4*noiseGain*sn*sn))continue;
             cv::Mat mask=localFitMask(warped,geometryValidity,roi);
             mask &= (reference(roi)>8)&(reference(roi)<247);
             if(cv::countNonZero(mask)<256)continue;
-            const double rn=cached ? prepared->noise.at<double>(gy,gx) : estimateNoiseSigma(reference(roi));
-            const double sn=estimateNoiseSigma(warped(roi));sourceNoise[gy*nx+gx]=sn;
-            if(a[0]*a[0]-noiseGain*rn*rn<std::max(2.25,4*noiseGain*rn*rn) ||
-               b[0]*b[0]-noiseGain*sn*sn<std::max(2.25,4*noiseGain*sn*sn))continue;
             double ratio=0;
             const double score=correlation(refHP(roi),srcHP(roi),mask,noiseGain*rn*rn,noiseGain*sn*sn,ratio);
-            if(score>=.90 && ratio>=.68)eligible[gy*nx+gx]=255;
+            if(score>=.90 && ratio>=.68)eligible[gy*nx+gx]=1;
         }
+        std::vector<cv::Rect> patches;std::vector<int> indices;
         for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx)if(eligible[gy*nx+gx]) {
             const int cx=std::min(gx*model.spacing,reference.cols-1),cy=std::min(gy*model.spacing,reference.rows-1);
             patches.emplace_back(std::max(0,cx-160),std::max(0,cy-160),
                 std::min(reference.cols,cx+161)-std::max(0,cx-160),std::min(reference.rows,cy+161)-std::max(0,cy-160));
             indices.push_back(gy*nx+gx);
         }
+        const double selectorMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-selectionStarted).count();
         std::vector<cv::Vec4f> proposals;
-        const double selectorMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-preparedAt).count();
         if(!patches.empty() && gpuPatchFits(refAlign,srcAlign,warped,geometryValidity,patches,highlight,proposals,fitBackend,selectorMs))
             for(size_t i=0;i<indices.size();++i)fittedNodes[indices[i]]=proposals[i];
+        if(!patches.empty())__android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU strong scheduling candidates=%zu selectorMs=%.3f reason=%s",patches.size(),selectorMs,fitBackend.c_str());
     }
     int gpuFitCount=0;
     for(const auto& fit:fittedNodes)if(fit[3]==1)++gpuFitCount;
     model.gpuFitProposals=gpuFitCount;
-    __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","local fit GPU proposals=%d nodes=%d reason=%s",gpuFitCount,nx*ny,fitBackend.c_str());
+    __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","local fit GPU proposals=%d nodes=%d preparedNodes=%d reason=%s",gpuFitCount,nx*ny,preparedNodes,fitBackend.c_str());
     int gpuPhysicalFallbacks=0;
     #pragma omp parallel for schedule(dynamic)
     for (int gy = 0; gy < ny; ++gy) for (int gx = 0; gx < nx; ++gx) {
@@ -305,13 +321,11 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
             std::min(reference.rows, cy + 161) - std::max(0, cy - 160));
         if (roi.width < 32 || roi.height < 32) continue;
         const cv::Mat ref=refAlign(roi),src=srcAlign(roi);
-        const double refNoise=cached ? prepared->noise.at<double>(gy,gx) : estimateNoiseSigma(reference(roi));
-        const double srcNoise=std::isfinite(sourceNoise[gy*nx+gx]) ? sourceNoise[gy*nx+gx] : estimateNoiseSigma(warped(roi));
+        const auto& node=nodes[gy*nx+gx];
+        const double refNoise=node.refNoise,srcNoise=node.srcNoise;
         const cv::Rect interior(roi.x+10,roi.y+10,roi.width-20,roi.height-20);
-        cv::Scalar mean,sd,srcSd;
-        cv::meanStdDev(refHP(interior),mean,sd);cv::meanStdDev(srcHP(interior),mean,srcSd);
-        const double refSignal=std::max(0.,sd[0]*sd[0]-noiseGain*refNoise*refNoise);
-        const double srcSignal=std::max(0.,srcSd[0]*srcSd[0]-noiseGain*srcNoise*srcNoise);
+        const double refSignal=std::max(0.,node.refVariance-noiseGain*refNoise*refNoise);
+        const double srcSignal=std::max(0.,node.srcVariance-noiseGain*srcNoise*srcNoise);
         if (refSignal < 2.25 && srcSignal < 2.25) {
             cv::Mat difference;cv::absdiff(refAlign(interior),srcAlign(interior),difference);
             // No translation fit to random grain, and no SR credit. The globally

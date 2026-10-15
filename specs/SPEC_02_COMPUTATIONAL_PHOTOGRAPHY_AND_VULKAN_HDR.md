@@ -295,6 +295,26 @@ with lower noise; fall back to the reference when reliable recovery is absent.
 JPEG transfer inversion and exposure ratios approximate scene response. Vendor
 local tone mapping prevents treating these samples as calibrated radiance.
 
+**rc15 partial-channel recovery correction (specified before implementation):**
+The rc14 PPT white field develops blue/dark impulses during native HDR, before
+reconstruction. A scalar response estimate plus a shoulder driven by the largest
+short-channel radiance can strongly rescale reference channels that never
+clipped. Compatibility checked before that shoulder does not protect the output.
+For a base-merge pixel with any channel >=247, preserve every channel <247
+exactly through highlight replacement; only clipped channels may be reconstructed
+from the independently geometrically admitted short sample. All-clipped pixels
+retain the existing common radiance/shoulder formula and observed-hole policy.
+Pixels without any clipped channel retain native fusion rather than applying a
+scalar-response shoulder to already observed highlights. Do not turn clipping
+noise across 246/247 into changes in the other channels. This conservative JPEG
+rule does not recover unknown local/channel response or certify all white fields.
+Version it `clipped-channel-preservation-v1` in paired diagnostics; apply the same
+math to ordinary and streaming paths. Preserve real single-channel colored/text
+recovery, all-channel clipped text/rings, independent geometry/occlusion guards
+and base-frame fusion. Test adversarial out-of-domain clipped-channel response
+and noisy single-channel thresholds; compare native before/after HDR on the
+provided white field, including any residual clipped-channel impulses.
+
 Current `clippedFraction` counts pixels with a base-merge channel >= 250 **before**
 highlight replacement, divided by output pixels. `recoveredFraction` counts
 output locations actually changed by accepted short observations. Neither is a
@@ -333,7 +353,8 @@ This is a scheduling optimization, not a new tone model or a relaxed HDR gate.
 For the ordinary in-memory path, finish base registration and native-size
 denoising before evaluating short plates. Freeze the existing base crop and
 derive a reference-coordinate byte demand mask from the actual rounded native
-merge, with any channel >230; do not substitute luma, reference-only clipping,
+merge. rc15 supersedes the former >230 threshold with any channel >=247, matching
+the clipped-channel recovery contract; do not substitute luma, reference-only clipping,
 an estimated screen rectangle or output megapixels. The mask must not become a
 geometry-validity mask or remove unclipped context from the fitting patches.
 
@@ -768,6 +789,30 @@ end-to-end paired/device acceptance remains independent of this policy estimate.
 The estimate describes workload execution after validation, not calibration
 capture latency: actual capture timing must include the extra CPU baseline and
 repeated GPU validation call. Do not subtract those costs from measured latency.
+
+**rc15 shared preparation and scheduling correction (specified before implementation):**
+The phone reports four matching GPU fits in 19.661 ms versus CPU 89.299 ms, but
+92.077 ms of selector work makes the profile CPU-preferred. Part of that work
+estimates source noise and high-pass moments that the CPU physical path also
+requires. Prepare node reference/source noise and interior high-pass variances
+once for every active node, independently of backend, and reuse them for CPU
+qualification and GPU scheduling. Keep the original calculations, patch margins,
+active-node/cached-reference/single-patch semantics and final acceptance intact.
+Report this common work in registration preparation time; charge all remaining
+GPU-exclusive selector work to GPU, without subtracting it from end-to-end time.
+Shared context initialization remains in actual capture timing; fitting execution
+cost must not be charged initialization already shared with support-map execution.
+
+Retain the rc14 strong selector and existing base/short and <=8/<=16/larger cost
+classes. A medium-correlation experiment (>=0.70 and signal variances >=2.25)
+failed frozen CPU/GPU conformance by approximately 0.18–0.60 px in otherwise
+usable proposals, beyond the unchanged 0.05 px bound. It remains rejected research
+and must not be enabled or weaken calibration limits for utilization numbers.
+Charge the complete remaining GPU-exclusive selector duration, preserve original
+ordering and include calibration overhead in capture time. Log prepared-node
+count so zero GPU proposals cannot be mistaken for offloaded fitting. CPU-only
+registration/reference/crop/eligibility must remain the same, apart from the
+explicit HDR correction. Larger GPU migration remains unimplemented.
 
 The optimizer mask excludes the same ten-pixel **patch boundary** already excluded
 by the independent high-pass check. This prevents constant-border resampling at

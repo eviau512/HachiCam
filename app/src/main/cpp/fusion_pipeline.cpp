@@ -321,7 +321,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
             if (!preserve.empty() && (*std::max_element(base.begin(), base.end()) >= 247 ||
                                       std::max({original[0], original[1], original[2]}) >= 247))
                 preserve.at<uchar>(y, x) = 255;
-            if (*std::max_element(base.begin(), base.end()) > 230)
+            if (*std::max_element(base.begin(), base.end()) >= 247)
                 for (size_t hi = 0; hi < highlights.size(); ++hi) {
                     const auto &plate = highlights[hi];
                     if (!plate.local.gate.at<uchar>(gy, gx))

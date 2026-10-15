@@ -241,6 +241,12 @@ with reference preparation before allocating the optional 2x output.
 Increase the ordinary-path estimate by four bytes per source pixel for this new
 overlap (three native color bytes and one demand byte); streaming is unchanged.
 
+The rc15 registration preparation cache adds bounded scalar noise/moment records
+per active local node, not retained full-size masks or new image planes. It is
+per call and discarded before reconstruction; reference reuse still requires
+identity/size matching. The existing strong GPU cost profiles share the
+context, sixteen-patch limit and 64 MiB pool, without parallel device submissions.
+
 The rc6 experimental native-high-resolution profile is exclusive: no other
 capture/queued job may coexist from its admission through cleanup. It bounds
 encoded burst bytes and estimates available memory before capture/decoding.

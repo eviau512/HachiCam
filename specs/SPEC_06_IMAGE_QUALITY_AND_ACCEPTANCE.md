@@ -410,8 +410,22 @@ First support-map implementation acceptance (specified before implementation):
   streaming native byte-grid clipping against the returned scale=1 image,
   including all-clipped/no-usable-short evidence. This diagnostic is not a new
   tone model or an HDR image-quality pass.
+- HDR-COLOR-01 (rc15, specified before implementation): noisy white PPT fields
+  with one clipped channel and incompatible scalar JPEG response cannot rescale
+  unclipped channels. Those channels are exact native-merge invariants; no-clipped
+  pixels retain native fusion. Verify adversarial high-radiance clipped channels,
+  clipping-boundary noise and actual pre/post-HDR white-field impulses, while
+  retaining supported colored single-channel text and all-channel clipped holes.
+- GPU-FIT-03 (rc15, specified before implementation): CPU/GPU share each active
+  node's noise/moment preparation once. Test cached/uncached reference and single
+  patch behavior, original strong scheduling, insufficient/missing proposals and
+  disabled CPU-only builds. Keep 0.05 px /0.002 and physical guards. Report full
+  latency and GPU-exclusive selector cost separately from common preparation;
+  phone GPU proposal counts and p50/p95 remain separate acceptance.
+  The medium-correlation scheduling experiment failed frozen conformance and
+  remains disabled; tests or timing must not imply it is a shipped optimization.
 - PERF-HDR-01 (2026-10-15, required before implementation): derive demand from
-  the actual native merged byte image (>230 in any channel). Retain all nodes
+  the actual native merged byte image (rc15: >=247 in any channel, superseding >230). Retain all nodes
   the existing highlight lookup could consult, including conflicting neighbors
   and non-multiple edge centres. Compare exhaustive/pruned offsets and gates
   at demanded pixels, and run full-node admission for a nonzero demanded support

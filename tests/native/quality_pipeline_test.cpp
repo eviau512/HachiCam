@@ -30,8 +30,8 @@ static double error(const cv::Mat& a, const cv::Mat& b, const cv::Mat& mask) {
     return cv::mean(difference, mask)[0];
 }
 static void runHighlightDemandTests() {
-    cv::Mat native(41,63,CV_8UC3,cv::Scalar::all(230));
-    native.at<cv::Vec3b>(4,5)={231,20,20};
+    cv::Mat native(41,63,CV_8UC3,cv::Scalar::all(246));
+    native.at<cv::Vec3b>(4,5)={247,20,20};
     const auto demand=fusion::highlightDemand(native,{17,23,63,41},{777,533});
     check(cv::countNonZero(demand)==1 && demand.at<uchar>(27,22),"HDR demand uses actual rounded byte channels and crop coordinates");
     cv::Mat requested=cv::Mat::zeros(533,777,CV_8U);
@@ -73,6 +73,11 @@ int runTests() {
     check(fusion::referenceQuality(chart) > fusion::referenceQuality(blurred) * 2, "Sharp reference must outrank blurred arrival");
     cv::Mat ref; cv::cvtColor(chart, ref, cv::COLOR_BGR2GRAY);
     auto upper = shifted(ref, .65, -.40), lower = shifted(ref, -2.30, .80);
+    const auto cachedReference=fusion::prepareReference(ref);
+    const auto cachedModel=fusion::registerLocal(ref,upper,false,false,cv::Mat(),&cachedReference);
+    const auto uncachedModel=fusion::registerLocal(ref,upper);
+    check(cv::norm(cachedModel.field,uncachedModel.field,cv::NORM_INF)==0 &&
+        cv::norm(cachedModel.gate,uncachedModel.gate,cv::NORM_INF)==0,"Shared node preparation preserves cached/uncached registration");
     lower.rowRange(512, 1024).copyTo(upper.rowRange(512, 1024));
     cv::rectangle(upper, cv::Rect(700, 100, 100, 100), cv::Scalar(60), cv::FILLED);
     auto local = fusion::registerLocal(ref, upper);

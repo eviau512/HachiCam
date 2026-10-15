@@ -16,6 +16,17 @@ int main() {
     check(low[0] > 100 && low[0] < high[0] && high[0] < 250, "Clipped bulb must recover monotonic interior contrast below clipping");
     const auto color = recoverHighlight(white, {50, 100, 180}, 8);
     check(color[0] < color[1] && color[1] < color[2], "Clipped reference must recover the shorter exposure color");
+    // A scalar JPEG response may imply huge radiance only in the clipped blue
+    // channel. Its shoulder must not create cyan impulses in measured G/R.
+    for(float baseBlue:{246.f,247.f,250.f,255.f})for(float shortBlue:{80.f,130.f,180.f,220.f}) {
+        const Color base{baseBlue,235.f,203.f};
+        const Color shortSample{shortBlue,encoded(linear(235.f)/20.f),encoded(linear(203.f)/20.f)};
+        check(compatibleHighlight(base,shortSample,20.f) || baseBlue<247.f,"Adversarial clipped-channel fixture must pass original compatibility");
+        const auto recovered=recoverHighlight(base,shortSample,20.f);
+        check(recovered[1]==base[1] && recovered[2]==base[2],"HDR cannot rescale unclipped white-field channels");
+        if(baseBlue<247.f)check(recovered==base,"Observed nonclipped highlights retain native fusion");
+        else check(recovered[0]<250.f,"Supported single-channel recovery remains active");
+    }
     for (int v = 0; v <= 255; ++v) check(std::abs(encoded(linear(float(v))) - v) < .001f, "sRGB round trip");
     check(sourceCoordinate(0, 2) == -.25 && sourceCoordinate(1, 2) == .25, "Pixel-centre mapping");
     check(sampleWeight(.25, .25) > 0 && sampleWeight(.75, .25) == 0, "Distinct sensor phases must use compact support");

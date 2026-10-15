@@ -1,7 +1,7 @@
 > [!NOTE]
 > The owner of this repo built this entirely via vibe coding, and isn't quite sure what this Agent actually does. ¯\\\_(ツ)\_/¯
 
-> Current contracts and implementation limits: [specifications](specs/README.md), [TODO](TODO.md) and [rc14 performance report](specs/reports/RC14_REGISTRATION_PERFORMANCE_2026-10-15.zh-CN.md). Build the test APK with `scripts/build-test.ps1`.
+> Current contracts and implementation limits: [specifications](specs/README.md), [TODO](TODO.md) and [rc15 PPT highlight report](specs/reports/RC15_PPT_HIGHLIGHT_NOISE_2026-10-15.zh-CN.md). Build the test APK with `scripts/build-test.ps1`.
 
 <div align="center">
 

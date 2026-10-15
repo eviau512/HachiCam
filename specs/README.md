@@ -20,7 +20,8 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Current work: [rc14 registration performance](reports/RC14_REGISTRATION_PERFORMANCE_2026-10-15.zh-CN.md).
+Current work: [rc15 PPT highlight noise](reports/RC15_PPT_HIGHLIGHT_NOISE_2026-10-15.zh-CN.md).
+Previous checkpoint: [rc14 registration performance](reports/RC14_REGISTRATION_PERFORMANCE_2026-10-15.zh-CN.md).
 Previous delivered batch: [rc13 performance, diagnostics and recovery](reports/RC13_PERFORMANCE_AND_RECOVERY_2026-10-15.zh-CN.md),
 following the [four-scene rc12 evidence](reports/RC12_FOUR_SCENES_2026-10-15.zh-CN.md).
 Two debug Vulkan kernels self-test/calibrate before use, with CPU fallback;

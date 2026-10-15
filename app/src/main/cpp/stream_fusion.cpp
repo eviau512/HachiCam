@@ -199,7 +199,7 @@ cv::Mat BurstFusionEngine::fuseBurstStream(size_t count,const std::function<cv::
         #pragma omp parallel for schedule(static) reduction(+:used)
         for(int y=0;y<output.rows;++y)for(int x=0;x<output.cols;++x) {
             if(recovered.at<uchar>(y,x))continue;
-            auto& pixel=output.at<cv::Vec3b>(y,x);if(std::max({pixel[0],pixel[1],pixel[2]})<=230)continue;
+            auto& pixel=output.at<cv::Vec3b>(y,x);if(std::max({pixel[0],pixel[1],pixel[2]})<247)continue;
             const int rx=crop.x+x,ry=crop.y+y;cv::Point2d d;float confidence;
             if(!plate.local.offset(rx,ry,d,confidence))continue;
             const auto sourcePoint=project(plate.inverse,rx+d.x,ry+d.y);

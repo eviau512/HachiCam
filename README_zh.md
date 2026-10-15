@@ -1,7 +1,7 @@
 > [!NOTE]
 > 本项目的作者完全通过 Vibe Coding 构建了本项目，且并不完全清楚这个 Agent 到底偷偷写了些什么代码。 ¯\\\_(ツ)\_/¯
 
-> 当前契约、实现及限制见 [规格索引](specs/README.md)、[TODO](TODO.md) 和 [rc14 性能报告](specs/reports/RC14_REGISTRATION_PERFORMANCE_2026-10-15.zh-CN.md)。测试版构建入口：`scripts/build-test.ps1`。
+> 当前契约、实现及限制见 [规格索引](specs/README.md)、[TODO](TODO.md) 和 [rc15 PPT 高光报告](specs/reports/RC15_PPT_HIGHLIGHT_NOISE_2026-10-15.zh-CN.md)。测试版构建入口：`scripts/build-test.ps1`。
 
 <div align="center">
 
