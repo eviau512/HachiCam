@@ -92,5 +92,14 @@ CPU 负载。后续应按整块驻留/归约迁移，减少 CPU/GPU 往返；不
 
 ## 交付
 
-rc17 /versionCode 41 universal 测试版待完成冻结重放后构建、校验并发送 Hyper-obs。
+rc17 /versionCode 41、`HachiCamTest`、`moe.hachimi.cam.test` universal 测试版已构建：
+
+- 文件 `HachiCamTest-0.1.2-rc17-1700-universal.apk`，126,728,855 字节。
+- SHA-256：`0ee1cc439784d99afd4179dc4ec33b6236ceadfb3684c9c290b5fd8009ea7a28`。
+- 干净源码身份 `aa2decc099fce863e0fdb82b31a73ea13237e96e`，已推送 `gpu-hdr` 并核对实时远端。
+- ZIP CRC、原调试证书/v2 签名、ZIP 对齐、三 ABI、原 Banner 与不可变副本哈希通过；
+  宿主强制后端/故障测试钩子未进入 APK。原有完整原生 16 KiB 兼容待办仍未验收。
+- **2026-10-16 17:06:33 +08:00**，Tailscale 发送 Hyper-obs（100.79.217.41）成功，
+  退出码 0；发送前后本地副本大小/哈希一致。接收端哈希和手机安装未独立验收。
+
 原始照片、日志、冻结输入及宿主审计副本均只留本地，不进入 Git 或 APK。
