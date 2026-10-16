@@ -2,6 +2,7 @@
 #include "fusion_math.h"
 #include "local_registration.h"
 #include "regional_reconstruction.h"
+#include "gpu_compute.h"
 #include <android/log.h>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "HachiCam-Fusion", __VA_ARGS__)
@@ -82,7 +83,12 @@ bool cropForPlate(const Plate &plate, cv::Rect &crop) {
 }
 
 cv::Mat mergeAnchors(const std::vector<Plate>& anchors,const cv::Mat& ref,const cv::Rect& commonCrop,
-                     long long& contributorCount,long long& multiFramePixels) {
+                     long long& contributorCount,long long& multiFramePixels,fusion::GpuComputeStats& gpu) {
+    std::vector<fusion::SamplingPlate> sampling;
+    for(const auto& plate:anchors)sampling.push_back({&plate.local,plate.inverse,plate.image.size(),&plate.image});
+    cv::Mat accelerated;std::string reason;
+    if(fusion::gpuMergeAnchors(sampling,ref,commonCrop,accelerated,contributorCount,multiFramePixels,gpu,reason))return accelerated;
+    LOGI("Native color merge CPU: %s",reason.c_str());
     cv::Mat native(commonCrop.size(),CV_8UC3);
 #pragma omp parallel for schedule(static) reduction(+ : contributorCount, multiFramePixels)
     for (int y = 0; y < native.rows; ++y)
@@ -159,6 +165,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
     cv::cvtColor(ref, refGray, cv::COLOR_BGR2GRAY);
     const cv::Mat highlightValidity = fusion::unclippedReference(ref);
     auto referencePreparation=fusion::prepareReference(refGray);
+    performance.gpuNoiseGrids=referencePreparation.gpuNoiseGrid ? 1 : 0;
     cv::Rect commonCrop(0, 0, ref.cols, ref.rows);
     cv::Matx33d firstToReference = cv::Matx33d::eye();
     bool geometryKnown = reference == 0;
@@ -169,7 +176,9 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
     unsigned usedHighlightMask=0;
     for(int pass=0;pass<2;++pass) {
     if(pass==1) {
-        native=mergeAnchors(anchors,ref,commonCrop,contributorCount,multiFramePixels);
+        fusion::GpuComputeStats gpu;
+        native=mergeAnchors(anchors,ref,commonCrop,contributorCount,multiFramePixels,gpu);
+        performance.gpuMergeTiles=gpu.mergeTiles;performance.cpuMergePixels=gpu.cpuMergePixels;performance.gpuMergeMs=gpu.mergeMs;
         if(!isScreenMode)continue;
         highlightDemand=fusion::highlightDemand(native,commonCrop,ref.size());
         if(!cv::countNonZero(highlightDemand))continue;
@@ -222,6 +231,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
         performance.localRegistrationMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-localStarted).count();
         performance.gpuSupportMaps+=plate.local.gpuSupportMap ? 1 : 0;
         performance.gpuFitProposals+=plate.local.gpuFitProposals;
+        performance.gpuNoiseGrids+=plate.local.gpuNoiseGrid ? 1 : 0;
         LOGI("Frame %zu tier=%d localSupport=%.3f detailNodes=%.3f denoiseOnly=%.3f noiseSigma=%.2f "
              "maxRefinement=%.3fpx",
              i, tier, plate.local.supportedFraction, plate.local.detailFraction,

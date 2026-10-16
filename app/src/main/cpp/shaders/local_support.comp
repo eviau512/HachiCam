@@ -4,7 +4,7 @@ layout(local_size_x=128) in;
 layout(std430,binding=0) readonly buffer Pixels { uint pixels[]; };
 layout(std430,binding=1) readonly buffer Field { vec4 nodes[]; };
 layout(std430,binding=2) writeonly buffer Gates { uint gates[]; };
-layout(push_constant) uniform Shape { int width; int height; int planeWords; int nx; int ny; int spacing; int count; int unused; } p;
+layout(push_constant) uniform Shape { int width; int height; int planeWords; int nx; int ny; int spacing; int count; int highlight; } p;
 
 float byteAt(int plane, int x, int y) {
     int at=y*p.width+x;
@@ -13,13 +13,31 @@ float byteAt(int plane, int x, int y) {
 uint gateAt(int at) {
     if(at>=p.count)return 0u;
     int x=at%p.width, y=at/p.width;
+    precise vec3 sum=vec3(0.);
+    if(p.highlight!=0) {
+        int gx=int(floor(float(x)/float(p.spacing)+.5)),gy=int(floor(float(y)/float(p.spacing)+.5));
+        vec3 candidates[9];int count=0;float best=1e30;
+        for(int yy=max(0,gy-1);yy<=min(p.ny-1,gy+1);yy++)for(int xx=max(0,gx-1);xx<=min(p.nx-1,gx+1);xx++) {
+            vec3 n=nodes[yy*p.nx+xx].xyz;
+            if(n.z<=0.)continue;
+            vec2 d=vec2(x-min(xx*p.spacing,p.width-1),y-min(yy*p.spacing,p.height-1));
+            if(abs(d.x)>140.||abs(d.y)>140.)continue;
+            for(int i=0;i<count;i++) {
+                float distance=length(n.xy-candidates[i].xy);
+                if(abs(distance-1.5)<.001)return 128u;
+                if(distance>1.5)return 0u;
+            }
+            candidates[count++]=n;
+            float distance=dot(d,d);
+            if(distance<best){best=distance;sum=n;}
+        }
+    } else {
     precise float gx=clamp(float(x)/float(p.spacing),0.,float(p.nx-1));
     precise float gy=clamp(float(y)/float(p.spacing),0.,float(p.ny-1));
     int x0=int(gx),y0=int(gy),x1=min(x0+1,p.nx-1),y1=min(y0+1,p.ny-1);
     precise float fx=gx-float(x0),fy=gy-float(y0);
     vec4 n[4]=vec4[4](nodes[y0*p.nx+x0],nodes[y0*p.nx+x1],nodes[y1*p.nx+x0],nodes[y1*p.nx+x1]);
     precise float w[4]=float[4]((1.-fx)*(1.-fy),fx*(1.-fy),(1.-fx)*fy,fx*fy);
-    precise vec3 sum=vec3(0.);
     for(int i=0;i<4;i++) {
         if(w[i]<=.001)continue;
         if(n[i].z<=0.)return 0u;
@@ -29,6 +47,7 @@ uint gateAt(int at) {
             if(distance>1.5)return 0u;
         }
         sum+=n[i].xyz*w[i];
+    }
     }
     if(sum.z<=0.)return 0u;
     // CPU uses double coordinate addition. Recheck near a sampling boundary.
@@ -40,9 +59,10 @@ uint gateAt(int at) {
     precise float a=q.x-float(sx),b=q.y-float(sy);
     precise float observed=(1.-b)*((1.-a)*byteAt(1,sx,sy)+a*byteAt(1,xx,sy))+
         b*((1.-a)*byteAt(1,sx,yy)+a*byteAt(1,xx,yy));
-    float residual=abs(observed-byteAt(0,x,y));
-    if(abs(residual-14.)<.5)return 128u;
-    return residual<=14. ? 255u : 0u;
+    if(p.highlight!=0 && byteAt(2,x,y)==0.)return 255u;
+    float residual=abs(observed-byteAt(0,x,y)),threshold=p.highlight!=0 ? 18. : 14.;
+    if(abs(residual-threshold)<.5)return 128u;
+    return residual<=threshold ? 255u : 0u;
 }
 void main() {
     uint word=gl_GlobalInvocationID.x;

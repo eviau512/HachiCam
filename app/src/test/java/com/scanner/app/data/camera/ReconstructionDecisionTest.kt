@@ -33,6 +33,8 @@ class ReconstructionDecisionTest {
         assertEquals(ReconstructionDecision.decode(legacy),ReconstructionDecision.decode(extended))
         val timed=extended.copyOf(50).apply { this[44]=1;this[45]=30.0.toBits();this[46]=12.0.toBits();this[47]=10.0.toBits();this[48]=2;this[49]=12 }
         assertEquals(ReconstructionDecision.decode(legacy),ReconstructionDecision.decode(timed))
+        val gpu=timed.copyOf(54).apply {this[44]=2;this[50]=4;this[51]=192;this[52]=12;this[53]=1.0.toBits()}
+        assertEquals(ReconstructionDecision.decode(legacy),ReconstructionDecision.decode(gpu))
         for(invalid in listOf(extended.copyOf().apply { this[42]=2 },extended.copyOf().apply { this[43]=Double.NaN.toBits() }))
             try { ReconstructionDecision.decode(invalid);fail("Invalid highlight extension") } catch(_:IllegalArgumentException) {}
     }

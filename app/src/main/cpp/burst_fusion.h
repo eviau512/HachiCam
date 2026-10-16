@@ -12,6 +12,9 @@ public:
     struct Performance {
         double totalMs=0,globalRegistrationMs=0,localRegistrationMs=0;
         int gpuSupportMaps=0,gpuFitProposals=0;
+        int gpuNoiseGrids=0,gpuMergeTiles=0;
+        long long cpuMergePixels=0;
+        double gpuMergeMs=0;
     };
     struct Report {
         int anchors = 1, highlights = 0, scale = 1, reference = 0;

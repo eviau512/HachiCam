@@ -16,7 +16,7 @@ data class ReconstructionDecision(
 
     companion object {
         fun decode(packet: LongArray): ReconstructionDecision {
-            require(packet.size in listOf(42,44,50) && packet[25] == 1L) { "Unsupported fusion packet schema" }
+            require(packet.size in listOf(42,44,50,54) && packet[25] == 1L) { "Unsupported fusion packet schema" }
             fun fraction(index: Int): Double = Double.fromBits(packet[index]).also { require(it.isFinite() && it in 0.0..1.0) }
             fun count(index: Int): Int = packet[index].also { require(it in 0..Int.MAX_VALUE.toLong()) }.toInt()
             fun error(index: Int): Double = Double.fromBits(packet[index]).also { require(it.isFinite() && it >= 0) }

@@ -1,6 +1,7 @@
 #include "local_registration.h"
 #include "fusion_math.h"
 #include "local_support.h"
+#include "gpu_compute.h"
 #include <chrono>
 #include <android/log.h>
 #include <opencv2/imgproc.hpp>
@@ -189,6 +190,12 @@ ReferencePreparation prepareReference(const cv::Mat& reference) {
     cv::GaussianBlur(reference,cache.smooth,cv::Size(0,0),.6);
     cache.noiseSigma=float(estimateNoiseSigma(reference));
     const int nx=(reference.cols-1+255)/256+1,ny=(reference.rows-1+255)/256+1;
+    std::string backend;
+    if(gpuNoiseGrid(reference,256,{},cache.noise,backend)) {
+        cache.gpuNoiseGrid=backend=="validated GPU noise histogram";
+        __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","reference noise grid backend=%s",backend.c_str());
+        return cache;
+    }
     cache.noise.create(ny,nx,CV_64F);
     #pragma omp parallel for schedule(dynamic)
     for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx) {
@@ -250,6 +257,10 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     }();
     model.noiseSigma=cached ? prepared->noiseSigma : float(estimateNoiseSigma(reference));
     struct NodePreparation {double refNoise=0,srcNoise=0,refVariance=0,srcVariance=0;};
+    cv::Mat sourceNoise;std::string noiseBackend="CPU noise";
+    if(!singlePatch && gpuNoiseGrid(warped,model.spacing,activeNodes,sourceNoise,noiseBackend))
+        model.gpuNoiseGrid=noiseBackend=="validated GPU noise histogram";
+    __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","local source noise backend=%s",noiseBackend.c_str());
     std::vector<NodePreparation> nodes(nx*ny);
     int preparedNodes=0;
     #pragma omp parallel for schedule(dynamic) reduction(+:preparedNodes)
@@ -263,7 +274,7 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
         auto& node=nodes[gy*nx+gx];
         ++preparedNodes;
         node.refNoise=cached ? prepared->noise.at<double>(gy,gx) : estimateNoiseSigma(reference(roi));
-        node.srcNoise=estimateNoiseSigma(warped(roi));
+        node.srcNoise=sourceNoise.empty() ? estimateNoiseSigma(warped(roi)) : sourceNoise.at<double>(gy,gx);
         const cv::Rect interior(roi.x+10,roi.y+10,roi.width-20,roi.height-20);
         cv::Scalar mean,a,b;cv::meanStdDev(refHP(interior),mean,a);cv::meanStdDev(srcHP(interior),mean,b);
         node.refVariance=a[0]*a[0];node.srcVariance=b[0]*b[0];
@@ -410,7 +421,7 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     if(cached)refSmooth=prepared->smooth;else cv::GaussianBlur(reference, refSmooth, cv::Size(0, 0), .6);
     cv::GaussianBlur(warped, srcSmooth, cv::Size(0, 0), .6);
     std::string backendReason=highlight ? "HDR patch support remains CPU" : "";
-    const bool gateReady=!highlight && gpuLocalSupport(refSmooth,srcSmooth,model,model.gate,backendReason);
+    const bool gateReady=!singlePatch && gpuLocalSupport(refSmooth,srcSmooth,model,model.gate,backendReason,geometryValidity);
     model.gpuSupportMap=gateReady && backendReason=="validated packed-byte support kernel";
     if(!gateReady) {
         model.gate.create(reference.size(),CV_8U);

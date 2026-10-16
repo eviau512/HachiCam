@@ -1,18 +1,23 @@
 #include "local_support.h"
+#include "gpu_compute.h"
 #ifndef HACHICAM_VULKAN_SUPPORT
 namespace fusion {
-bool gpuLocalSupport(const cv::Mat&,const cv::Mat&,const LocalRegistration&,cv::Mat&,std::string& reason) {
+bool gpuLocalSupport(const cv::Mat&,const cv::Mat&,const LocalRegistration&,cv::Mat&,std::string& reason,const cv::Mat&) {
     reason="Vulkan backend not built"; return false;
 }
 bool gpuPatchFits(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const std::vector<cv::Rect>&,bool,
     std::vector<cv::Vec4f>&,std::string& reason,double){reason="Vulkan backend not built";return false;}
 bool gpuFittingAvailable(size_t,bool){return false;}
+bool gpuNoiseGrid(const cv::Mat&,int,const cv::Mat&,cv::Mat&,std::string& reason){reason="Vulkan backend not built";return false;}
+bool gpuMergeAnchors(const std::vector<SamplingPlate>&,const cv::Mat&,const cv::Rect&,cv::Mat&,long long&,long long&,GpuComputeStats&,std::string& reason){reason="Vulkan backend not built";return false;}
 }
 #else
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #include "shaders/local_support_spv.h"
 #include "shaders/local_ecc_spv.h"
+#include "shaders/noise_grid_spv.h"
+#include "shaders/color_merge_spv.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video.hpp>
 #include <array>
@@ -49,6 +54,19 @@ cv::Vec4f cpuPatchFit(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,c
         return !std::isfinite(cc) || cc<.65 || std::hypot(dx,dy)>8 ? cv::Vec4f(0,0,-1,0) : cv::Vec4f(dx,dy,float(cc),1);
     } catch(const cv::Exception&){return {0,0,-1,0};}
 }
+cv::Mat cpuNoiseGrid(const cv::Mat& gray,int spacing,const cv::Mat& active) {
+    const int nx=(gray.cols-1+spacing-1)/spacing+1,ny=(gray.rows-1+spacing-1)/spacing+1;
+    cv::Mat output=cv::Mat::zeros(ny,nx,CV_64F);
+    #pragma omp parallel for schedule(dynamic)
+    for(int y=0;y<ny;++y)for(int x=0;x<nx;++x) {
+        if(!active.empty() && !active.at<uchar>(y,x))continue;
+        const int cx=std::min(x*spacing,gray.cols-1),cy=std::min(y*spacing,gray.rows-1);
+        const cv::Rect roi(std::max(0,cx-160),std::max(0,cy-160),
+            std::min(gray.cols,cx+161)-std::max(0,cx-160),std::min(gray.rows,cy+161)-std::max(0,cy-160));
+        output.at<double>(y,x)=estimateNoiseSigma(gray(roi));
+    }
+    return output;
+}
 struct Context {
 #define FN(n) PFN_##n n=nullptr
     FN(vkGetInstanceProcAddr); FN(vkCreateInstance); FN(vkDestroyInstance);
@@ -73,6 +91,8 @@ struct Context {
     VkQueue queue=VK_NULL_HANDLE;
     VkShaderModule shader=VK_NULL_HANDLE;
     VkShaderModule eccShader=VK_NULL_HANDLE;
+    VkShaderModule noiseShader=VK_NULL_HANDLE,mergeShader=VK_NULL_HANDLE;
+    VkPipeline noisePipeline=VK_NULL_HANDLE,mergePipeline=VK_NULL_HANDLE;
     VkDescriptorSetLayout descriptorLayout=VK_NULL_HANDLE;
     VkPipelineLayout layout=VK_NULL_HANDLE;
     VkPipeline pipeline=VK_NULL_HANDLE;
@@ -89,7 +109,8 @@ struct Context {
         VkDeviceSize capacity=0, allocation=0; void* mapped=nullptr; } buffers[3];
     bool healthy=false, inFlight=false;
     bool eccReady=false;
-    int bucketPolicy[3]{0,0,0}; // 0 unknown, 1 GPU admitted, -1 measured CPU preference
+    int bucketPolicy[6]{0,0,0,0,0,0}; // Separate base/highlight profiles.
+    int noisePolicy[2]{0,0},mergePolicy[3]{0,0,0};
     int fitPolicy[6]{0,0,0,0,0,0};
     std::string failure="uninitialized";
     std::mutex guard;
@@ -106,6 +127,7 @@ struct Context {
         fn=reinterpret_cast<F>(vkGetDeviceProcAddr(device,name));return fn!=nullptr;
     }
     bool error(const char* phase,VkResult code) {
+        healthy=false;
         failure=std::string(phase)+" result="+std::to_string(int(code));return false;
     }
     bool initialize() {
@@ -191,6 +213,16 @@ struct Context {
             if(r!=VK_SUCCESS)return error("ECC specialized pipeline",r);
         }
         eccPipeline=eccStages[1];
+        pc.stage.pSpecializationInfo=nullptr;
+        for(int i=0;i<2;++i) {
+            sm.codeSize=i ? color_merge_spv_size : noise_grid_spv_size;
+            sm.pCode=i ? color_merge_spv : noise_grid_spv;
+            auto& module=i ? mergeShader : noiseShader;
+            auto& compute=i ? mergePipeline : noisePipeline;
+            r=vkCreateShaderModule(device,&sm,nullptr,&module);if(r!=VK_SUCCESS)return error("additional shader",r);
+            pc.stage.module=module;
+            r=vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pc,nullptr,&compute);if(r!=VK_SUCCESS)return error("additional pipeline",r);
+        }
         VkCommandPoolCreateInfo pool{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};pool.queueFamilyIndex=family;pool.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         r=vkCreateCommandPool(device,&pool,nullptr,&commands);if(r!=VK_SUCCESS)return error("command pool",r);
         VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ca.commandPool=commands;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
@@ -205,7 +237,7 @@ struct Context {
         healthy=true;
         const bool gateReady=selfTest();
         if(gateReady)eccReady=selfTestFit();
-        return gateReady && healthy;
+        return gateReady && healthy && selfTestCompute();
     }
     void release(Buffer& b) {
         if(b.mapped && vkUnmapMemory)vkUnmapMemory(device,b.memory);
@@ -220,6 +252,8 @@ struct Context {
 #define X(fn,obj) if(obj && fn)fn(device,obj,nullptr)
             X(vkDestroyFence,fence);X(vkDestroyDescriptorPool,descriptors);X(vkDestroyCommandPool,commands);
             X(vkDestroyPipeline,pipeline);
+            X(vkDestroyPipeline,noisePipeline);X(vkDestroyPipeline,mergePipeline);
+            X(vkDestroyShaderModule,noiseShader);X(vkDestroyShaderModule,mergeShader);
             for(auto stage:eccStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
             X(vkDestroyShaderModule,eccShader);X(vkDestroyPipelineLayout,layout);
             X(vkDestroyDescriptorSetLayout,descriptorLayout);X(vkDestroyShaderModule,shader);
@@ -257,6 +291,17 @@ struct Context {
         __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU buffer=%d allocationBytes=%llu flags=%u poolBytes=%llu",
             index,static_cast<unsigned long long>(req.size),memory.memoryTypes[type].propertyFlags,
             static_cast<unsigned long long>(allocated));
+        return true;
+    }
+    bool workspace(const VkDeviceSize* sizes) {
+        if(inFlight || !healthy){failure="GPU workspace unavailable";return false;}
+        VkDeviceSize retained=0;
+        for(int i=0;i<3;++i)retained+=std::max(sizes[i],buffers[i].allocation);
+        if(retained>LIMIT)for(auto& b:buffers)release(b);
+        for(int i=0;i<3;++i) {
+            if(!sizes[i] || sizes[i]>properties.limits.maxStorageBufferRange){failure="GPU storage limit";return false;}
+            if(!reserve(i,sizes[i]))return false;
+        }
         return true;
     }
     bool dispatch(VkPipeline selected,const VkDeviceSize* sizes,const std::array<int,8>& shape,uint32_t groups) {
@@ -307,24 +352,28 @@ struct Context {
         inFlight=false;
         return true;
     }
-    bool run(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& model,cv::Mat& output) {
+    bool run(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& model,cv::Mat& output,const cv::Mat& validity=cv::Mat()) {
         const size_t count=ref.total(), words=(count+3)/4, plane=words*4;
-        const VkDeviceSize sizes[]{2*plane,model.field.total()*16,plane};
+        const VkDeviceSize sizes[]{(model.patchSupport ? 3 : 2)*plane,model.field.total()*16,plane};
         if(sizes[0]>properties.limits.maxStorageBufferRange || (words+127)/128>properties.limits.maxComputeWorkGroupCount[0]){failure="storage/dispatch limit";return false;}
-        for(int i=0;i<3;++i)if(!reserve(i,sizes[i]))return false;
+        if(!workspace(sizes))return false;
         auto* input=static_cast<unsigned char*>(buffers[0].mapped);
         for(int y=0;y<ref.rows;++y){std::memcpy(input+size_t(y)*ref.cols,ref.ptr(y),ref.cols);std::memcpy(input+plane+size_t(y)*ref.cols,src.ptr(y),src.cols);}
         if(plane>count){std::memset(input+count,0,plane-count);std::memset(input+plane+count,0,plane-count);}
+        if(model.patchSupport) {
+            std::memset(input+2*plane,255,plane);
+            if(!validity.empty())for(int y=0;y<ref.rows;++y)std::memcpy(input+2*plane+size_t(y)*ref.cols,validity.ptr(y),ref.cols);
+        }
         auto* fields=static_cast<float*>(buffers[1].mapped);
         for(int y=0;y<model.field.rows;++y)for(int x=0;x<model.field.cols;++x){const auto p=model.field.at<cv::Vec3f>(y,x);const size_t i=size_t(y*model.field.cols+x)*4;fields[i]=p[0];fields[i+1]=p[1];fields[i+2]=p[2];fields[i+3]=0;}
-        const std::array<int,8> shape{ref.cols,ref.rows,int(words),model.field.cols,model.field.rows,model.spacing,int(count),0};
+        const std::array<int,8> shape{ref.cols,ref.rows,int(words),model.field.cols,model.field.rows,model.spacing,int(count),int(model.patchSupport)};
         if(!dispatch(pipeline,sizes,shape,uint32_t((words+127)/128)))return false;
         output.create(ref.size(),CV_8U);const auto* bytes=static_cast<const uchar*>(buffers[2].mapped);
         bool invalid=false;
         #pragma omp parallel for reduction(||:invalid)
         for(int y=0;y<ref.rows;++y)for(int x=0;x<ref.cols;++x){const auto value=bytes[size_t(y)*ref.cols+x];
             if(value!=0 && value!=255 && value!=128){invalid=true;continue;}
-            output.at<uchar>(y,x)=value==128 ? supportPixel(ref,src,model,x,y,false) : value;
+            output.at<uchar>(y,x)=value==128 ? supportPixel(ref,src,model,x,y,model.patchSupport,validity) : value;
         }
         if(invalid){failure="invalid shader output";return false;}
         return true;
@@ -356,7 +405,7 @@ struct Context {
         const VkDeviceSize sizes[]{floatOffset*sizeof(float),packed.size()*sizeof(uint32_t),patches.size()*(3+4*chunks)*16};
         for(auto size:sizes)if(size>properties.limits.maxStorageBufferRange){failure="fitting storage range";return false;}
         if(chunks>properties.limits.maxComputeWorkGroupCount[0] || patches.size()>properties.limits.maxComputeWorkGroupCount[1]){failure="fitting dispatch limit";return false;}
-        for(int i=0;i<3;++i)if(!reserve(i,sizes[i]))return false;
+        if(!workspace(sizes))return false;
         std::memcpy(buffers[1].mapped,packed.data(),sizes[1]);
         std::array<int,8> shape{int(patches.size()),30,0,0,int(chunks),0,0,0};const float epsilon=.0001f;
         std::memcpy(&shape[2],&epsilon,sizeof(float));
@@ -365,6 +414,92 @@ struct Context {
         std::memcpy(results.data(),buffers[2].mapped,results.size()*sizeof(cv::Vec4f));
         for(auto& fit:results)if(fit[3]!=1 || !std::isfinite(fit[0]) || !std::isfinite(fit[1]) || !std::isfinite(fit[2]) || fit[2]<.65f || std::hypot(fit[0],fit[1])>8)
             fit={0,0,-1,0};
+        return true;
+    }
+    bool runNoise(const cv::Mat& gray,int spacing,const cv::Mat& active,cv::Mat& output) {
+        const int nx=(gray.cols-1+spacing-1)/spacing+1,ny=(gray.rows-1+spacing-1)/spacing+1;
+        const VkDeviceSize sizes[]{((gray.total()+3)/4)*4,size_t(nx*ny)*4,size_t(nx*ny)*12};
+        if(uint32_t(nx*ny)>properties.limits.maxComputeWorkGroupCount[0] || !workspace(sizes))return false;
+        auto* bytes=static_cast<uchar*>(buffers[0].mapped);
+        std::memset(bytes,0,size_t(sizes[0]));
+        for(int y=0;y<gray.rows;++y)std::memcpy(bytes+size_t(y)*gray.cols,gray.ptr(y),gray.cols);
+        auto* enabled=static_cast<uint32_t*>(buffers[1].mapped);
+        for(int i=0;i<nx*ny;++i)enabled[i]=active.empty() || active.at<uchar>(i/nx,i%nx) ? 1 : 0;
+        std::memset(buffers[2].mapped,0,size_t(sizes[2]));
+        if(!dispatch(noisePipeline,sizes,{gray.cols,gray.rows,nx,ny,spacing,0,0,0},uint32_t(nx*ny)))return false;
+        output=cv::Mat::zeros(ny,nx,CV_64F);const auto* medians=static_cast<const uint32_t*>(buffers[2].mapped);
+        for(int i=0;i<nx*ny;++i) {
+            const auto m=std::max({medians[3*i],medians[3*i+1],medians[3*i+2]});
+            if(m>510){failure="invalid GPU noise median";return false;}
+            output.at<double>(i/nx,i%nx)=std::clamp(double(m)*.5/.67448975,0.,24.);
+        }
+        return true;
+    }
+    bool runMergeTile(const std::vector<SamplingPlate>& plates,const cv::Mat& ref,
+                      const cv::Rect& tile,cv::Mat& output,long long& contributors,long long& multi,long long& ambiguous) {
+        std::vector<uint32_t> images,meta(plates.size()*24,0);
+        auto writeFloat=[&](size_t i,float v){std::memcpy(&meta[i],&v,4);};
+        for(size_t index=0;index<plates.size();++index) {
+            const auto& plate=plates[index];const auto& h=plate.inverse;
+            const size_t m=index*24;
+            const double denominator=h(2,0)*tile.x+h(2,1)*tile.y+h(2,2);
+            if(!std::isfinite(denominator)||std::abs(denominator)<1e-6){failure="unsupported merge transform";return false;}
+            double minX=1e30,minY=1e30,maxX=-1e30,maxY=-1e30;
+            for(double y:{double(tile.y-16),double(tile.y+tile.height+16)})
+                for(double x:{double(tile.x-16),double(tile.x+tile.width+16)}) {
+                    const auto q=h*cv::Vec3d(x,y,1.);
+                    if(!std::isfinite(q[2]) || q[2]/denominator<.75 || q[2]/denominator>1.25){failure="unsupported merge perspective";return false;}
+                    minX=std::min(minX,q[0]/q[2]);maxX=std::max(maxX,q[0]/q[2]);
+                    minY=std::min(minY,q[1]/q[2]);maxY=std::max(maxY,q[1]/q[2]);
+                }
+            if(!std::isfinite(minX)||!std::isfinite(minY)||!std::isfinite(maxX)||!std::isfinite(maxY)||
+               minX<-1e6 || minY<-1e6 || maxX>1e6 || maxY>1e6){failure="invalid merge bounds";return false;}
+            const int x0=std::clamp(int(std::floor(minX))-2,0,ref.cols-1),y0=std::clamp(int(std::floor(minY))-2,0,ref.rows-1);
+            const int x1=std::clamp(int(std::ceil(maxX))+3,x0+1,ref.cols),y1=std::clamp(int(std::ceil(maxY))+3,y0+1,ref.rows);
+            const cv::Rect roi(x0,y0,x1-x0,y1-y0);
+            if(roi.width>1024 || roi.height>1024){failure="merge tile source extent";return false;}
+            meta[m]=uint32_t(images.size());meta[m+1]=roi.width;meta[m+2]=roi.height;
+            meta[m+3]=x0;meta[m+4]=y0;
+            for(int y=roi.y;y<roi.br().y;++y) {
+                const auto* row=plate.image->ptr<cv::Vec3b>(y);
+                for(int x=roi.x;x<roi.br().x;++x)images.push_back(uint32_t(row[x][0])|uint32_t(row[x][1])<<8|uint32_t(row[x][2])<<16);
+            }
+            meta[m+5]=uint32_t(meta.size());meta[m+6]=plate.local->field.cols;meta[m+7]=plate.local->field.rows;meta[m+8]=plate.local->spacing;
+            for(int y=0;y<plate.local->field.rows;++y)for(int x=0;x<plate.local->field.cols;++x) {
+                const auto n=plate.local->field.at<cv::Vec3f>(y,x);const size_t start=meta.size();meta.resize(start+4);
+                for(int c=0;c<3;++c)writeFloat(start+c,n[c]);
+            }
+            meta[m+9]=uint32_t(-1);
+            if(!plate.local->gate.empty()) {
+                meta[m+9]=uint32_t(meta.size());const size_t start=meta.size();meta.resize(start+(tile.area()+3)/4,0);
+                auto* bytes=reinterpret_cast<uchar*>(meta.data()+start);
+                for(int y=0;y<tile.height;++y)std::memcpy(bytes+size_t(y)*tile.width,plate.local->gate.ptr(tile.y+y)+tile.x,tile.width);
+            }
+            for(int row=0;row<2;++row) {
+                const int origin=row ? y0 : x0;
+                const double a=(h(row,0)-origin*h(2,0))/denominator,b=(h(row,1)-origin*h(2,1))/denominator;
+                const double c=(h(row,0)*tile.x+h(row,1)*tile.y+h(row,2))/denominator-origin;
+                if(std::abs(a)>2 || std::abs(b)>2 || std::abs(c)>1024){failure="merge precision envelope";return false;}
+                writeFloat(m+12+row*3,float(a));writeFloat(m+13+row*3,float(b));writeFloat(m+14+row*3,float(c));
+            }
+            writeFloat(m+18,float(h(2,0)/denominator));writeFloat(m+19,float(h(2,1)/denominator));
+        }
+        const VkDeviceSize sizes[]{images.size()*4,meta.size()*4,size_t(tile.area())*4};
+        if(!workspace(sizes))return false;
+        std::memcpy(buffers[0].mapped,images.data(),size_t(sizes[0]));std::memcpy(buffers[1].mapped,meta.data(),size_t(sizes[1]));
+        if(!dispatch(mergePipeline,sizes,{tile.width,tile.height,tile.x,tile.y,int(plates.size()),0,0,0},uint32_t((tile.area()+127)/128)))return false;
+        const auto* pixels=static_cast<const uint32_t*>(buffers[2].mapped);
+        output.create(tile.size(),CV_8UC3);contributors=0;multi=0;ambiguous=0;
+        bool invalid=false;
+        #pragma omp parallel for reduction(+:contributors,multi,ambiguous) reduction(||:invalid)
+        for(int y=0;y<tile.height;++y)for(int x=0;x<tile.width;++x) {
+            const uint32_t value=pixels[y*tile.width+x];int count=int((value>>24)&15);
+            if((value&0x70000000u) || count>int(plates.size())){invalid=true;continue;}
+            cv::Vec3b color(value&255,(value>>8)&255,(value>>16)&255);
+            if(value&0x80000000u){color=mergePixel(plates,ref,tile.x+x,tile.y+y,count);++ambiguous;}
+            output.at<cv::Vec3b>(y,x)=color;contributors+=std::max(1,count);multi+=count>=2;
+        }
+        if(invalid){healthy=false;failure="invalid GPU merge output";return false;}
         return true;
     }
     bool selfTestFit() {
@@ -381,6 +516,28 @@ struct Context {
 #endif
         return cpu[3]==1 && got[0][3]==1 && std::hypot(cpu[0]-got[0][0],cpu[1]-got[0][1])<=.05 && std::abs(cpu[2]-got[0][2])<=.002;
     }
+    bool selfTestCompute() {
+        cv::RNG rng(19341);cv::Mat gray(193,257,CV_8U);rng.fill(gray,cv::RNG::UNIFORM,110,142);
+        cv::Mat noise;
+        if(!runNoise(gray,256,{},noise))return false;
+        if(cv::countNonZero(noise!=cpuNoiseGrid(gray,256,{}))){failure="startup noise parity";return false;}
+        std::vector<cv::Mat> images(3);std::vector<LocalRegistration> models(3);std::vector<SamplingPlate> plates;
+        for(int i=0;i<3;++i) {
+            images[i].create(gray.size(),CV_8UC3);rng.fill(images[i],cv::RNG::UNIFORM,0,256);
+            if(i){models[i].domain=gray.size();models[i].field=cv::Mat(2,2,CV_32FC3,cv::Scalar(.25*i,-.125*i,.9));}
+            plates.push_back({&models[i],cv::Matx33d(1,.0001*i,.2*i,-.0002*i,1,.3*i,1e-7*i,-1e-7*i,1),gray.size(),&images[i]});
+        }
+        cv::Mat merged;long long n=0,m=0,a=0,expectedN=0,expectedM=0;
+        const cv::Rect tile(3,2,247,187);
+        if(!runMergeTile(plates,images[0],tile,merged,n,m,a))return false;
+        for(int y=0;y<tile.height;++y)for(int x=0;x<tile.width;++x) {
+            int count;const auto expected=mergePixel(plates,images[0],tile.x+x,tile.y+y,count);
+            if(expected!=merged.at<cv::Vec3b>(y,x)){failure="startup color parity";return false;}
+            expectedN+=std::max(1,count);expectedM+=count>=2;
+        }
+        if(n!=expectedN||m!=expectedM){failure="startup merge count parity";return false;}
+        return true;
+    }
     bool selfTest() {
         cv::Mat ref(37,65,CV_8U),src(37,65,CV_8U);
         for(int y=0;y<ref.rows;++y)for(int x=0;x<ref.cols;++x){ref.at<uchar>(y,x)=uchar((x*17+y*23)%256);src.at<uchar>(y,x)=uchar((x*17+y*23+14)%256);}
@@ -395,42 +552,45 @@ struct Context {
         failure="";return true;
     }
 };
-bool valid(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m) {
-    if(ref.empty() || ref.dims!=2 || src.dims!=2 || ref.type()!=CV_8U || src.type()!=CV_8U || ref.size()!=src.size() ||
-        ref.total()>16000000 || ref.cols>8192 || ref.rows>8192 || m.patchSupport || m.spacing<=0 ||
+bool validField(const LocalRegistration& m) {
+    if(m.spacing<=0 ||
         (m.spacing&(m.spacing-1)) || m.field.empty() || m.field.dims!=2 || m.field.type()!=CV_32FC3 || m.field.total()>4096)return false;
     for(int y=0;y<m.field.rows;++y)for(int x=0;x<m.field.cols;++x){const auto p=m.field.at<cv::Vec3f>(y,x);
         if(!std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]) || std::abs(p[0])>8 || std::abs(p[1])>8 || p[2]<0 || p[2]>1)return false;
     }
     return true;
 }
+bool valid(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m) {
+    return !ref.empty() && ref.dims==2 && src.dims==2 && ref.type()==CV_8U && src.type()==CV_8U && ref.size()==src.size() &&
+        ref.total()<=16000000 && ref.cols<=8192 && ref.rows<=8192 && (!m.patchSupport || m.domain==ref.size()) && validField(m);
+}
 Context* sharedContext() {
     static Context* value=[]() noexcept {try{return new Context();}catch(...){return static_cast<Context*>(nullptr);}}();
     return value;
 }
 }
-bool gpuLocalSupport(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m,cv::Mat& output,std::string& reason) {
+bool gpuLocalSupport(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m,cv::Mat& output,std::string& reason,const cv::Mat& validity) {
 #ifdef HACHICAM_GPU_TEST_CONTROL
     if(std::getenv("HACHICAM_FORCE_CPU")){reason="forced CPU benchmark";return false;}
 #endif
-    if(!valid(ref,src,m)){reason="unsupported gate workload";return false;}
+    if(!valid(ref,src,m) || (!validity.empty() && (validity.dims!=2 || validity.type()!=CV_8U || validity.size()!=ref.size()))){reason="unsupported gate workload";return false;}
     auto* context=sharedContext();if(!context){reason="GPU context unavailable";return false;}
     std::lock_guard<std::mutex> lock(context->guard);
     if(!context->healthy){reason=context->failure;return false;}
     try {
-        const int bucket=ref.total()<=1000000 ? 0 : ref.total()<=4000000 ? 1 : 2;
+        const int bucket=(ref.total()<=1000000 ? 0 : ref.total()<=4000000 ? 1 : 2)+(m.patchSupport ? 3 : 0);
 #if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
         if(context->bucketPolicy[bucket]<0){reason="calibrated CPU preference";return false;}
 #endif
         const auto start=std::chrono::steady_clock::now();
-        if(context->run(ref,src,m,output)) {
+        if(context->run(ref,src,m,output,validity)) {
 #if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
             if(context->bucketPolicy[bucket]==0) {
                 const auto gpuEnd=std::chrono::steady_clock::now();
                 cv::Mat baseline(ref.size(),CV_8U);
                 #pragma omp parallel for schedule(static)
                 for(int y=0;y<ref.rows;++y)for(int x=0;x<ref.cols;++x)
-                    baseline.at<uchar>(y,x)=supportPixel(ref,src,m,x,y,false);
+                    baseline.at<uchar>(y,x)=supportPixel(ref,src,m,x,y,m.patchSupport,validity);
                 const auto cpuEnd=std::chrono::steady_clock::now();
                 const double gpuMs=std::chrono::duration<double,std::milli>(gpuEnd-start).count();
                 const double cpuMs=std::chrono::duration<double,std::milli>(cpuEnd-gpuEnd).count();
@@ -447,6 +607,96 @@ bool gpuLocalSupport(const cv::Mat& ref,const cv::Mat& src,const LocalRegistrati
         }
     } catch(const std::exception&){context->failure="GPU gate host failure";}
     context->healthy=false;reason=context->failure;output.release();return false;
+}
+bool gpuNoiseGrid(const cv::Mat& gray,int spacing,const cv::Mat& active,cv::Mat& output,std::string& reason) {
+#ifdef HACHICAM_GPU_TEST_CONTROL
+    if(std::getenv("HACHICAM_FORCE_CPU")){reason="forced CPU benchmark";return false;}
+#endif
+    if(gray.empty()||gray.dims!=2||gray.type()!=CV_8U||gray.total()>16000000||spacing!=256){reason="unsupported noise grid";return false;}
+    const cv::Size shape((gray.cols-1+255)/256+1,(gray.rows-1+255)/256+1);
+    if(shape.area()>4096 || (!active.empty()&&(active.dims!=2||active.type()!=CV_8U||active.size()!=shape))){reason="invalid noise grid mask";return false;}
+    auto* c=sharedContext();if(!c){reason="GPU context unavailable";return false;}
+    std::lock_guard<std::mutex> lock(c->guard);if(!c->healthy){reason=c->failure;return false;}
+    const int key=active.empty() ? 0 : 1;
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+    if(c->noisePolicy[key]<0){reason="calibrated CPU noise preference";return false;}
+#endif
+    try {
+        const auto start=std::chrono::steady_clock::now();
+        if(!c->runNoise(gray,spacing,active,output)){c->healthy=false;reason=c->failure;return false;}
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+        if(c->noisePolicy[key]==0) {
+            const auto gpuEnd=std::chrono::steady_clock::now();const auto baseline=cpuNoiseGrid(gray,spacing,active);
+            const double gpuMs=std::chrono::duration<double,std::milli>(gpuEnd-start).count();
+            const double cpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-gpuEnd).count();
+            const bool exact=cv::countNonZero(output!=baseline)==0;
+            c->noisePolicy[key]=exact && gpuMs<=cpuMs*.90 ? 1 : -1;
+            __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU noise calibration key=%d nodes=%d gpuCallMs=%.3f cpuMs=%.3f exact=%d preferred=%s",key,shape.area(),gpuMs,cpuMs,int(exact),c->noisePolicy[key]>0 ? "Vulkan" : "CPU");
+            if(!exact){c->healthy=false;c->failure="GPU noise mismatch";reason=c->failure;output.release();return false;}
+            if(c->noisePolicy[key]<0){reason="calibration reused CPU noise";output=baseline;return true;}
+        }
+#endif
+        reason="validated GPU noise histogram";
+        __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU noise v1 nodes=%d pixels=%zu callMs=%.3f",shape.area(),gray.total(),std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count());
+        return true;
+    } catch(const std::exception&){c->healthy=false;reason="GPU noise host failure";output.release();return false;}
+}
+bool gpuMergeAnchors(const std::vector<SamplingPlate>& plates,const cv::Mat& ref,const cv::Rect& crop,
+                     cv::Mat& output,long long& contributors,long long& multi,GpuComputeStats& stats,std::string& reason) {
+    stats={};
+#ifdef HACHICAM_GPU_TEST_CONTROL
+    if(std::getenv("HACHICAM_FORCE_CPU")){reason="forced CPU benchmark";return false;}
+#endif
+    if(ref.empty()||ref.dims!=2||ref.type()!=CV_8UC3||ref.total()>16000000||crop.empty()||
+       (crop&cv::Rect({},ref.size()))!=crop||plates.size()<2||plates.size()>4){reason="unsupported merge workload";return false;}
+    for(const auto& p:plates) {
+        if(!p.local||!p.image||p.image->dims!=2||p.image->type()!=CV_8UC3||p.image->size()!=ref.size()||p.size!=ref.size()||p.local->patchSupport||
+           (!p.local->gate.empty()&&(p.local->gate.type()!=CV_8U||p.local->gate.size()!=ref.size()))||
+           (!p.local->field.empty() && !validField(*p.local)) || !cv::checkRange(cv::Mat(p.inverse))) {
+            reason="invalid merge plate";return false;
+        }
+    }
+    auto* c=sharedContext();if(!c){reason="GPU context unavailable";return false;}
+    std::lock_guard<std::mutex> lock(c->guard);if(!c->healthy){reason=c->failure;return false;}
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+    if(c->mergePolicy[plates.size()-2]<0){reason="calibrated CPU merge preference";return false;}
+#endif
+    const auto start=std::chrono::steady_clock::now();GpuComputeStats actual;
+    long long total=0,multiTotal=0;cv::Mat assembled(crop.size(),CV_8UC3);
+    try {
+        for(int y=crop.y;y<crop.br().y;y+=256)for(int x=crop.x;x<crop.br().x;x+=256) {
+            const cv::Rect tile(x,y,std::min(256,crop.br().x-x),std::min(256,crop.br().y-y));
+            cv::Mat result;long long n=0,m=0,a=0;
+            const auto tileStart=std::chrono::steady_clock::now();
+            if(!c->runMergeTile(plates,ref,tile,result,n,m,a)) {
+                if(!c->healthy || c->inFlight){c->healthy=false;reason=c->failure;return false;}
+                reason=c->failure;return false; // Caller recomputes complete CPU merge, never publishes partial output.
+            }
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+            if(c->mergePolicy[plates.size()-2]==0) {
+                const auto gpuEnd=std::chrono::steady_clock::now();cv::Mat baseline(tile.size(),CV_8UC3);long long bn=0,bm=0;
+                #pragma omp parallel for reduction(+:bn,bm)
+                for(int yy=0;yy<tile.height;++yy)for(int xx=0;xx<tile.width;++xx) {
+                    int count;baseline.at<cv::Vec3b>(yy,xx)=mergePixel(plates,ref,tile.x+xx,tile.y+yy,count);bn+=std::max(1,count);bm+=count>=2;
+                }
+                const double gpuMs=std::chrono::duration<double,std::milli>(gpuEnd-tileStart).count();
+                const double cpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-gpuEnd).count();
+                const bool exact=cv::countNonZero(result.reshape(1)!=baseline.reshape(1))==0 && n==bn && m==bm;
+                auto& policy=c->mergePolicy[plates.size()-2];policy=exact && gpuMs<=cpuMs*.90 ? 1 : -1;
+                __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU merge calibration pixels=%d plates=%zu gpuCallMs=%.3f cpuMs=%.3f exact=%d cpuPixels=%lld preferred=%s",tile.area(),plates.size(),gpuMs,cpuMs,int(exact),a,policy>0 ? "Vulkan" : "CPU");
+                if(!exact){c->healthy=false;c->failure="GPU merge mismatch";reason=c->failure;return false;}
+                if(policy<0){reason="calibrated CPU merge preference";return false;}
+            }
+#endif
+            result.copyTo(assembled(cv::Rect(tile.x-crop.x,tile.y-crop.y,tile.width,tile.height)));
+            total+=n;multiTotal+=m;actual.cpuMergePixels+=a;++actual.mergeTiles;
+        }
+        output=assembled;contributors=total;multi=multiTotal;
+        actual.mergeMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();stats=actual;
+        reason="validated GPU tiled color merge";
+        __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU merge v1 tiles=%d cpuPixels=%lld totalPixels=%zu callMs=%.3f",actual.mergeTiles,actual.cpuMergePixels,output.total(),actual.mergeMs);
+        return true;
+    } catch(const std::exception&){c->healthy=false;reason="GPU merge host failure";return false;}
 }
 bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
     const std::vector<cv::Rect>& patches,bool highlight,std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs) {

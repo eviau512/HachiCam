@@ -1,4 +1,5 @@
 #include "local_support.h"
+#include "gpu_compute.h"
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -10,6 +11,11 @@ int main(int argc,char** argv){
         cv::Mat output;std::string reason;
         for(int i=0;i<2;++i)if(fusion::gpuLocalSupport(ref,src,model,output,reason))throw std::runtime_error("fault published GPU output");
         if(fusion::gpuFittingAvailable(ref.total(),false))throw std::runtime_error("failed context admitted fitting");
+        if(fusion::gpuNoiseGrid(ref,256,{},output,reason))throw std::runtime_error("failed context admitted noise");
+        cv::Mat color(ref.size(),CV_8UC3,cv::Scalar(100,100,100));
+        std::vector<fusion::SamplingPlate> plates(2,{&model,cv::Matx33d::eye(),ref.size(),&color});
+        long long n=0,m=0;fusion::GpuComputeStats stats;
+        if(fusion::gpuMergeAnchors(plates,color,cv::Rect({},ref.size()),output,n,m,stats,reason))throw std::runtime_error("failed context admitted merge");
         const auto state=fusion::gpuTestState();
         if(state.healthy || state.allocation>64ULL*1024*1024)throw std::runtime_error("failed state/budget violation");
         if(std::string(argv[1])=="timeout" && (!state.inFlight || !state.allocation))throw std::runtime_error("unresolved resources freed");

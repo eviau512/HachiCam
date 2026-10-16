@@ -30,7 +30,7 @@ inline unsigned char supportPixel(const cv::Mat& ref, const cv::Mat& src,
 }
 // Resolved GPU gates use the same byte semantics as the CPU gate.
 bool gpuLocalSupport(const cv::Mat& ref, const cv::Mat& src, const LocalRegistration& model,
-                     cv::Mat& output, std::string& reason);
+                     cv::Mat& output, std::string& reason,const cv::Mat& validity=cv::Mat());
 bool gpuPatchFits(const cv::Mat& refAlign,const cv::Mat& srcAlign,const cv::Mat& rawSrc,
     const cv::Mat& validity,const std::vector<cv::Rect>& patches,bool highlight,
     std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs=0);

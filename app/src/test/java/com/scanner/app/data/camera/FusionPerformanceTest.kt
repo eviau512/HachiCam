@@ -13,4 +13,13 @@ class FusionPerformanceTest {
             packet().apply { this[46]=40.0.toBits() },packet().apply { this[48]=7 },packet().apply { this[49]=-1 })
         invalid.forEach { try { FusionPerformance.decode(it);fail("Invalid timing accepted") } catch(_:IllegalArgumentException){} }
     }
+    @Test fun gpuExpansionCountersAndNestedTimingDecodeWithBounds() {
+        val expanded=packet().copyOf(54).apply {this[44]=2;this[50]=6;this[51]=192;this[52]=1234;this[53]=2.0.toBits()}
+        val result=FusionPerformance.decode(expanded)!!
+        assertEquals(6,result.gpuNoiseGrids);assertEquals(192,result.gpuMergeTiles)
+        assertEquals(1234L,result.cpuMergePixels);assertEquals(2.0,result.gpuMergeMs,0.0)
+        val invalid=listOf(expanded.copyOf().apply {this[50]=8},expanded.copyOf().apply {this[51]=0},
+            expanded.copyOf().apply {this[52]=16_000_001},expanded.copyOf().apply {this[53]=9.0.toBits()})
+        invalid.forEach {try {FusionPerformance.decode(it);fail("Invalid GPU counters accepted")}catch(_:IllegalArgumentException){}}
+    }
 }

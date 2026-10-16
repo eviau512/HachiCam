@@ -6,12 +6,13 @@
 
 using namespace fusion;
 void runGpuFittingTests();
-static void compare(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m) {
+void runGpuComputeTests();
+static void compare(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m,const cv::Mat& validity={}) {
     cv::Mat actual;std::string reason;
-    if(!gpuLocalSupport(ref,src,m,actual,reason))throw std::runtime_error("GPU not executed: "+reason);
+    if(!gpuLocalSupport(ref,src,m,actual,reason,validity))throw std::runtime_error("GPU not executed: "+reason);
     size_t mismatch=0;
     for(int y=0;y<ref.rows;++y)for(int x=0;x<ref.cols;++x)
-        mismatch+=actual.at<uchar>(y,x)!=supportPixel(ref,src,m,x,y,false);
+        mismatch+=actual.at<uchar>(y,x)!=supportPixel(ref,src,m,x,y,m.patchSupport,validity);
     if(mismatch)throw std::runtime_error("gate mismatch count="+std::to_string(mismatch));
 }
 int main() {
@@ -28,6 +29,10 @@ int main() {
             m.field.at<cv::Vec3f>(0,1)={1.75f,-.125f,.9f};compare(ref,src,m);
             m.field.at<cv::Vec3f>(0,1)={1.75001f,-.125f,.9f};compare(ref,src,m);
             m.field.at<cv::Vec3f>(1,0)={0,0,0};compare(ref,src,m);
+            m.patchSupport=true;
+            cv::Mat validity(size,CV_8U,cv::Scalar(255));validity(cv::Rect(0,0,size.width/2,size.height)).setTo(0);
+            compare(ref,src,m,validity);
+            m.field.at<cv::Vec3f>(1,0)={-7.9f,7.9f,.9};compare(ref,src,m,validity);
             std::cout<<"GPU gate parity: "<<size.width<<"x"<<size.height<<" padded stride, subpixel, discontinuity, missing nodes PASS\n";
         }
         cv::Mat reference(257,513,CV_8U,cv::Scalar(100)),source(reference.size(),reference.type(),cv::Scalar(114));
@@ -36,11 +41,12 @@ int main() {
         m.field.at<cv::Vec3f>(0,0)={-7.9f,7.9f,.9f};compare(reference,source,m);
         std::string reason;cv::Mat output;
         m.patchSupport=true;
-        if(gpuLocalSupport(reference,source,m,output,reason))throw std::runtime_error("HDR patch workload accepted by ordinary kernel");
+        compare(reference,source,m);
         m.patchSupport=false;m.field.at<cv::Vec3f>(0,0)[0]=NAN;
         if(gpuLocalSupport(reference,source,m,output,reason))throw std::runtime_error("Non-finite field accepted");
         std::cout<<"GPU threshold/boundary and unsupported-workload tests PASS\n";
         runGpuFittingTests();
+        runGpuComputeTests();
         return 0;
     } catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}
 }

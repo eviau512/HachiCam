@@ -337,7 +337,7 @@ recipe and algorithm version, observed metadata, expected outcome, measured
 outcome, pass/fail, fallback reason and residual limitation. Include comparative
 source/output crops where permitted. Tests not run must be marked not run.
 
-GPU backend acceptance (2026-10-15; required / not implemented):
+GPU backend acceptance (2026-10-16; partly implemented, device acceptance pending):
 
 - GPU-01 (P0, fidelity): frozen same-burst CPU/GPU replays must record transforms,
   masks, accepted tiers, crop/scale, actual corrected/recovered pixels and matched
@@ -372,7 +372,9 @@ GPU backend acceptance (2026-10-15; required / not implemented):
 The [GPU assessment](reports/GPU_ROADMAP_2026-10-15.zh-CN.md) records current CPU
 execution and incomplete phone checkpoint timings at its earlier baseline.
 rc13 connects two debug kernels and executes host primitive/failure/full-image
-regressions. GPU-03/04 phone/end-to-end/sustained acceptance remains pending;
+regressions. rc16 adds node noise histograms, highlight support and bounded native
+color merge, with actual shader/CPU parity and failure checks. GPU-03/04
+phone/end-to-end/sustained acceptance remains pending;
 release remains CPU and a warm calibration does not replace those criteria.
 
 First support-map implementation acceptance (specified before implementation):
@@ -458,6 +460,17 @@ First support-map implementation acceptance (specified before implementation):
   superseded persistence/edit/delete retains the durable files until commit;
   failed writes warn visibly and never delete the previous checkpoint's image.
   Process-death device acceptance remains separate from file-store unit tests.
+
+- GPU-COMPUTE-16 (specified 2026-10-16 before implementation): execute actual
+  Vulkan node histograms, highlight gates and tiled native color merge. Compare
+  exact noise sigma, resolved support bytes, native BGR bytes and contributor
+  counts against CPU on padded strides, non-multiple dimensions, sparse nodes,
+  borders, masks, conflicting offsets, projective/fractional transforms and
+  rounding boundaries. Test retained-layout transitions under the shared 64 MiB
+  cap, failed/disabled backends and full-image HDR/SR regressions. Replay frozen
+  PPT evidence, retaining rc15 unclipped-channel invariants. Report actual stage
+  execution and full cost separately from eligibility and CPU completion; paired
+  host timing cannot establish phone speedup or the >=30% device target.
 
 This revision establishes a quality backlog and acceptance contract. It does not
 implement the missing features, add proprietary algorithms, benchmark competitor

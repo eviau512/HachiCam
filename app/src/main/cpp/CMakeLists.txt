@@ -38,7 +38,7 @@ target_link_libraries(
         ${dl-lib}
 )
 
-option(HACHICAM_GPU_EXPERIMENTAL "Enable validated experimental support/ECC compute backend" OFF)
+option(HACHICAM_GPU_EXPERIMENTAL "Enable validated experimental support/ECC/noise/color compute backend" OFF)
 if(HACHICAM_GPU_EXPERIMENTAL)
     target_compile_definitions(doc_scanner_engine PRIVATE HACHICAM_VULKAN_SUPPORT=1)
 endif()

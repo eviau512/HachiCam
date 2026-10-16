@@ -7,11 +7,13 @@ struct ReferencePreparation {
     cv::Size domain;
     cv::Mat highPass, align, smooth, noise;
     float noiseSigma=0;
+    bool gpuNoiseGrid=false;
 };
 ReferencePreparation prepareReference(const cv::Mat& reference);
 struct LocalRegistration {
     int gpuFitProposals=0;
     bool gpuSupportMap=false;
+    bool gpuNoiseGrid=false;
     cv::Mat field; // CV_32FC3: reference -> globally warped source dx,dy,confidence
     cv::Mat gate;  // CV_8U, source-resolution local photometric support
     cv::Mat detail; // CV_8U nodes qualifying structure, separate from denoising.

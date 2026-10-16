@@ -478,7 +478,7 @@ earlier diagrams, metadata or static library inventories is not acceptance.
 ### 7.1 GPU compute migration (2026-10-15; partly implemented)
 
 The user requests faster processing in subsequent versions. Vulkan compute is
-the backend for two connected debug experiments in sections 7.2/7.3; CPU remains
+the backend for the connected debug experiments in sections 7.2–7.4; CPU remains
 the release implementation and the calibrated/failed workload fallback.
 The linked `vulkan_compute_engine.cpp` and embedded shader have no execution
 caller in the inspected product source. Their old two-frame luma-graft/LTM
@@ -553,7 +553,7 @@ technical status belong in diagnostics, without adding clutter to the camera UI.
 Detailed capability/device logging follows the existing test-build privacy rule.
 
 Acceptance is GPU-01 through GPU-04 in SPEC_06. Host shader/failure and image
-regressions validate the two connected kernels, including CPU fallback; they do
+regressions validate the connected kernels, including CPU fallback; they do
 not establish phone speedup, sustained operation or full-migration acceptance.
 
 ### 7.2 First performance implementation (specified before implementation; experimental debug integration)
@@ -822,6 +822,67 @@ erode clipped-target boundaries throughout the image or widen HDR support. Recor
 registration parameter version `masked-ecc-edges-v1` and optimizer margin 10;
 compare qualification loss and full reconstruction against the previous contract
 before release, including the existing clipped-screen regression.
+
+### 7.4 rc16 bounded compute expansion (specified 2026-10-16 before implementation)
+
+The rc14 phone workload still reports three GPU support maps and zero GPU fits,
+with 24–25 seconds in native processing. Move additional *existing* arithmetic
+to Vulkan in the debug test build; increasing utilization cannot relax fitting,
+HDR compatibility, clipped-channel preservation, cropping or SR eligibility.
+
+1. Node noise grids: upload a packed byte gray image once and compute the original
+   three separations (1,2,4), step-four, patch-relative 2x2 differences in GPU
+   workgroups. Integer histograms select the exact upper median, excluding values
+   outside 4..251 and retaining the >=16-sample requirement. Convert the returned
+   integer median to double sigma on CPU with the original divisor/cap. Active
+   HDR nodes may be sparse; never change edge patch origins or sample phase.
+2. Highlight support maps: extend the packed-byte kernel to the original nearest
+   measured patch-interior lookup, including all nine neighbors, pairwise 1.5 px
+   conflicts, <=140 px interiors, deterministic nearest tie order, reference
+   validity and residual <=18. Ordinary interpolation/residual <=14 is unchanged.
+   Numerically ambiguous decisions complete on CPU; resolved masks must be exact.
+3. Native same-exposure color merge: process <=256x256 output tiles. Pack only
+   conservatively bounded original source rectangles, gates and compact node
+   fields for the admitted anchors. GPU evaluates local offset/confidence, inverse
+   projective mapping, original BGR bilinear sampling and confidence-weighted
+   accumulation in the original anchor order. Use tile-relative projective
+   coefficients to bound FP32 error. Re-evaluate ambiguous geometry, motion or
+   byte-rounding pixels on CPU. Tile output bytes and contributor counts must
+   agree with the existing CPU merge; failed/unsupported tiles complete on CPU.
+   No HDR tone kernel or post-HDR SR solver is substituted by this stage.
+
+Initial merge precision envelope is <=2 absolute affine coefficients, <=1024
+source ROI extent/relative origin and a normalized denominator in [0.75,1.25]
+over the tile plus a conservative 16-source-pixel offset bound. Experimental
+CPU completion bands are 0.003 px near ROI sampling boundaries, 0.001 near the
+1.5 px motion conflict and 0.06 byte levels around a half-integer final rounding
+decision. These are numerical scheduling margins, never relaxed quality gates.
+Validate exact bytes with random/high-contrast/projective fixtures and actual
+PPT replays; unsupported transforms complete on CPU rather than extend bounds.
+
+These stages share the existing single mutex/context, three storage buffers and
+64 MiB allocation cap, including retained capacities. After a completed fence,
+reclaim incompatible retained capacities before changing workload layouts;
+never reclaim quarantined in-flight work. Keep CPU staging bounded per tile,
+respect the shared 96 MiB reservation and existing ordinary <=16 MP source
+limit. Streaming/native high-resolution remains the original sequential CPU path.
+Single-patch streaming calls do not schedule these ordinary-burst GPU kernels.
+No full-frame float color accumulator or additional GPU context is permitted.
+
+New stage profiles require actual GPU/CPU parity and complete call-cost comparison
+(packing, upload, wait, readback and CPU ambiguous completion) before reuse.
+Keep <=90% CPU cost activation, separate noise/base-gate/highlight-gate/merge
+profiles and CPU fallback. Record actual executed stage counts/times, ambiguous
+completions and calibration time; no GPU count may represent CPU fallback.
+Append performance packet version 2 (54 values), retaining the old 42/44/50
+decoders: indices 50/51 are published GPU noise grids/merge tiles, 52 counts
+CPU-completed ambiguous merge pixels and 53 is complete GPU merge-call time.
+The stage time is nested in total native time, never added as a disjoint interval.
+The first calibration costs remain in capture latency. Initialization and
+failure/timeout quarantine retain the existing contracts. The planned expansion
+is connected in the debug implementation and passes the host/build checks in
+the rc16 report. Phone latency/quality and sustained acceptance remain pending;
+release stays CPU and full compute migration is incomplete.
 
 ## 8. Acceptance and limits
 

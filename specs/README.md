@@ -1,6 +1,6 @@
 # HachiCam Specifications
 
-> Revised 2026-10-15. Authoritative specifications are written in English.
+> Revised 2026-10-16. Authoritative specifications are written in English.
 > Chinese reports explain the changes and do not override the English contracts.
 
 ## 1. Required workflow and status
@@ -20,11 +20,12 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Current work: [rc15 PPT highlight noise](reports/RC15_PPT_HIGHLIGHT_NOISE_2026-10-15.zh-CN.md).
+Current work: [rc16 GPU compute expansion](reports/RC16_GPU_COMPUTE_EXPANSION_2026-10-16.zh-CN.md).
+Previous correction: [rc15 PPT highlight noise](reports/RC15_PPT_HIGHLIGHT_NOISE_2026-10-15.zh-CN.md).
 Previous checkpoint: [rc14 registration performance](reports/RC14_REGISTRATION_PERFORMANCE_2026-10-15.zh-CN.md).
 Previous delivered batch: [rc13 performance, diagnostics and recovery](reports/RC13_PERFORMANCE_AND_RECOVERY_2026-10-15.zh-CN.md),
 following the [four-scene rc12 evidence](reports/RC12_FOUR_SCENES_2026-10-15.zh-CN.md).
-Two debug Vulkan kernels self-test/calibrate before use, with CPU fallback;
+Debug Vulkan support/ECC/noise/color kernels self-test/calibrate before use, with CPU fallback;
 release stays CPU. This does not enable the old HDR shader or establish phone
 speedup. Multi-group final-image diagnostics and completed-page checkpoints are
 implemented; lamp HDR and the remaining full GPU migration require further work.

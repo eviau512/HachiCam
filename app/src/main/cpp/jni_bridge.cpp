@@ -15,11 +15,11 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFusionEngine::Report &report) {
-    jlongArray result = env->NewLongArray(50);
+    jlongArray result = env->NewLongArray(54);
     if (!result)
         return nullptr;
     auto owned=std::make_unique<cv::Mat>(std::move(fused));
-    jlong values[50] = {reinterpret_cast<jlong>(owned.get()),
+    jlong values[54] = {reinterpret_cast<jlong>(owned.get()),
                         report.anchors,
                         report.highlights,
                         report.scale,
@@ -59,12 +59,15 @@ static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFus
     std::memcpy(&values[41], &report.finalFitError, sizeof(double));
     values[42]=1; // Independent highlight-metric extension version.
     std::memcpy(&values[43],&report.postClippedFraction,sizeof(double));
-    values[44]=1;
+    values[44]=2;
     std::memcpy(&values[45],&report.performance.totalMs,sizeof(double));
     std::memcpy(&values[46],&report.performance.globalRegistrationMs,sizeof(double));
     std::memcpy(&values[47],&report.performance.localRegistrationMs,sizeof(double));
     values[48]=report.performance.gpuSupportMaps;values[49]=report.performance.gpuFitProposals;
-    env->SetLongArrayRegion(result, 0, 50, values);
+    values[50]=report.performance.gpuNoiseGrids;values[51]=report.performance.gpuMergeTiles;
+    values[52]=report.performance.cpuMergePixels;
+    std::memcpy(&values[53],&report.performance.gpuMergeMs,sizeof(double));
+    env->SetLongArrayRegion(result, 0, 54, values);
     if(env->ExceptionCheck())return nullptr;
     owned.release();
     return result;
@@ -179,7 +182,11 @@ std::string readString(JNIEnv *env, jstring value) {
 extern "C" {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
-    LOGI("HachiCam Native Engine loaded: CPU fusion; experimental Vulkan pipeline inactive");
+#ifdef HACHICAM_VULKAN_SUPPORT
+    LOGI("HachiCam Native Engine loaded: validated debug Vulkan support/ECC/noise/color eligible; legacy tone shader inactive");
+#else
+    LOGI("HachiCam Native Engine loaded: CPU backend");
+#endif
     return JNI_VERSION_1_6;
 }
 
