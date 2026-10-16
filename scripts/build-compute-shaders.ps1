@@ -2,7 +2,7 @@ param([string]$Glslc="$env:LOCALAPPDATA\Android\Sdk\ndk\30.0.16248370\shader-too
 $ErrorActionPreference='Stop'
 $taskRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskShaders=Join-Path $taskRoot 'app\src\main\cpp\shaders'
-foreach($taskShader in @('local_support','local_ecc','noise_grid','color_merge')) {
+foreach($taskShader in @('local_support','local_ecc','noise_grid','color_merge','strong_selection')) {
 & $Glslc '--target-env=vulkan1.0' '-O' (Join-Path $taskShaders "$taskShader.comp") '-o' (Join-Path $taskShaders "$taskShader.spv")
 if($LASTEXITCODE -ne 0){throw 'Compute shader compilation failed'}
 $taskBytes=[IO.File]::ReadAllBytes((Join-Path $taskShaders "$taskShader.spv"))

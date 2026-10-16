@@ -18,7 +18,7 @@ try {
         '-I',$taskInclude,'-I','app/src/main/cpp','-I','tests/native/host','-I',$taskHeaders)
     $taskBasic=@('app/src/main/cpp/local_registration.cpp','app/src/main/cpp/gpu_local_support.cpp')
     $taskLibraries=@('-L',(Join-Path $OpenCvRoot 'lib'),'-lopencv_video','-lopencv_imgproc','-lopencv_core')
-    & $Compiler @taskFlags 'tests/native/gpu_gate_test.cpp' 'tests/native/gpu_fitting_test.cpp' 'tests/native/gpu_compute_test.cpp' @taskBasic @taskLibraries '-o' '.tools/gpu_gate_test.exe'
+    & $Compiler @taskFlags 'tests/native/gpu_gate_test.cpp' 'tests/native/gpu_fitting_test.cpp' 'tests/native/gpu_compute_test.cpp' 'tests/native/gpu_selection_test.cpp' 'tests/native/gpu_policy_test.cpp' @taskBasic @taskLibraries '-o' '.tools/gpu_gate_test.exe'
     if($LASTEXITCODE -ne 0){throw 'GPU primitive compilation failed'}
     $env:PATH=[IO.Path]::GetFullPath((Join-Path $OpenCvRoot 'bin'))+';'+(Split-Path $Compiler)+';'+$env:PATH
     $env:OMP_NUM_THREADS='4'

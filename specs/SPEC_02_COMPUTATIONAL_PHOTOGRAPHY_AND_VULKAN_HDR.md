@@ -884,6 +884,84 @@ is connected in the debug implementation and passes the host/build checks in
 the rc16 report. Phone latency/quality and sustained acceptance remain pending;
 release stays CPU and full compute migration is incomplete.
 
+### 7.5 rc17 scheduling and GPU selection (specified 2026-10-16 before implementation)
+
+Implemented in the debug backend with actual-GPU, CPU parity and build checks.
+The dated rc17 report records frozen-input timing and selected stages separately;
+phone sustained speed and the >=30% target remain unaccepted. Release stays CPU.
+
+The rc16 bright-PPT device capture b2219fc5 took 26.442 s in native work, including
+19.850 s global/local registration. It published three GPU noise grids, three
+support maps and no GPU fits/color tiles. A conforming 13-patch fit measured
+75.403/48.648 ms cold/warm versus CPU 143.245 ms, but 63.219 ms of selection and
+6.849 ms of an empty completion loop kept the cost profile CPU-preferred.
+This supersedes earlier lifetime-only cost decisions and the cold-only execution
+estimate; it does not change any image, fitting or physical acceptance criterion.
+
+**Bounded profile reuse:** distinguish unmeasured, admitted GPU, unfavorable cost
+and numerical rejection. Numerical disagreement remains blocked for that profile;
+device/submission failure retains the existing whole-context quarantine. A cost
+rejection may be probed again after eight eligible opportunities, with at most
+three calibration attempts per process/profile. Never probe on every frame.
+Use measured warm complete-call cost plus one quarter of positive cold-minus-warm
+cost to estimate four compatible reused calls. Retain the <=90% CPU admission
+threshold. Publish cold, warm, CPU, selection/completion and estimated costs;
+all actual cold/calibration work still belongs in the real capture latency.
+Profile identity separates workload size, base/highlight and fit batch size;
+small work must not permanently disable large workloads. When no fitting class
+is admitted, a cost rejection may suppress three subsequent expensive selector
+attempts for that base/highlight scope; CPU still completes every original node.
+
+Only launch/charge CPU missing-proposal completion when a GPU proposal is actually
+missing. A zero-work OpenMP team is calibration overhead, not future completion
+cost. Reuse measured CPU fits for calibration output when CPU is selected.
+Shared physical checks and retry semantics remain unchanged, including <=0.05 px,
+<=0.002 correlation and the rejection of medium-correspondence scheduling.
+
+**GPU strong selector:** preserve the original CPU cheap interior-variance and
+noise preconditions. Upload only candidate-patch reference/source/validity byte
+planes with four-byte padding per plane; transfer the already prepared high-pass
+patch pairs, <=16 at a time, directly into the shared mapped workspace. No
+full-image byte upload is needed for this selector. GPU performs the original
+source/reference byte mask, ten-pixel optimizer margin, masked sample count and
+centered high-pass moment reductions. Keep >=256 valid samples, noise-corrected
+correlation >=0.90 and ratio >=0.68. Perform final scalar decisions in double on
+CPU; complete numerical neighborhoods (initial experimental bands 0.002 around
+correlation/ratio thresholds, and tiny corrected variance) with the unchanged
+CPU selector. Resolve every returned flag against CPU during real calibration.
+Treat corrected variance below max(0.1, 10% of either supplied noise variance)
+as a CPU completion neighborhood to avoid amplifying FP32 cancellation.
+This kernel schedules existing ECC proposals; it grants no image support by itself.
+Fitting estimates include the full selector call, transfers and CPU completions.
+When the selector itself is being calibrated, report actual selector wall time
+separately from its validated reused-call estimate; fitting's execution estimate
+uses the latter plus all exclusive preparation. Do not charge CPU parity/repeated
+validation calls as recurring selector execution, or hide them from capture time.
+
+Two-stage <=1024-sample partial reductions and per-patch combination use explicit
+barriers and one fence per batch. Patch bytes and high-pass pairs stay resident
+for both stages; include each batch's row copies and padding in execution cost.
+Respect the single three-buffer context, combined actual <=64 MiB allocation cap,
+shared overhead and <=16 MP ordinary source limit; no full-frame float upload or
+second context is allowed. Unavailable/unfavorable selection uses original CPU
+flags. Count GPU-computed and CPU-completed selector patches separately.
+
+**Representative color calibration:** validate up to three distinct tiles drawn
+from the centre, first and last tile, rather than only a weak corner. Compare exact
+bytes/counts, include complete tile packing/wait/CPU ambiguity cost, and estimate
+the remaining image using measured warm/CPU costs per sampled pixel. Preserve
+calibrated tile outputs within the existing bounded tile reservation. Unsupported
+or nonconforming work uses CPU without publishing partial results.
+
+Persist bounded backend decision details with each capture, including reused CPU
+preferences whose original log lines have expired. Keep them attached to the
+specific synchronous native result; never read a global last-job string later.
+Performance extension v3 appends GPU selector patch count, CPU ambiguous selector
+patch count and full selector call time to v2; legacy packets remain decoded.
+The packet has 57 values: indices 54/55 are the counts and 56 is selector time.
+Release remains CPU. Actual selected backend counts, same-input text/HDR fidelity,
+complete paired timing and phone sustained acceptance remain required.
+
 ## 8. Acceptance and limits
 
 Apply PHOTO-01 through PHOTO-09 and CAP-01 through CAP-05 in

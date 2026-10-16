@@ -3,6 +3,8 @@
 #include <string>
 
 namespace fusion {
+void resetGpuDiagnostics();
+std::string gpuDiagnostics();
 struct GpuComputeStats {
     int mergeTiles=0;
     long long cpuMergePixels=0;

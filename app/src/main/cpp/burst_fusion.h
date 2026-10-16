@@ -15,6 +15,8 @@ public:
         int gpuNoiseGrids=0,gpuMergeTiles=0;
         long long cpuMergePixels=0;
         double gpuMergeMs=0;
+        int gpuSelectorPatches=0,cpuSelectorPatches=0;
+        double selectorMs=0;
     };
     struct Report {
         int anchors = 1, highlights = 0, scale = 1, reference = 0;
@@ -30,6 +32,7 @@ public:
         int fittedTiles=0;
         double initialFitError=0,finalFitError=0;
         Performance performance;
+        std::string backendDecisions;
     };
     // Experimental CPU JPEG fusion. Select a base reference, validate global
     // and sparse local registration, and sample accepted originals directly.

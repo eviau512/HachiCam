@@ -472,6 +472,20 @@ First support-map implementation acceptance (specified before implementation):
   execution and full cost separately from eligibility and CPU completion; paired
   host timing cannot establish phone speedup or the >=30% device target.
 
+- GPU-SCHEDULE-17 (specified 2026-10-16 before implementation): reproduce the
+  13-patch cold/warm/CPU/selector observation, no-missing and mixed-missing fits,
+  numerical rejection, bounded cost re-probes and skip windows. Verify cold cost
+  is visible in total time and zero missing work launches no completion team.
+  Run actual GPU selector/CPU parity on masks, borders, padded strides, flat/noisy
+  and correlation/ratio threshold neighborhoods, mixed/partial <=16-patch batches
+  and <=16 MP layouts. Ordinary CPU eligibility/crop must remain unchanged.
+  Compare representative color tiles against full CPU rendering, retain exact
+  native bytes/counts and test profile isolation across sizes/anchor counts.
+  Per-result diagnostic traces must retain the original calibration costs and
+  reused decision reason without leaking into another result; test truncation,
+  legacy packets, disabled/release builds and failure quarantine. Frozen PPT and
+  full image regressions still gate shipping; more GPU calls are not a speed pass.
+
 This revision establishes a quality backlog and acceptance contract. It does not
 implement the missing features, add proprietary algorithms, benchmark competitor
 quality, or establish numerical release thresholds without evidence.

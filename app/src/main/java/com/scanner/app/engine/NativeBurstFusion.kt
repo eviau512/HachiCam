@@ -12,7 +12,7 @@ class NativeBurstFusion {
         val geometryKnown: Boolean = true, val multiFrameFraction: Double = 0.0, val meanContributors: Double = 1.0,
         val recoveredFraction: Double = 0.0, val clippedFraction: Double = 0.0,
         val reconstruction: ReconstructionDecision = ReconstructionDecision(), val postClippedFraction: Double? = null,
-        val performance:FusionPerformance?=null)
+        val performance:FusionPerformance?=null,val backendDecisions:String="")
     var lastReport = Report()
         private set
 
@@ -47,6 +47,7 @@ class NativeBurstFusion {
     }
 
     private fun decodeResult(result: LongArray): Mat {
+        // Consume the matching native trace synchronously, before any suspension or thread switch.
         if (result.isEmpty() || result[0] == 0L) return Mat()
         val decision = try { ReconstructionDecision.decode(result) } catch (error: IllegalArgumentException) {
             Mat(result[0]).release(); throw error
@@ -55,10 +56,12 @@ class NativeBurstFusion {
             result[5].toInt(), result[6].toInt(), result[7].toInt(), result[8].toInt(), result[9].toInt(), result[10].toInt(),
             DoubleArray(9) { Double.fromBits(result[11 + it]) }, result[20] == 1L,
             Double.fromBits(result[21]), Double.fromBits(result[22]), Double.fromBits(result[23]), Double.fromBits(result[24]), decision,
-            if(result.size>=44)Double.fromBits(result[43]) else null,FusionPerformance.decode(result))
+            if(result.size>=44)Double.fromBits(result[43]) else null,FusionPerformance.decode(result),
+            nativeTakeBackendDecisions(result[0]).take(16_384))
         return Mat(result[0])
     }
 
+    private external fun nativeTakeBackendDecisions(handle:Long):String
     private external fun nativeFuseBurstFiles(paths: Array<String>, tiers: IntArray, exposureProducts: DoubleArray): LongArray
 
     private external fun nativeFuseBurstFrames(

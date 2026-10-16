@@ -12,6 +12,8 @@ int main(int argc,char** argv){
         for(int i=0;i<2;++i)if(fusion::gpuLocalSupport(ref,src,model,output,reason))throw std::runtime_error("fault published GPU output");
         if(fusion::gpuFittingAvailable(ref.total(),false))throw std::runtime_error("failed context admitted fitting");
         if(fusion::gpuNoiseGrid(ref,256,{},output,reason))throw std::runtime_error("failed context admitted noise");
+        cv::Mat hp;ref.convertTo(hp,CV_32F);std::vector<uchar> flags;fusion::GpuSelectionStats selection;
+        if(fusion::gpuStrongSelection(ref,src,hp,hp,{},{{0,0,65,65}},{{0,0}},flags,selection,reason))throw std::runtime_error("failed context admitted selector");
         cv::Mat color(ref.size(),CV_8UC3,cv::Scalar(100,100,100));
         std::vector<fusion::SamplingPlate> plates(2,{&model,cv::Matx33d::eye(),ref.size(),&color});
         long long n=0,m=0;fusion::GpuComputeStats stats;

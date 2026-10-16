@@ -284,8 +284,7 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     std::string fitBackend="CPU fitting";
     if(!singlePatch && gpuFittingAvailable(reference.total(),highlight)) {
         const auto selectionStarted=std::chrono::steady_clock::now();
-        std::vector<uchar> eligible(nx*ny,0);
-        #pragma omp parallel for schedule(dynamic)
+        std::vector<cv::Rect> candidates;std::vector<int> candidateIndices;std::vector<cv::Vec2d> candidateNoise;
         for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx) {
             if(!activeNodes.empty() && !activeNodes.at<uchar>(gy,gx))continue;
             const int cx=std::min(gx*model.spacing,reference.cols-1),cy=std::min(gy*model.spacing,reference.rows-1);
@@ -297,25 +296,27 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
             const double rs=node.refVariance-noiseGain*rn*rn,ss=node.srcVariance-noiseGain*sn*sn;
             if(node.refVariance<4 || node.srcVariance<4 ||
                rs<std::max(2.25,4*noiseGain*rn*rn) || ss<std::max(2.25,4*noiseGain*sn*sn))continue;
-            cv::Mat mask=localFitMask(warped,geometryValidity,roi);
-            mask &= (reference(roi)>8)&(reference(roi)<247);
-            if(cv::countNonZero(mask)<256)continue;
-            double ratio=0;
-            const double score=correlation(refHP(roi),srcHP(roi),mask,noiseGain*rn*rn,noiseGain*sn*sn,ratio);
-            if(score>=.90 && ratio>=.68)eligible[gy*nx+gx]=1;
+            candidates.push_back(roi);candidateIndices.push_back(gy*nx+gx);
+            candidateNoise.push_back({noiseGain*rn*rn,noiseGain*sn*sn});
+        }
+        std::vector<uchar> eligible(candidates.size(),0);GpuSelectionStats selection;
+        std::string selectorBackend="CPU selector";
+        const bool selected=!candidates.empty() && gpuStrongSelection(reference,warped,refHP,srcHP,geometryValidity,candidates,candidateNoise,eligible,selection,selectorBackend);
+        if(!selected) {
+            #pragma omp parallel for schedule(dynamic)
+            for(int i=0;i<int(candidates.size());++i)eligible[i]=strongPatchEligible(reference,warped,refHP,srcHP,geometryValidity,candidates[i],candidateNoise[i]);
         }
         std::vector<cv::Rect> patches;std::vector<int> indices;
-        for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx)if(eligible[gy*nx+gx]) {
-            const int cx=std::min(gx*model.spacing,reference.cols-1),cy=std::min(gy*model.spacing,reference.rows-1);
-            patches.emplace_back(std::max(0,cx-160),std::max(0,cy-160),
-                std::min(reference.cols,cx+161)-std::max(0,cx-160),std::min(reference.rows,cy+161)-std::max(0,cy-160));
-            indices.push_back(gy*nx+gx);
+        for(size_t i=0;i<candidates.size();++i)if(eligible[i]) {
+            patches.push_back(candidates[i]);indices.push_back(candidateIndices[i]);
         }
         const double selectorMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-selectionStarted).count();
+        const double selectorEstimate=std::max(0.,selectorMs-selection.ms)+selection.estimateMs;
+        model.gpuSelectorPatches=selection.patches;model.cpuSelectorPatches=selection.cpuPatches;model.selectorMs=selectorMs;
         std::vector<cv::Vec4f> proposals;
-        if(!patches.empty() && gpuPatchFits(refAlign,srcAlign,warped,geometryValidity,patches,highlight,proposals,fitBackend,selectorMs))
+        if(!patches.empty() && gpuPatchFits(refAlign,srcAlign,warped,geometryValidity,patches,highlight,proposals,fitBackend,selectorEstimate))
             for(size_t i=0;i<indices.size();++i)fittedNodes[indices[i]]=proposals[i];
-        if(!patches.empty())__android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU strong scheduling candidates=%zu selectorMs=%.3f reason=%s",patches.size(),selectorMs,fitBackend.c_str());
+        if(!patches.empty())__android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU strong scheduling candidates=%zu prequalified=%zu selectorMs=%.3f selectorEstimateMs=%.3f selector=%s reason=%s",patches.size(),candidates.size(),selectorMs,selectorEstimate,selectorBackend.c_str(),fitBackend.c_str());
     }
     int gpuFitCount=0;
     for(const auto& fit:fittedNodes)if(fit[3]==1)++gpuFitCount;

@@ -68,7 +68,10 @@ void runHighlightTests() {
         check(perf.gpuSupportMaps>=0 && perf.gpuSupportMaps<=6 && perf.gpuFitProposals>=0 &&
             perf.gpuNoiseGrids>=0 && perf.gpuNoiseGrids<=7 && perf.gpuMergeTiles>=0 && perf.gpuMergeTiles<=4096 &&
             perf.cpuMergePixels>=0 && perf.cpuMergePixels<=16000000 && perf.gpuMergeMs>=0 &&
-            perf.gpuMergeMs<=perf.totalMs-perf.globalRegistrationMs-perf.localRegistrationMs+.001,"Per-result backend counters must be bounded");
+            perf.gpuMergeMs<=perf.totalMs-perf.globalRegistrationMs-perf.localRegistrationMs+.001 &&
+            perf.gpuSelectorPatches>=0 && perf.gpuSelectorPatches<=24576 && perf.cpuSelectorPatches>=0 &&
+            perf.cpuSelectorPatches<=perf.gpuSelectorPatches && perf.selectorMs>=0 && perf.selectorMs<=perf.localRegistrationMs+.001 &&
+            report.backendDecisions.size()<=16384,"Per-result backend counters must be bounded");
         check(report.recoveredFraction>.002,"Production pipeline must actually recover clipped screen text");
         check(report.scale==1,"Short exposure must not grant SR phase credit");
         long long measuredPost=0;

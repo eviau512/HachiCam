@@ -12,6 +12,8 @@ struct ReferencePreparation {
 ReferencePreparation prepareReference(const cv::Mat& reference);
 struct LocalRegistration {
     int gpuFitProposals=0;
+    int gpuSelectorPatches=0,cpuSelectorPatches=0;
+    double selectorMs=0;
     bool gpuSupportMap=false;
     bool gpuNoiseGrid=false;
     cv::Mat field; // CV_32FC3: reference -> globally warped source dx,dy,confidence

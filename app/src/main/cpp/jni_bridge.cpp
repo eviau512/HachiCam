@@ -3,6 +3,7 @@
 #include "edge_detector.h"
 #include "perspective_corrector.h"
 #include "regional_reconstruction.h"
+#include "native_result_trace.h"
 #include "vulkan_compute_engine.h"
 #include <android/bitmap.h>
 #include <android/log.h>
@@ -14,12 +15,13 @@
 #define TAG "HachiCam-JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
+static thread_local fusion::NativeResultTrace backendTrace;
 static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFusionEngine::Report &report) {
-    jlongArray result = env->NewLongArray(54);
+    jlongArray result = env->NewLongArray(57);
     if (!result)
         return nullptr;
     auto owned=std::make_unique<cv::Mat>(std::move(fused));
-    jlong values[54] = {reinterpret_cast<jlong>(owned.get()),
+    jlong values[57] = {reinterpret_cast<jlong>(owned.get()),
                         report.anchors,
                         report.highlights,
                         report.scale,
@@ -59,7 +61,7 @@ static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFus
     std::memcpy(&values[41], &report.finalFitError, sizeof(double));
     values[42]=1; // Independent highlight-metric extension version.
     std::memcpy(&values[43],&report.postClippedFraction,sizeof(double));
-    values[44]=2;
+    values[44]=3;
     std::memcpy(&values[45],&report.performance.totalMs,sizeof(double));
     std::memcpy(&values[46],&report.performance.globalRegistrationMs,sizeof(double));
     std::memcpy(&values[47],&report.performance.localRegistrationMs,sizeof(double));
@@ -67,8 +69,15 @@ static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFus
     values[50]=report.performance.gpuNoiseGrids;values[51]=report.performance.gpuMergeTiles;
     values[52]=report.performance.cpuMergePixels;
     std::memcpy(&values[53],&report.performance.gpuMergeMs,sizeof(double));
-    env->SetLongArrayRegion(result, 0, 54, values);
+    values[54]=report.performance.gpuSelectorPatches;values[55]=report.performance.cpuSelectorPatches;
+    std::memcpy(&values[56],&report.performance.selectorMs,sizeof(double));
+    env->SetLongArrayRegion(result, 0, 57, values);
     if(env->ExceptionCheck())return nullptr;
+#ifdef HACHICAM_VULKAN_SUPPORT
+    backendTrace.publish(reinterpret_cast<uintptr_t>(owned.get()),report.backendDecisions);
+#else
+    backendTrace.clear();
+#endif
     owned.release();
     return result;
 }
@@ -304,9 +313,13 @@ JNIEXPORT jlong JNICALL Java_com_scanner_app_engine_NativePerspective_nativeAppl
     });
 }
 
+JNIEXPORT jstring JNICALL Java_com_scanner_app_engine_NativeBurstFusion_nativeTakeBackendDecisions(JNIEnv* env,jobject,jlong handle) {
+    return jniGuard<jstring>(env,[&]()->jstring {const auto text=backendTrace.take(uintptr_t(handle));return env->NewStringUTF(text.c_str());});
+}
 JNIEXPORT jlongArray JNICALL Java_com_scanner_app_engine_NativeBurstFusion_nativeFuseBurstFrames(
     JNIEnv *env, jobject /* this */, jlongArray matAddrs, jboolean removeGlare, jboolean isScreenMode,
     jboolean superResolution, jintArray tierArray, jdoubleArray exposureArray) {
+    backendTrace.clear();
     return jniGuard<jlongArray>(env, [&]() -> jlongArray {
         if (!matAddrs)
             return nullptr;
@@ -359,6 +372,7 @@ JNIEXPORT jlongArray JNICALL Java_com_scanner_app_engine_NativeBurstFusion_nativ
 
 JNIEXPORT jlongArray JNICALL Java_com_scanner_app_engine_NativeBurstFusion_nativeFuseBurstFiles(
     JNIEnv *env, jobject, jobjectArray pathArray, jintArray tierArray, jdoubleArray exposureArray) {
+    backendTrace.clear();
     return jniGuard<jlongArray>(env, [&]() -> jlongArray {
         if (!pathArray || !tierArray || !exposureArray)
             return nullptr;

@@ -133,6 +133,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
                                            const std::vector<int> &tiers,
                                            const std::vector<double> &exposureProducts, Report *report) {
     const auto nativeStarted=std::chrono::steady_clock::now();Performance performance;
+    fusion::resetGpuDiagnostics();
     if (frames.empty())
         return {};
     CV_Assert(tiers.empty() || tiers.size() == frames.size());
@@ -232,6 +233,9 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
         performance.gpuSupportMaps+=plate.local.gpuSupportMap ? 1 : 0;
         performance.gpuFitProposals+=plate.local.gpuFitProposals;
         performance.gpuNoiseGrids+=plate.local.gpuNoiseGrid ? 1 : 0;
+        performance.gpuSelectorPatches+=plate.local.gpuSelectorPatches;
+        performance.cpuSelectorPatches+=plate.local.cpuSelectorPatches;
+        performance.selectorMs+=plate.local.selectorMs;
         LOGI("Frame %zu tier=%d localSupport=%.3f detailNodes=%.3f denoiseOnly=%.3f noiseSigma=%.2f "
              "maxRefinement=%.3fpx",
              i, tier, plate.local.supportedFraction, plate.local.detailFraction,
@@ -416,6 +420,6 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
          double(recoveredPixels) / nativePixels);
     LOGI("Contribution: multiFrameFraction=%.4f meanContributors=%.3f", multiFraction, meanContributors);
     performance.totalMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-nativeStarted).count();
-    if(report)report->performance=performance;
+    if(report){report->performance=performance;report->backendDecisions=fusion::gpuDiagnostics();}
     return result;
 }

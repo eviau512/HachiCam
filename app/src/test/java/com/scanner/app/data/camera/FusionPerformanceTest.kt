@@ -22,4 +22,11 @@ class FusionPerformanceTest {
             expanded.copyOf().apply {this[52]=16_000_001},expanded.copyOf().apply {this[53]=9.0.toBits()})
         invalid.forEach {try {FusionPerformance.decode(it);fail("Invalid GPU counters accepted")}catch(_:IllegalArgumentException){}}
     }
+    @Test fun selectorCountersAndCallTimeRemainInsideLocalRegistration() {
+        val value=packet().copyOf(57).apply {this[44]=3;this[54]=221;this[55]=7;this[56]=1.5.toBits()}
+        val result=FusionPerformance.decode(value)!!
+        assertEquals(221,result.gpuSelectorPatches);assertEquals(7,result.cpuSelectorPatches);assertEquals(1.5,result.selectorMs,0.0)
+        for(invalid in listOf(value.copyOf().apply {this[55]=222},value.copyOf().apply {this[56]=11.0.toBits()},value.copyOf().apply {this[54]=24_577}))
+            try {FusionPerformance.decode(invalid);fail("Invalid selector telemetry accepted")}catch(_:IllegalArgumentException){}
+    }
 }

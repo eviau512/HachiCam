@@ -13,6 +13,21 @@ inline cv::Mat localFitMask(const cv::Mat& raw,const cv::Mat& validity,const cv:
     mask.colRange(0,10).setTo(0);mask.colRange(mask.cols-10,mask.cols).setTo(0);
     return mask;
 }
+inline bool strongPatchEligible(const cv::Mat& reference,const cv::Mat& source,
+    const cv::Mat& refHP,const cv::Mat& srcHP,const cv::Mat& validity,const cv::Rect& patch,cv::Vec2d noise) {
+    cv::Mat mask=localFitMask(source,validity,patch);
+    mask &= (reference(patch)>8)&(reference(patch)<247);
+    if(cv::countNonZero(mask)<256)return false;
+    cv::Scalar ma,sa,mb,sb;cv::meanStdDev(refHP(patch),ma,sa,mask);cv::meanStdDev(srcHP(patch),mb,sb,mask);
+    const double va=std::max(0.,sa[0]*sa[0]-noise[0]),vb=std::max(0.,sb[0]*sb[0]-noise[1]);
+    const double ratio=std::sqrt(vb/std::max(va,.01));
+    const double score=(cv::mean(refHP(patch).mul(srcHP(patch)),mask)[0]-ma[0]*mb[0])/std::max(std::sqrt(va*vb),.01);
+    return score>=.90 && ratio>=.68;
+}
+struct GpuSelectionStats {int patches=0,cpuPatches=0;double ms=0,estimateMs=0;};
+bool gpuStrongSelection(const cv::Mat& reference,const cv::Mat& source,const cv::Mat& refHP,const cv::Mat& srcHP,
+    const cv::Mat& validity,const std::vector<cv::Rect>& patches,const std::vector<cv::Vec2d>& noise,
+    std::vector<uchar>& eligible,GpuSelectionStats& stats,std::string& reason);
 inline unsigned char supportPixel(const cv::Mat& ref, const cv::Mat& src,
     const LocalRegistration& model, int x, int y, bool highlight,
     const cv::Mat& validity = cv::Mat()) {
