@@ -2,9 +2,10 @@
 #include "gpu_compute.h"
 #include "gpu_policy.h"
 namespace fusion {
-namespace {thread_local std::string computeTrace;}
-void resetGpuDiagnostics(){computeTrace.clear();}
+namespace {thread_local std::string computeTrace;thread_local GpuGlobalStats globalStats;}
+void resetGpuDiagnostics(){computeTrace.clear();globalStats={};}
 std::string gpuDiagnostics(){return computeTrace;}
+GpuGlobalStats gpuGlobalStats(){return globalStats;}
 static void traceDecision(const GpuCostProfile& profile,const char* stage,int key) {
     const auto line=profile.describe(stage,key);
     if(computeTrace.size()+line.size()+1<=16352){computeTrace+=line;computeTrace+='\n';}
@@ -13,6 +14,7 @@ static void traceDecision(const GpuCostProfile& profile,const char* stage,int ke
 }
 #ifndef HACHICAM_VULKAN_SUPPORT
 namespace fusion {
+bool gpuGlobalECC(const cv::Mat&,const cv::Mat&,const cv::Mat&,int,cv::TermCriteria,double,cv::Mat&,double&,std::string& reason){reason="Vulkan backend not built";return false;}
 bool gpuLocalSupport(const cv::Mat&,const cv::Mat&,const LocalRegistration&,cv::Mat&,std::string& reason,const cv::Mat&) {
     reason="Vulkan backend not built"; return false;
 }
@@ -32,6 +34,7 @@ bool gpuMergeAnchors(const std::vector<SamplingPlate>&,const cv::Mat&,const cv::
 #include "shaders/noise_grid_spv.h"
 #include "shaders/color_merge_spv.h"
 #include "shaders/strong_selection_spv.h"
+#include "shaders/global_ecc_spv.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video.hpp>
 #include <array>
@@ -110,6 +113,8 @@ struct Context {
     VkPipeline noisePipeline=VK_NULL_HANDLE,mergePipeline=VK_NULL_HANDLE;
     VkShaderModule selectionShader=VK_NULL_HANDLE;
     std::array<VkPipeline,2> selectionStages{};
+    VkShaderModule globalShader=VK_NULL_HANDLE;std::array<VkPipeline,7> globalStages{};
+    bool globalAttempted=false;GpuCostProfile globalPolicy[6];
     VkDescriptorSetLayout descriptorLayout=VK_NULL_HANDLE;
     VkPipelineLayout layout=VK_NULL_HANDLE;
     VkPipeline pipeline=VK_NULL_HANDLE;
@@ -279,6 +284,8 @@ struct Context {
             X(vkDestroyShaderModule,noiseShader);X(vkDestroyShaderModule,mergeShader);
             for(auto stage:selectionStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
             X(vkDestroyShaderModule,selectionShader);
+            for(auto stage:globalStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
+            X(vkDestroyShaderModule,globalShader);
             for(auto stage:eccStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
             X(vkDestroyShaderModule,eccShader);X(vkDestroyPipelineLayout,layout);
             X(vkDestroyDescriptorSetLayout,descriptorLayout);X(vkDestroyShaderModule,shader);
@@ -339,7 +346,12 @@ struct Context {
         VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};before.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT;before.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&before,0,nullptr,0,nullptr);
         vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,selected);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,layout,0,1,&descriptor,0,nullptr);
-        if(selected==eccPipeline) {
+        if(selected==globalStages[0] || selected==globalStages[3]) {
+            VkMemoryBarrier dependency{VK_STRUCTURE_TYPE_MEMORY_BARRIER};dependency.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;dependency.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
+            auto stage=[&](int number,uint32_t count){vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,globalStages[number]);vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());vkCmdDispatch(command,count,1,1);vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&dependency,0,nullptr,0,nullptr);};
+            if(selected==globalStages[0]){stage(0,groups);stage(1,groups);stage(2,groups);}
+            else{stage(3,groups);stage(4,1);stage(5,groups);stage(6,14);}
+        } else if(selected==eccPipeline) {
             auto constants=shape;
             VkMemoryBarrier dependency{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
             dependency.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
@@ -384,6 +396,29 @@ struct Context {
         inFlight=false;
         return true;
     }
+    bool ensureGlobal() {
+        if(globalAttempted)return globalStages[0]!=VK_NULL_HANDLE;
+        globalAttempted=true;
+        if(testFault("global_shared") || properties.limits.maxComputeSharedMemorySize<16384){failure="global shared-memory capability unavailable";return false;}
+        VkShaderModuleCreateInfo sm{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};sm.codeSize=global_ecc_spv_size;sm.pCode=global_ecc_spv;
+        auto r=vkCreateShaderModule(device,&sm,nullptr,&globalShader);if(r!=VK_SUCCESS){failure="global shader unavailable";return false;}
+        VkComputePipelineCreateInfo pc{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};pc.layout=layout;
+        pc.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};pc.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;pc.stage.module=globalShader;pc.stage.pName="main";
+        const VkSpecializationMapEntry entry{0,0,sizeof(int)};
+        for(int stage=0;stage<7;++stage){
+            const VkSpecializationInfo info{1,&entry,sizeof(stage),&stage};pc.stage.pSpecializationInfo=&info;
+            r=vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pc,nullptr,&globalStages[stage]);
+            if(r!=VK_SUCCESS){for(auto& value:globalStages){if(value)vkDestroyPipeline(device,value,nullptr);value=VK_NULL_HANDLE;}failure="global pipeline unavailable";return false;}
+        }
+        cv::Mat test(73,97,CV_8U),result;cv::RNG rng(61983);rng.fill(test,cv::RNG::UNIFORM,30,225);
+        double cc=-1;int iterations=0;const cv::Mat identity=cv::Mat::eye(2,3,CV_32F);
+        if(!runGlobal(test,test,identity,cv::MOTION_EUCLIDEAN,{cv::TermCriteria::COUNT|cv::TermCriteria::EPS,4,1e-5},result,cc,iterations) || cc<.9999 || cv::norm(identity,result,cv::NORM_INF)>.001){
+            if(!inFlight)for(auto& value:globalStages){if(value)vkDestroyPipeline(device,value,nullptr);value=VK_NULL_HANDLE;}
+            failure="global startup conformance unavailable";return false;
+        }
+        return true;
+    }
+#include "global_ecc_host.inl"
     bool run(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& model,cv::Mat& output,const cv::Mat& validity=cv::Mat()) {
         const size_t count=ref.total(), words=(count+3)/4, plane=words*4;
         const VkDeviceSize sizes[]{(model.patchSupport ? 3 : 2)*plane,model.field.total()*16,plane};
@@ -651,6 +686,55 @@ Context* sharedContext() {
     static Context* value=[]() noexcept {try{return new Context();}catch(...){return static_cast<Context*>(nullptr);}}();
     return value;
 }
+}
+bool gpuGlobalECC(const cv::Mat& reference,const cv::Mat& source,const cv::Mat& initial,
+    int model,cv::TermCriteria criteria,double sourceScale,cv::Mat& output,double& correlation,std::string& reason) {
+#ifdef HACHICAM_GPU_TEST_CONTROL
+    if(std::getenv("HACHICAM_FORCE_CPU")){reason="forced CPU benchmark";return false;}
+#endif
+    if(reference.empty()||reference.dims!=2||source.dims!=2||reference.type()!=CV_8U||source.type()!=CV_8U||reference.size()!=source.size()||reference.rows<16||reference.cols<16||reference.rows>1920||reference.cols>1920||reference.total()>2800000||
+       (model!=cv::MOTION_EUCLIDEAN && model!=cv::MOTION_HOMOGRAPHY)||initial.type()!=CV_32F||initial.cols!=3||initial.rows!=(model==cv::MOTION_HOMOGRAPHY ? 3 : 2)||!cv::checkRange(initial)||
+       (model==cv::MOTION_HOMOGRAPHY && initial.at<float>(2,2)!=1.f)||!std::isfinite(sourceScale)||sourceScale<=0||sourceScale>1||criteria.type!=(cv::TermCriteria::COUNT|cv::TermCriteria::EPS)||criteria.maxCount<1||criteria.maxCount>40||!std::isfinite(criteria.epsilon)||criteria.epsilon<=0){reason="unsupported global ECC workload";return false;}
+    const auto started=std::chrono::steady_clock::now();auto* c=sharedContext();if(!c){reason="global GPU context unavailable";return false;}
+    std::lock_guard<std::mutex> lock(c->guard);
+    if(!c->healthy || !c->ensureGlobal()){reason=c->failure;if(computeTrace.size()<16000)computeTrace+="global unavailable: "+reason+"\n";return false;}
+    const int key=(model==cv::MOTION_HOMOGRAPHY ? 3 : 0)+(reference.total()<=300000 ? 0 : reference.total()<=1500000 ? 1 : 2);
+    auto& policy=c->globalPolicy[key];
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+    if(!policy.eligible()){traceDecision(policy,"global",key);reason="calibrated CPU global preference";return false;}
+#endif
+    try {
+        cv::Mat result;double cc=-1;int iterations=0;const auto before=std::chrono::steady_clock::now();
+        const bool ok=c->runGlobal(reference,source,initial,model,criteria,result,cc,iterations);
+        const double cold=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-before).count();
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+        if(policy.needsProbe()){
+            cv::Mat cpu=initial.clone();const auto cpuStart=std::chrono::steady_clock::now();
+            double cpuCC=-1;try{cpuCC=cv::findTransformECC(reference,source,cpu,model,criteria);}catch(const cv::Exception&){reason="CPU global calibration did not converge";policy.record(false,cold,0,1,1,1,reason);traceDecision(policy,"global-calibration",key);return false;}
+            const double cpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpuStart).count();
+            auto agrees=[&](const cv::Mat& candidate,double score){
+                if(candidate.empty()||!cv::checkRange(candidate)||!std::isfinite(score)||std::abs(score-cpuCC)>.002)return false;
+                cv::Mat a=cv::Mat::eye(3,3,CV_64F),b=a.clone();candidate.convertTo(a.rowRange(0,candidate.rows),CV_64F);cpu.convertTo(b.rowRange(0,cpu.rows),CV_64F);
+                for(int y=0;y<5;++y)for(int x=0;x<5;++x){cv::Matx33d am(a),bm(b);const cv::Vec3d p((reference.cols-1)*x/4.,(reference.rows-1)*y/4.,1.);const auto u=am*p,v=bm*p;if(std::abs(u[2])<1e-9||std::abs(v[2])<1e-9||std::hypot(u[0]/u[2]-v[0]/v[2],u[1]/u[2]-v[1]/v[2])/sourceScale>.05)return false;}return true;
+            };
+            bool exact=ok && agrees(result,cc);double warm=0;
+            if(ok){const auto warmStart=std::chrono::steady_clock::now();const bool warmOk=c->runGlobal(reference,source,initial,model,criteria,result,cc,iterations);warm=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-warmStart).count();exact=exact&&warmOk&&agrees(result,cc);}
+            policy.record(exact,cold,warm,cpuMs,GpuCostProfile::reusedCost(cold,warm),cpuMs,"model="+std::to_string(model)+" size="+std::to_string(reference.cols)+"x"+std::to_string(reference.rows));
+            traceDecision(policy,"global-calibration",key);
+            if(policy.state!=GpuCostProfile::Gpu){output=cpu;correlation=cpuCC;reason="global calibration reused CPU";return true;}
+        }
+#else
+        if(!ok){reason=c->failure;return false;}
+#endif
+        if(!ok){reason=c->failure;traceDecision(policy,"global-failure",key);return false;}
+        output=result;correlation=cc;reason="validated GPU resident global ECC";
+        ++globalStats.calls;globalStats.iterations+=iterations;
+        const double callMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();globalStats.ms+=callMs;
+        traceDecision(policy,"global",key);
+        __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU global ECC v1 model=%d size=%dx%d iterations=%d cc=%.6f callMs=%.3f",model,reference.cols,reference.rows,iterations,cc,callMs);
+        return true;
+    }catch(const cv::Exception&){reason="global GPU numeric failure";return false;}
+    catch(const std::exception&){reason="global GPU host failure";return false;}
 }
 bool gpuLocalSupport(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m,cv::Mat& output,std::string& reason,const cv::Mat& validity) {
 #ifdef HACHICAM_GPU_TEST_CONTROL

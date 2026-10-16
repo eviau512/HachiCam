@@ -9,6 +9,7 @@ void runGpuFittingTests();
 void runGpuComputeTests();
 void runGpuSelectionTests();
 void runGpuPolicyTests();
+void runGpuGlobalTests();
 static void compare(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m,const cv::Mat& validity={}) {
     cv::Mat actual;std::string reason;
     if(!gpuLocalSupport(ref,src,m,actual,reason,validity))throw std::runtime_error("GPU not executed: "+reason);
@@ -49,7 +50,7 @@ int main() {
         std::cout<<"GPU threshold/boundary and unsupported-workload tests PASS\n";
         runGpuFittingTests();
         runGpuComputeTests();
-        runGpuSelectionTests();runGpuPolicyTests();
+        runGpuSelectionTests();runGpuPolicyTests();runGpuGlobalTests();
         return 0;
     } catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}
 }

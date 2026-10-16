@@ -5,6 +5,10 @@
 namespace fusion {
 void resetGpuDiagnostics();
 std::string gpuDiagnostics();
+struct GpuGlobalStats {int calls=0,iterations=0;double ms=0;};
+GpuGlobalStats gpuGlobalStats();
+bool gpuGlobalECC(const cv::Mat& reference,const cv::Mat& source,const cv::Mat& initial,
+    int model,cv::TermCriteria criteria,double sourceScale,cv::Mat& result,double& correlation,std::string& reason);
 struct GpuComputeStats {
     int mergeTiles=0;
     long long cpuMergePixels=0;

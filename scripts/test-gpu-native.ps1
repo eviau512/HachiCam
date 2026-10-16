@@ -18,7 +18,7 @@ try {
         '-I',$taskInclude,'-I','app/src/main/cpp','-I','tests/native/host','-I',$taskHeaders)
     $taskBasic=@('app/src/main/cpp/local_registration.cpp','app/src/main/cpp/gpu_local_support.cpp')
     $taskLibraries=@('-L',(Join-Path $OpenCvRoot 'lib'),'-lopencv_video','-lopencv_imgproc','-lopencv_core')
-    & $Compiler @taskFlags 'tests/native/gpu_gate_test.cpp' 'tests/native/gpu_fitting_test.cpp' 'tests/native/gpu_compute_test.cpp' 'tests/native/gpu_selection_test.cpp' 'tests/native/gpu_policy_test.cpp' @taskBasic @taskLibraries '-o' '.tools/gpu_gate_test.exe'
+    & $Compiler @taskFlags 'tests/native/gpu_gate_test.cpp' 'tests/native/gpu_fitting_test.cpp' 'tests/native/gpu_compute_test.cpp' 'tests/native/gpu_selection_test.cpp' 'tests/native/gpu_policy_test.cpp' 'tests/native/gpu_global_test.cpp' @taskBasic @taskLibraries '-o' '.tools/gpu_gate_test.exe'
     if($LASTEXITCODE -ne 0){throw 'GPU primitive compilation failed'}
     $env:PATH=[IO.Path]::GetFullPath((Join-Path $OpenCvRoot 'bin'))+';'+(Split-Path $Compiler)+';'+$env:PATH
     $env:OMP_NUM_THREADS='4'
@@ -26,7 +26,7 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Actual GPU primitive validation failed; CPU fallback does not count as GPU execution'}
     & $Compiler @taskFlags 'tests/native/gpu_failure_test.cpp' @taskBasic @taskLibraries '-o' '.tools/gpu_failure_test.exe'
     if($LASTEXITCODE -ne 0){throw 'GPU failure test compilation failed'}
-    foreach($taskFault in @('loader','software','pipeline','allocation','bind','map','submit','timeout')) {
+    foreach($taskFault in @('loader','software','pipeline','allocation','bind','map','submit','timeout','global_shared')) {
         & $Python 'research/document_alignment/run_review_native.py' '.tools/gpu_failure_test.exe' ".tools/gpu-failure-$taskFault.log" $taskFault
         if($LASTEXITCODE -ne 0){throw "GPU failure policy failed: $taskFault"}
     }
@@ -39,4 +39,8 @@ try {
     if($LASTEXITCODE -ne 0){throw 'GPU pipeline compilation failed'}
     & $Python 'tests/native/host/run.py' '.tools/gpu_quality_test.exe' '.tools/gpu-quality-tests.log'
     if($LASTEXITCODE -ne 0){throw 'GPU end-to-end quality validation failed'}
+    & $Compiler @taskFlags '-DHACHICAM_GPU_BENCH_AUTO=1' 'tests/native/gpu_global_calibration_test.cpp' @taskBasic @taskLibraries '-o' '.tools/gpu_global_calibration_test.exe'
+    if($LASTEXITCODE -ne 0){throw 'Global production-calibration probe compilation failed'}
+    & $Python 'tests/native/host/run.py' '.tools/gpu_global_calibration_test.exe' '.tools/gpu-global-calibration.log'
+    if($LASTEXITCODE -ne 0){throw 'Global production-calibration rejection failed'}
 } finally { Pop-Location }

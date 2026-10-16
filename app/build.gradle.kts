@@ -37,8 +37,8 @@ android {
         applicationId = "moe.hachimi.cam"
         minSdk = 29
         targetSdk = 35
-        versionCode = 41
-        versionName = "0.1.2-rc17"
+        versionCode = 42
+        versionName = "0.1.2-rc18"
 
         buildConfigField("String", "GIT_HASH", "\"$gitCommit\"")
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")

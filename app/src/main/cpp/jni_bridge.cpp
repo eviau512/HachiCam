@@ -17,11 +17,11 @@
 
 static thread_local fusion::NativeResultTrace backendTrace;
 static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFusionEngine::Report &report) {
-    jlongArray result = env->NewLongArray(57);
+    jlongArray result = env->NewLongArray(60);
     if (!result)
         return nullptr;
     auto owned=std::make_unique<cv::Mat>(std::move(fused));
-    jlong values[57] = {reinterpret_cast<jlong>(owned.get()),
+    jlong values[60] = {reinterpret_cast<jlong>(owned.get()),
                         report.anchors,
                         report.highlights,
                         report.scale,
@@ -61,7 +61,7 @@ static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFus
     std::memcpy(&values[41], &report.finalFitError, sizeof(double));
     values[42]=1; // Independent highlight-metric extension version.
     std::memcpy(&values[43],&report.postClippedFraction,sizeof(double));
-    values[44]=3;
+    values[44]=4;
     std::memcpy(&values[45],&report.performance.totalMs,sizeof(double));
     std::memcpy(&values[46],&report.performance.globalRegistrationMs,sizeof(double));
     std::memcpy(&values[47],&report.performance.localRegistrationMs,sizeof(double));
@@ -71,7 +71,9 @@ static jlongArray encodeFusionResult(JNIEnv *env, cv::Mat &fused, const BurstFus
     std::memcpy(&values[53],&report.performance.gpuMergeMs,sizeof(double));
     values[54]=report.performance.gpuSelectorPatches;values[55]=report.performance.cpuSelectorPatches;
     std::memcpy(&values[56],&report.performance.selectorMs,sizeof(double));
-    env->SetLongArrayRegion(result, 0, 57, values);
+    values[57]=report.performance.gpuGlobalCalls;values[58]=report.performance.gpuGlobalIterations;
+    std::memcpy(&values[59],&report.performance.gpuGlobalMs,sizeof(double));
+    env->SetLongArrayRegion(result, 0, 60, values);
     if(env->ExceptionCheck())return nullptr;
 #ifdef HACHICAM_VULKAN_SUPPORT
     backendTrace.publish(reinterpret_cast<uintptr_t>(owned.get()),report.backendDecisions);

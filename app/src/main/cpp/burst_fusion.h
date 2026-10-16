@@ -17,6 +17,8 @@ public:
         double gpuMergeMs=0;
         int gpuSelectorPatches=0,cpuSelectorPatches=0;
         double selectorMs=0;
+        int gpuGlobalCalls=0,gpuGlobalIterations=0;
+        double gpuGlobalMs=0;
     };
     struct Report {
         int anchors = 1, highlights = 0, scale = 1, reference = 0;

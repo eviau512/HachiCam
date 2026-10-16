@@ -1,0 +1,91 @@
+#version 450
+// Resident global ECC images; only reduced statistics cross the CPU boundary.
+layout(local_size_x=64) in;
+layout(constant_id=0) const int kernelStage=0;
+layout(std430,binding=0) buffer Planes {float image[];};
+layout(std430,binding=1) readonly buffer Bytes {uint raw[];};
+layout(std430,binding=2) buffer Workspace {float work[];};
+layout(push_constant) uniform Shape {int width;int height;int model;int stage;int chunks;int count;int coordOffset;int partialOffset;} p;
+shared vec4 sums[14][64];
+int reflect101(int x,int n){if(x<0)return -x;return x>=n ? 2*n-2-x : x;}
+float byteAt(int plane,int x,int y){int i=y*p.width+x;return float((raw[plane*((p.count+3)/4)+(i>>2)]>>(8*(i&3)))&255u);}
+float point(int plane,int x,int y){return x<0||y<0||x>=p.width||y>=p.height ? 0. : image[plane*p.count+y*p.width+x];}
+void reduce(int groups,uint lane){
+    barrier();for(uint step=32u;step>0u;step>>=1u){if(lane<step)for(int g=0;g<groups;++g)sums[g][lane]+=sums[g][lane+step];barrier();}
+}
+vec2 coordinate(int x,int y,bool nearest){
+    if(p.model==1){
+        int at=p.coordOffset;
+        ivec2 quantized=ivec2(floatBitsToInt(work[at+x])+floatBitsToInt(work[at+2*p.width+y]),
+            floatBitsToInt(work[at+p.width+x])+floatBitsToInt(work[at+2*p.width+p.height+y]));
+        return nearest ? vec2((quantized+512)>>10) : vec2((quantized+16)>>5)/32.;
+    }
+    precise float a=work[0]*float(x)+work[1]*float(y)+work[2];
+    precise float b=work[3]*float(x)+work[4]*float(y)+work[5];
+    precise float d=work[6]*float(x)+work[7]*float(y)+1.;
+    vec2 q=vec2(a,b)/d;
+    if(any(isnan(q))||any(isinf(q))||any(greaterThan(abs(q),vec2(1e7))))return vec2(-1e6);
+    return nearest ? roundEven(q) : roundEven(q*32.)/32.;
+}
+vec3 warped(int x,int y){
+    vec2 q=coordinate(x,y,false);ivec2 lo=ivec2(floor(q));vec2 f=q-vec2(lo);
+    precise vec3 a=vec3(point(3,lo.x,lo.y),point(0,lo.x,lo.y),point(1,lo.x,lo.y));
+    precise vec3 b=vec3(point(3,lo.x+1,lo.y),point(0,lo.x+1,lo.y),point(1,lo.x+1,lo.y));
+    precise vec3 c=vec3(point(3,lo.x,lo.y+1),point(0,lo.x,lo.y+1),point(1,lo.x,lo.y+1));
+    precise vec3 d=vec3(point(3,lo.x+1,lo.y+1),point(0,lo.x+1,lo.y+1),point(1,lo.x+1,lo.y+1));
+    precise vec3 result=(1.-f.y)*((1.-f.x)*a+f.x*b)+f.y*((1.-f.x)*c+f.x*d);return result;
+}
+bool valid(int x,int y){vec2 q=coordinate(x,y,true);return q.x>=0.&&q.y>=0.&&q.x<float(p.width)&&q.y<float(p.height);}
+void main(){
+    uint lane=gl_LocalInvocationID.x,group=gl_WorkGroupID.x;
+    if(kernelStage<=2){
+        int i=int(group*64u+lane);if(i>=p.count)return;int x=i%p.width,y=i/p.width;
+        if(kernelStage==0){
+            vec2 value=vec2(0.);const float weights[5]=float[5](1.,4.,6.,4.,1.);
+            for(int k=-2;k<=2;++k){int xx=reflect101(x+k,p.width);value+=weights[k+2]*vec2(byteAt(0,xx,y),byteAt(1,xx,y));}
+            image[i]=value.x/16.;image[p.count+i]=value.y/16.;
+        }else if(kernelStage==1){
+            vec2 value=vec2(0.);const float weights[5]=float[5](1.,4.,6.,4.,1.);
+            for(int k=-2;k<=2;++k){int j=reflect101(y+k,p.height)*p.width+x;value+=weights[k+2]*vec2(image[j],image[p.count+j]);}
+            image[2*p.count+i]=value.x/16.;image[3*p.count+i]=value.y/16.;
+        }else{
+            image[i]=.5*(point(3,reflect101(x+1,p.width),y)-point(3,reflect101(x-1,p.width),y));
+            image[p.count+i]=.5*(point(3,x,reflect101(y+1,p.height))-point(3,x,reflect101(y-1,p.height)));
+        }return;
+    }
+    if(kernelStage==4){
+        vec4 total=vec4(0.);for(uint c=lane;c<uint(p.chunks);c+=64u){int at=p.partialOffset+int(c)*56;total+=vec4(work[at],work[at+1],work[at+2],0.);}
+        sums[0][lane]=total;reduce(1,lane);
+        if(lane==0u){float n=sums[0][0].z;work[12]=n>0. ? sums[0][0].x/n : 0.;work[13]=n>0. ? sums[0][0].y/n : 0.;work[14]=n;}return;
+    }
+    if(kernelStage==6){
+        vec4 total=vec4(0.);for(uint c=lane;c<uint(p.chunks);c+=64u){int at=p.partialOffset+int(c)*56+int(group)*4;total+=vec4(work[at],work[at+1],work[at+2],work[at+3]);}
+        sums[0][lane]=total;reduce(1,lane);if(lane==0u)for(int k=0;k<4;++k)work[16+int(group)*4+k]=sums[0][0][k];return;
+    }
+    int start=int(group)*1024,end=min(p.count,start+1024);
+    if(kernelStage==3){
+        vec4 total=vec4(0.);for(int i=start+int(lane);i<end;i+=64){int x=i%p.width,y=i/p.width;if(valid(x,y))total+=vec4(warped(x,y).x,image[2*p.count+i],1.,0.);}
+        sums[0][lane]=total;reduce(1,lane);if(lane==0u){int at=p.partialOffset+int(group)*56;for(int k=0;k<3;++k)work[at+k]=sums[0][0][k];}return;
+    }
+    precise float values[56];for(int k=0;k<56;++k)values[k]=0.;
+    int n=p.model==1 ? 3 : 8,triangle=n*(n+1)/2;
+    for(int i=start+int(lane);i<end;i+=64){
+        int x=i%p.width,y=i/p.width;vec3 v=warped(x,y);bool mask=valid(x,y);
+        precise float iz=mask ? v.x-work[12] : v.x,tz=mask ? image[2*p.count+i]-work[13] : 0.;
+        if(mask){values[0]+=iz*iz;values[1]+=tz*tz;values[2]+=iz*tz;}
+        precise float j[8];
+        if(p.model==1){j[0]=v.y*(-work[3]*float(x)-work[0]*float(y))+v.z*(work[0]*float(x)-work[3]*float(y));j[1]=v.y;j[2]=v.z;}
+        else{
+            precise float d=work[6]*float(x)+work[7]*float(y)+1.;
+            precise float qx=(work[0]*float(x)+work[1]*float(y)+work[2])/d,qy=(work[3]*float(x)+work[4]*float(y)+work[5])/d;
+            precise float gx=v.y/d,gy=v.z/d,c=-(gx*qx+gy*qy);
+            j[0]=gx*float(x);j[1]=gy*float(x);j[2]=c*float(x);j[3]=gx*float(y);j[4]=gy*float(y);j[5]=c*float(y);j[6]=gx;j[7]=gy;
+        }
+        int at=3;for(int a=0;a<n;++a)for(int b=a;b<n;++b)values[at++]+=j[a]*j[b];
+        for(int a=0;a<n;++a){values[3+triangle+a]+=j[a]*iz;values[3+triangle+n+a]+=j[a]*tz;}
+    }
+    int blocks=p.model==1 ? 4 : 14;
+    for(int g=0;g<blocks;++g)sums[g][lane]=vec4(values[g*4],values[g*4+1],values[g*4+2],values[g*4+3]);
+    reduce(blocks,lane);
+    if(lane==0u){int at=p.partialOffset+int(group)*56;for(int k=0;k<56;++k)work[at+k]=k<blocks*4 ? sums[k/4][0][k%4] : 0.;}
+}

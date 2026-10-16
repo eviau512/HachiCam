@@ -71,6 +71,8 @@ void runHighlightTests() {
             perf.gpuMergeMs<=perf.totalMs-perf.globalRegistrationMs-perf.localRegistrationMs+.001 &&
             perf.gpuSelectorPatches>=0 && perf.gpuSelectorPatches<=24576 && perf.cpuSelectorPatches>=0 &&
             perf.cpuSelectorPatches<=perf.gpuSelectorPatches && perf.selectorMs>=0 && perf.selectorMs<=perf.localRegistrationMs+.001 &&
+            perf.gpuGlobalCalls>=0 && perf.gpuGlobalIterations>=perf.gpuGlobalCalls && perf.gpuGlobalIterations<=perf.gpuGlobalCalls*40 &&
+            perf.gpuGlobalMs>=0 && perf.gpuGlobalMs<=perf.globalRegistrationMs+.001 &&
             report.backendDecisions.size()<=16384,"Per-result backend counters must be bounded");
         check(report.recoveredFraction>.002,"Production pipeline must actually recover clipped screen text");
         check(report.scale==1,"Short exposure must not grant SR phase credit");
@@ -99,6 +101,7 @@ void runHighlightTests() {
         if(stream)engine.fuseBurstStream(2,[&](size_t i){return motion[i].clone();},{0,1},{4,1},&report);
         else engine.fuseBurstFrames(motion,false,true,false,{0,1},{4,1},&report);
         std::cout<<"HDR shifted stream="<<stream<<" recovered="<<report.recoveredFraction<<'\n';
+        check(report.performance.gpuGlobalCalls==0,"Cross-exposure-only recovery must preserve original CPU global geometry");
         check(report.recoveredFraction>.002,"Handheld translation must retain supported highlight recovery");
         const cv::Mat clipped(base.size(),base.type(),cv::Scalar::all(255));
         if(stream)engine.fuseBurstStream(2,[&](size_t){return clipped.clone();},{0,1},{4,1},&report);

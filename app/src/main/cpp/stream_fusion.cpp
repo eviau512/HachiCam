@@ -1,4 +1,5 @@
 #include "burst_fusion.h"
+#include "gpu_compute.h"
 #include "local_registration.h"
 #include "fusion_math.h"
 #include <android/log.h>
@@ -106,6 +107,7 @@ bool sample(const cv::Mat& image,cv::Point2d p,fusion::Color& c) {
 cv::Mat BurstFusionEngine::fuseBurstStream(size_t count,const std::function<cv::Mat(size_t)>& loader,
         const std::vector<int>& tiers,const std::vector<double>& exposures,Report* report) {
     const auto nativeStarted=std::chrono::steady_clock::now();Performance performance;
+    fusion::resetGpuDiagnostics();
     if(!count||count>7||tiers.size()!=count||exposures.size()!=count||tiers[0]!=0)
         throw std::invalid_argument("Invalid streamed burst metadata");
     if(std::count(tiers.begin(),tiers.end(),0)>4)throw std::invalid_argument("At most four base frames");
@@ -228,7 +230,8 @@ cv::Mat BurstFusionEngine::fuseBurstStream(size_t count,const std::function<cv::
     STREAM_LOG("Highlight pixels: recoveredFraction=%.6f clippedFraction=%.6f",achieved.recoveredFraction,achieved.clippedFraction);
     STREAM_LOG("Stream fusion: native=%dx%d anchors=%d highlights=%d scale=1 crop=%d,%d,%d,%d multiFrameFraction=%.4f meanContributors=%.3f",size.width,size.height,admitted,usedHighlights,crop.x,crop.y,crop.width,crop.height,achieved.multiFrameFraction,achieved.meanContributors);
     performance.totalMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-nativeStarted).count();
-    achieved.performance=performance;
+    const auto global=fusion::gpuGlobalStats();performance.gpuGlobalCalls=global.calls;performance.gpuGlobalIterations=global.iterations;performance.gpuGlobalMs=global.ms;
+    achieved.performance=performance;achieved.backendDecisions=fusion::gpuDiagnostics();
     if(report)*report=achieved;
     return output;
 }

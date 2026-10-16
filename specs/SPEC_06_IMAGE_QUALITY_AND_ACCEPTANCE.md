@@ -486,6 +486,19 @@ First support-map implementation acceptance (specified before implementation):
   legacy packets, disabled/release builds and failure quarantine. Frozen PPT and
   full image regressions still gate shipping; more GPU calls are not a speed pass.
 
+- GPU-GLOBAL-18 (specified 2026-10-16 before implementation): exercise actual
+  Euclidean and homography GPU optimization on known translations/rotations,
+  nonidentity initialization, perspective, exposure changes, padded strides,
+  borders, flat/uncorrelated input and maximum admitted layouts. Compare returned
+  correlation and a distributed transform grid at original-source scale against
+  CPU (0.002 /0.05 px); numerical failure must not enter normal GPU preference.
+  Test resident layout transitions within 64 MiB, disabled/low-shared-memory
+  hardware and all existing failure quarantines. Verify CPU goldens, frozen
+  screen/white-field regressions and selected global candidates; report actual
+  adopted call/iteration counts and cold/warm complete timing. V4 nested times
+  and counts must be bounded and older packets remain readable. More adopted
+  global calls alone do not establish device speedup or the >=30% target.
+
 This revision establishes a quality backlog and acceptance contract. It does not
 implement the missing features, add proprietary algorithms, benchmark competitor
 quality, or establish numerical release thresholds without evidence.

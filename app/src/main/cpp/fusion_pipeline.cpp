@@ -420,6 +420,7 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
          double(recoveredPixels) / nativePixels);
     LOGI("Contribution: multiFrameFraction=%.4f meanContributors=%.3f", multiFraction, meanContributors);
     performance.totalMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-nativeStarted).count();
+    const auto global=fusion::gpuGlobalStats();performance.gpuGlobalCalls=global.calls;performance.gpuGlobalIterations=global.iterations;performance.gpuGlobalMs=global.ms;
     if(report){report->performance=performance;report->backendDecisions=fusion::gpuDiagnostics();}
     return result;
 }

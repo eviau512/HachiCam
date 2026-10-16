@@ -18,6 +18,11 @@ requires authorization. Preserve this workflow for follow-up requests.
 
 ## End-of-work handoff
 
+When new evidence identifies actionable work within the already authorized scope,
+continue directly from analysis through specification revision, implementation,
+verification and the authorized delivery. Do not end the turn after analysis or
+wait for another user message merely to start the known next step.
+
 When the user says to wrap up or calls it a day (for example, "收工"), commit the
 authorized task changes on the current working branch and push them without
 asking again. Verify the remote branch points to the pushed commit before

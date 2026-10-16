@@ -1,5 +1,6 @@
 #include "local_support.h"
 #include "gpu_compute.h"
+#include <opencv2/video.hpp>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -9,9 +10,17 @@ int main(int argc,char** argv){
         cv::Mat ref(65,65,CV_8U,cv::Scalar(100)),src(ref.size(),CV_8U,cv::Scalar(100));
         fusion::LocalRegistration model;model.domain=ref.size();model.field=cv::Mat(2,2,CV_32FC3,cv::Scalar(0,0,1));
         cv::Mat output;std::string reason;
+        if(std::string(argv[1])=="global_shared"){
+            cv::Mat transform=cv::Mat::eye(2,3,CV_32F);double cc=-1;
+            if(fusion::gpuGlobalECC(ref,src,transform,cv::MOTION_EUCLIDEAN,{cv::TermCriteria::COUNT|cv::TermCriteria::EPS,4,1e-5},1,output,cc,reason))throw std::runtime_error("Unsupported global shared memory admitted");
+            if(!fusion::gpuLocalSupport(ref,src,model,output,reason)||!fusion::gpuTestState().healthy)throw std::runtime_error("Global capability disabled an unrelated kernel");
+            std::cout<<"PASS global-only shared-memory fallback retains existing compute\n";return 0;
+        }
         for(int i=0;i<2;++i)if(fusion::gpuLocalSupport(ref,src,model,output,reason))throw std::runtime_error("fault published GPU output");
         if(fusion::gpuFittingAvailable(ref.total(),false))throw std::runtime_error("failed context admitted fitting");
         if(fusion::gpuNoiseGrid(ref,256,{},output,reason))throw std::runtime_error("failed context admitted noise");
+        cv::Mat transform=cv::Mat::eye(2,3,CV_32F);double cc=-1;
+        if(fusion::gpuGlobalECC(ref,src,transform,cv::MOTION_EUCLIDEAN,{cv::TermCriteria::COUNT|cv::TermCriteria::EPS,4,1e-5},1,output,cc,reason))throw std::runtime_error("failed context admitted global optimization");
         cv::Mat hp;ref.convertTo(hp,CV_32F);std::vector<uchar> flags;fusion::GpuSelectionStats selection;
         if(fusion::gpuStrongSelection(ref,src,hp,hp,{},{{0,0,65,65}},{{0,0}},flags,selection,reason))throw std::runtime_error("failed context admitted selector");
         cv::Mat color(ref.size(),CV_8UC3,cv::Scalar(100,100,100));

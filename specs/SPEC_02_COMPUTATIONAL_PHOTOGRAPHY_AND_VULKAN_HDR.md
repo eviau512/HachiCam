@@ -962,6 +962,62 @@ The packet has 57 values: indices 54/55 are the counts and 56 is selector time.
 Release remains CPU. Actual selected backend counts, same-input text/HDR fidelity,
 complete paired timing and phone sustained acceptance remain required.
 
+### 7.6 rc18 resident global ECC (specified 2026-10-16 before implementation)
+
+Implemented in debug with actual-GPU optimizer, CPU-golden, full-image and build
+checks. The dated rc18 report records selected calls and paired host timing;
+phone sustained speed and the >=30% complete-capture target remain unaccepted.
+
+The rc17 device group d16040ae took 32.191 s shutter-to-ready and 26.950 s
+native, with 7.727 s global and 12.228 s local registration/verification. Actual
+GPU local proposals increased to 46 but did not remove the main wait. Continue
+with full-image Euclidean and homography ECC, rather than only routing helpers.
+
+**Implemented contract:** keep the existing 480/1920 Euclidean pyramid,
+1280 homography preparation, initialization, iteration limits, epsilon, candidate
+ranking and physical/photometric verification unchanged. In this first rollout,
+cross-exposure HDR global alignment remains CPU: the shifted-highlight fixture
+revealed that a sub-0.05-pixel global difference can cross downstream evidence
+boundaries. It requires separate recovery-equivalence qualification, not a relaxed
+support threshold. Apply the new optimizer to base-exposure candidates only.
+The debug GPU backend
+may own Gaussian preparation, gradients, warped sampling, masked mean/variance,
+Jacobian/Hessian and image projections. Keep raw bytes/prepared planes resident
+through the entire optimization. Download only bounded reduced statistics each
+iteration; CPU may solve the 3x3/8x8 system and update the transform. It must not
+download full warped images or allocate a full-image Jacobian per iteration.
+This supersedes the CPU-global-optimizer restriction only for these validated
+variants; ORB, phase and independent structural/physical checks stay unchanged.
+
+Honor OpenCV's five-tap Gaussian/reflected border, zero outside warp border,
+linear interpolation grid, nearest validity mask, masked means, unmasked warped
+gradients and final-update/returned-correlation semantics. Include outside-mask
+warped-gradient Hessian terms and avoid raw second-moment cancellation. Preserve
+reference-to-source transform direction and source-scale coordinate mapping.
+
+Use the existing single three-buffer context and <=64 MiB actual allocation;
+ordinary source admission is unchanged. Global optimization is limited to <=1920
+in each dimension and <=2,800,000 prepared pixels, with >=16 KiB compute shared
+memory. Unsupported hardware/layouts disable this stage without disabling other
+validated kernels. Device/submission failures retain context quarantine.
+
+Calibrate separately by motion model and prepared-resolution class against the
+unchanged CPU call from the same initial transform. Both cold and warm results
+must agree in correlation within 0.002 and in mapped source coordinates within
+0.05 original-source pixel on a distributed 5x5 grid. No numerical rejection is
+re-probed or relaxed. CPU calibration results are reused when selected; original
+CPU exceptions/fallback semantics are retained. Complete packing, preparation,
+iteration submissions/waits, reduction transfer and CPU solve belong to the GPU
+cost; apply the existing 90% cost rule and bounded cost re-probes. Record actual
+calibration latency in total time, regardless of amortized reuse estimates.
+
+Performance v4 appends global GPU optimization-call count, iteration count and
+complete adopted-GPU call time at indices 57/58/59 (60 values). The call time is
+nested inside global registration, not an additional wall interval. Keep legacy
+packets supported and attach model, resolution, costs and failure reasons to the
+same result trace. Release stays CPU. Actual global adoption, full capture time,
+frozen text/HDR fidelity and phone sustained acceptance are separate gates.
+
 ## 8. Acceptance and limits
 
 Apply PHOTO-01 through PHOTO-09 and CAP-01 through CAP-05 in

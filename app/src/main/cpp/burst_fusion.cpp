@@ -1,5 +1,6 @@
 #include "burst_fusion.h"
 #include "local_registration.h"
+#include "gpu_compute.h"
 #include <opencv2/photo.hpp>
 #include <opencv2/video.hpp>
 #include <vector>
@@ -48,6 +49,13 @@ static bool displacementWithinLimit(const cv::Mat& H, int rows, int cols, const 
 }
 
 namespace {
+thread_local bool globalEccAllowed=true;
+struct CpuGlobalScope {bool previous=globalEccAllowed;CpuGlobalScope(){globalEccAllowed=false;}~CpuGlobalScope(){globalEccAllowed=previous;}};
+double globalECC(const cv::Mat& reference,const cv::Mat& source,cv::Mat& transform,int model,cv::TermCriteria criteria,double scale){
+    cv::Mat result;double cc=-1;std::string reason;
+    if(globalEccAllowed && fusion::gpuGlobalECC(reference,source,transform,model,criteria,scale,result,cc,reason)){transform=result;return cc;}
+    return cv::findTransformECC(reference,source,transform,model,criteria);
+}
 struct GlobalScoreCache {
     const uchar *source=nullptr,*reference=nullptr;
     cv::Size sourceSize,referenceSize;
@@ -153,8 +161,8 @@ static bool projectiveECC(const cv::Mat& src,const cv::Mat& ref,const cv::Mat& i
         const cv::Mat s=(cv::Mat_<double>(3,3)<<sx,0,.5*sx-.5,0,sy,.5*sy-.5,0,0,1);
         cv::Mat inverse=initial.empty() ? cv::Mat::eye(3,3,CV_64F) : initial.inv();
         cv::Mat w=s*inverse*s.inv();w.convertTo(w,CV_32F);
-        const double cc=cv::findTransformECC(gr,gs,w,cv::MOTION_HOMOGRAPHY,
-            cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,40,1e-5));
+        const double cc=globalECC(gr,gs,w,cv::MOTION_HOMOGRAPHY,
+            cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,40,1e-5),std::min(sx,sy));
         if(!std::isfinite(cc)||cc<.60)return false;
         w.convertTo(w,CV_64F);h=s.inv()*w.inv()*s;
         if(!cv::checkRange(h)||std::abs(h.at<double>(2,2))<1e-9)return false;
@@ -321,7 +329,7 @@ bool BurstFusionEngine::alignFrameECC(const cv::Mat& src, const cv::Mat& ref, cv
 
         cv::Mat warpMatrix = cv::Mat::eye(2, 3, CV_32F);
         cv::TermCriteria criteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, 0.005);
-        double cc = cv::findTransformECC(smallRef, smallSrc, warpMatrix, cv::MOTION_EUCLIDEAN, criteria);
+        double cc = globalECC(smallRef, smallSrc, warpMatrix, cv::MOTION_EUCLIDEAN, criteria,scale);
 
         // Coarse 480px alignment alone is insufficient for source-pixel phase
         // reconstruction. Refine the same transform on a larger luma pyramid.
@@ -331,8 +339,8 @@ bool BurstFusionEngine::alignFrameECC(const cv::Mat& src, const cv::Mat& ref, cv
             warpMatrix.at<float>(1, 2) *= refinedScale / scale;
             cv::resize(graySrc, smallSrc, cv::Size(), refinedScale, refinedScale, cv::INTER_AREA);
             cv::resize(grayRef, smallRef, cv::Size(), refinedScale, refinedScale, cv::INTER_AREA);
-            cc = cv::findTransformECC(smallRef, smallSrc, warpMatrix, cv::MOTION_EUCLIDEAN,
-                cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 40, 1e-5));
+            cc = globalECC(smallRef, smallSrc, warpMatrix, cv::MOTION_EUCLIDEAN,
+                cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 40, 1e-5),refinedScale);
             scale = refinedScale;
         }
 
@@ -753,6 +761,7 @@ bool BurstFusionEngine::alignHighlightTemplate(const cv::Mat& srcShort, const cv
 // 6. 坏板熔断保护 (返回 false，防止未对齐曝光板进入 MergeMertens 造成双重重影)
 // ============================================================================
 bool BurstFusionEngine::alignHighlightFrame(const cv::Mat& srcShort, const cv::Mat& refBase, cv::Mat& outWarped, cv::Mat& outH, double exposureGain) {
+    CpuGlobalScope preserveHighlightGeometry;
     ScoreScope scoreScope;
     if (srcShort.empty() || refBase.empty() || srcShort.size() != refBase.size()) {
         return false;

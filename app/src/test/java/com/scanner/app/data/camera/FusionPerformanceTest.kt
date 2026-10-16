@@ -29,4 +29,11 @@ class FusionPerformanceTest {
         for(invalid in listOf(value.copyOf().apply {this[55]=222},value.copyOf().apply {this[56]=11.0.toBits()},value.copyOf().apply {this[54]=24_577}))
             try {FusionPerformance.decode(invalid);fail("Invalid selector telemetry accepted")}catch(_:IllegalArgumentException){}
     }
+    @Test fun globalIterationsAndCompleteCallTimeAreBoundedInsideGlobalInterval() {
+        val value=packet().copyOf(60).apply {this[44]=4;this[57]=3;this[58]=53;this[59]=5.0.toBits()}
+        val result=FusionPerformance.decode(value)!!
+        assertEquals(3,result.gpuGlobalCalls);assertEquals(53,result.gpuGlobalIterations);assertEquals(5.0,result.gpuGlobalMs,0.0)
+        for(invalid in listOf(value.copyOf().apply {this[57]=0},value.copyOf().apply {this[58]=121},value.copyOf().apply {this[59]=13.0.toBits()},value.copyOf().apply {this[58]=2}))
+            try {FusionPerformance.decode(invalid);fail("Invalid global telemetry accepted")}catch(_:IllegalArgumentException){}
+    }
 }

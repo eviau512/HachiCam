@@ -20,14 +20,16 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Current work: [rc17 GPU selection and scheduling](reports/RC17_GPU_SCHEDULING_2026-10-16.zh-CN.md),
-following [the latest rc16 bright PPT evidence](reports/RC16_BRIGHT_PPT_DEVICE_2026-10-16.zh-CN.md).
+Current work: [rc18 resident global ECC](reports/RC18_RESIDENT_GLOBAL_ECC_2026-10-16.zh-CN.md).
+Previous: [rc17 GPU selection and scheduling](reports/RC17_GPU_SCHEDULING_2026-10-16.zh-CN.md),
+following [the rc16 bright PPT evidence](reports/RC16_BRIGHT_PPT_DEVICE_2026-10-16.zh-CN.md).
+Latest device observation: [rc17 PPT time and selected GPU stages](reports/RC17_PPT_DEVICE_2026-10-16.zh-CN.md).
 Previous delivery: [rc16 GPU compute expansion](reports/RC16_GPU_COMPUTE_EXPANSION_2026-10-16.zh-CN.md).
 Previous correction: [rc15 PPT highlight noise](reports/RC15_PPT_HIGHLIGHT_NOISE_2026-10-15.zh-CN.md).
 Previous checkpoint: [rc14 registration performance](reports/RC14_REGISTRATION_PERFORMANCE_2026-10-15.zh-CN.md).
 Previous delivered batch: [rc13 performance, diagnostics and recovery](reports/RC13_PERFORMANCE_AND_RECOVERY_2026-10-15.zh-CN.md),
 following the [four-scene rc12 evidence](reports/RC12_FOUR_SCENES_2026-10-15.zh-CN.md).
-Debug Vulkan support/ECC/noise/color/strong-selection kernels self-test/calibrate before use, with CPU fallback;
+Debug Vulkan support/local ECC/global ECC/noise/color/strong-selection kernels self-test/calibrate before use, with CPU fallback;
 release stays CPU. This does not enable the old HDR shader or establish phone
 speedup. Multi-group final-image diagnostics and completed-page checkpoints are
 implemented; lamp HDR and the remaining full GPU migration require further work.
