@@ -65,8 +65,16 @@ JPEG 编解码仍包含 CPU 工作。原生高像素流式拍摄保持顺序 CPU
 
 ## 交付与待测
 
-准备 rc16 /versionCode 40、`HachiCamTest`、`moe.hachimi.cam.test` universal 测试版。
-APK 身份/签名/CRC/三 ABI、不可变副本 SHA-256 与 Hyper-obs 发送结果在完成后补录。
+已交付 rc16 /versionCode 40、`HachiCamTest`、`moe.hachimi.cam.test` universal 测试版：
+
+- 文件 `HachiCamTest-0.1.2-rc16-1517-universal.apk`，126,671,199 字节。
+- SHA-256：`c8782ff25e016ad7e97e0ac31e639297286f17f150917724175453427875b814`。
+- 干净源码身份 `e9ecb7748465f80f6010e6dd285686c2ccc7b9f3`，已推送 `gpu-hdr` 并核对实时远端。
+- ZIP CRC、原调试证书/v2 签名、ZIP 对齐、arm64-v8a/armeabi-v7a/x86_64、原 Banner
+  和不可变副本哈希通过；宿主测试钩子未进入 APK。原有完整原生 16 KiB 兼容待办仍未验收。
+- **2026-10-16 15:20:15 +08:00**，Tailscale 发送 Hyper-obs（100.79.217.41）成功，
+  退出码 0，发送前后本地大小/哈希相同。发送确认不代表接收端哈希或手机安装已独立验收。
+
 原始照片、日志和宿主审计副本只保留本地，不进入 Git 或 APK。
 
 手机重点：首轮与后续完整等待、实际 GPU 噪声/支持图/彩色块计数、白色 PPT 与细字，
