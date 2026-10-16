@@ -87,7 +87,15 @@ standard Kotlin 以及两模式三 ABI 编译通过。
 
 ## 交付
 
-rc18 /versionCode 42 universal 测试版准备从干净已提交源码构建、校验并发送 Hyper-obs。
+rc18 /versionCode 42、`HachiCamTest`、`moe.hachimi.cam.test` universal 测试版已构建：
+
+- 文件 `HachiCamTest-0.1.2-rc18-2142-universal.apk`，126,796,219 字节。
+- SHA-256：`b00c4a255d72be118702c0c0a401f953106a787b4918c3dbfc29fdb5350a10e6`。
+- 干净源码身份 `38a7caa5e32ea446a020aedf0871e62cb0b82fa3`，已推送 `gpu-hdr` 并核对实时远端。
+- ZIP CRC、原调试证书/v2 签名、ZIP 对齐、三 ABI、原 Banner、不可变副本哈希通过；
+  宿主强制后端/故障注入钩子未进入 APK。原有完整原生 16 KiB 兼容待办仍未验收。
+- **2026-10-16 21:44:10 +08:00**，Tailscale 发送 Hyper-obs（100.79.217.41）成功，
+  退出码 0，发送前后本地副本大小/哈希一致。接收端哈希与手机安装未独立验收。
 
 ## 验收边界与后续
 
