@@ -8,6 +8,27 @@ import java.nio.file.Files
 import java.util.zip.ZipFile
 
 class BurstArchiveStoreTest {
+    @Test fun oneProbeIsArchivedBesideSevenFusionFramesWithoutCreatingLegacyLayout() {
+        val base = Files.createTempDirectory("capture-headroom").toFile()
+        try {
+            val store = BurstArchiveStore(File(base, "archive"), true)
+            val output = File(base, "fused.jpg").apply { writeText("result") }
+            val inputs = (0..6).map { "%02d-tier0.jpg".format(it) to byteArrayOf(it.toByte()) }
+            assertTrue(store.replace(inputs + ("metering-probe.jpg" to byteArrayOf(99)), output, "headroom"))
+            val log = File(base, "log.txt").apply { writeText("log") }
+            ZipFile(store.export(log, File(base, "capture.zip"))!!).use { zip ->
+                assertArrayEquals(byteArrayOf(99), zip.getInputStream(latestEntry(zip, "metering-probe.jpg")).readBytes())
+                assertEquals(7, zip.entries().asSequence().count { it.name.matches(Regex("captures/[^/]+/[0-9]{2}-tier0\\.jpg")) })
+                assertFalse(zip.entries().asSequence().any { it.name.startsWith("capture/") })
+            }
+            for (invalid in listOf(inputs + ("07-tier0.jpg" to byteArrayOf(7)),
+                    listOf("metering-probe.jpg" to byteArrayOf(1)),
+                    inputs + ("../metering-probe.jpg" to byteArrayOf(1)))) {
+                try { store.replace(invalid, output, "invalid"); fail("Invalid probe layout accepted") }
+                catch (_: IllegalArgumentException) { }
+            }
+        } finally { base.deleteRecursively() }
+    }
     private fun latestEntry(zip: ZipFile, name: String): java.util.zip.ZipEntry {
         val footer=zip.getInputStream(zip.getEntry("export-timing.json")).reader().readText()
         val id=Regex("\"latestCaptureId\":\"([^\"]+)\"").find(footer)!!.groupValues[1]

@@ -163,6 +163,61 @@ This fixes control continuity, not emissive-screen tone response, flicker, optic
 bloom, target tracking or all-source clipping. Verify the same device with a small
 bright slide on a dark surround; compare preview, first base and final result.
 
+### Dark clipped foreground headroom (2026-10-18; experimental contract)
+
+The three rc18 dark-screen bursts have clipped, joined white strokes already in
+their base JPEGs. Lower-exposure observations retain more stroke gaps, but local
+HDR support is zero. A settled AE result is not a certificate of usable text.
+Do not sharpen or upscale a clipped anchor to claim recovery of missing strokes.
+
+In Full HDR only, the first timestamp-matched base JPEG may also serve as a
+bounded exposure probe. This profile requires manual sensor capability, known
+boost with unity available, and a confirmed held focus or a fixed-focus camera.
+Use a decoder-reduced image with longest side <=1024 and <=1,048,576 pixels;
+never decode a high-resolution full bitmap for this check. The initial profile
+requires >=4096 samples, >=60% luma below 48, >=0.3% neutral-white pixels with
+all RGB channels >=240, 0.6%..15% luma >=210, sensor time >=20 ms, and effective
+ISO including boost >=3200. These are experimental scene statistics, not screen
+recognition, a calibrated clipping detector or a universal exposure rule.
+
+Attempt at most one replacement: target -2.5 stops from that actual sensor
+product, request unity boost, allocate time no longer than the original or
+33.333333 ms, and solve sensitivity within the device ranges. Reject plans
+outside 0.15 stops of target. Freeze the same held focus and AWB, explicitly
+disable AE and AE lock, and await option acknowledgment. Adopt the replacement
+only with a distinct matched sensor timestamp, unchanged orientation/dimensions,
+AE OFF/unlocked, unity actual boost, matching time/ISO within 5%, exposure within
+0.25 stops, and stationary AF OFF with distance within 0.02 diopters of the held
+focus (or fixed focus). Its reduced
+JPEG must reduce neutral-white clipping by >=25% and retain at least half of
+the probe's bright-pixel fraction as luma >=80. This is a bounded consistency
+check, not proof of readability or absence of screen flicker.
+
+On adoption, exclude the automatic probe from fusion and acquire four base
+anchors at the new manual setting; all brackets are planned from the replacement's
+actual exposure. For this profile, also solve the -2.5-stop shorter tier at unity
+boost using the existing <=16.666667 ms clean-bracket allocator. Keep the usual
+deep-short tier. The bounded cost is one extra JPEG and two small probe decodes;
+include it in acquisition and complete shutter-to-ready timing. No repeat search
+or fifth fusion anchor is allowed. Without adoption, restore original owned base
+options before continuing the original four-anchor path; never mix probe and
+replacement brightness as equal-exposure anchors. After a failed replacement,
+explicitly restore the probe's sensor time/ISO/boost with manual AE OFF (rather
+than locking AE immediately after manual exposure); require that boost to be
+advertised before attempting this profile. Verify later manual anchor results
+against the frozen baseline and discard mismatches. Missing evidence, unchanged
+clipping, failed controls or incompatible geometry use the original path.
+
+Test diagnostics preserve an adopted automatic probe as `metering-probe.jpg`
+inside the same `captures/<captureId>/` group, outside the `frames` fusion list.
+Record profile/version, statistics, requested/observed exposure and adoption or
+fallback reason under that capture identity. Count probe bytes in the existing
+compressed burst budget; release them for non-diagnostic builds. Keep current
+control/session cleanup, source preservation, white balance and manual shutter
+availability. No EV UI, screen-wide whitening or unconditional 50 MP output is
+introduced. Physical-device headroom, readability, flicker and latency acceptance
+remain pending until a new capture verifies them.
+
 **Required / not implemented as an integrated readiness profile:** separately
 evaluate usable document boundary, focus/sharpness, motion/blur risk, clipping
 and exposure usability. Unknown evidence must remain unknown. Low light may

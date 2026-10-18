@@ -56,9 +56,10 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
         requestNs: Long = System.nanoTime()): Boolean = synchronized(guard) {
         val acquiredNs=System.nanoTime()
         if (!enabled) return@synchronized false
-        require(inputs.isNotEmpty() && inputs.size <= 7)
+        require(inputs.isNotEmpty() && inputs.size <= 8)
         require(inputs.map { it.first }.distinct().size == inputs.size &&
-            inputs.all { it.first.matches(Regex("[0-9]{2}-tier[0-2]\\.jpg")) })
+            inputs.all { it.first == "metering-probe.jpg" || it.first.matches(Regex("[0-9]{2}-tier[0-2]\\.jpg")) } &&
+            inputs.count { it.first != "metering-probe.jpg" } in 1..7)
         val metadata = manifest.toByteArray(Charsets.UTF_8)
         val context = diagnostics.toByteArray(Charsets.UTF_8)
         require(context.size <= 128 * 1024)

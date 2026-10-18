@@ -35,6 +35,12 @@ reference comparisons remain required. The synthetic blurred-first fixture
 checks that a sharper later frame is selected; it is not a universal sharpness
 certification.
 
+The SPEC_01 dark-clipped-foreground profile may replace the automatic exposure
+probe with a verified lower-product four-anchor burst. The probe is diagnostic
+evidence only, never an equal-exposure anchor. Existing HDR, alignment, phase and
+regional qualification gates remain unchanged. Lower base clipping is an
+acquisition improvement and must not be counted as native HDR recovery or SR.
+
 ## 3. Registration and local reliability
 
 The [rc8 contract](research/DETAIL_RESOLUTION_REVISION_2026-10-13.md) replaces

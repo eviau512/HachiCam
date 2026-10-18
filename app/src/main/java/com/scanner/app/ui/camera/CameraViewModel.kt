@@ -349,6 +349,9 @@ class CameraViewModel : ViewModel() {
             try {
                 if (hdr && !_isStable.value) withTimeoutOrNull(400) { _isStable.first { it } }
                 val frames = mutableListOf<Frame>()
+                var diagnosticProbe: Frame? = null
+                var headroomAdopted = false
+                var frozenBase: ManualExposure? = null
                 var encodedBytes = 0L
                 fun retain(frame: Frame?) {
                     if (frame == null) return
@@ -388,6 +391,24 @@ class CameraViewModel : ViewModel() {
                         builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
                     return builder.build()
                 }
+                fun manualOptions(exposure: ManualExposure): CaptureRequestOptions {
+                    val builder = focusOptions(CaptureRequestOptions.Builder())
+                        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, false)
+                        .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, exposure.timeNs)
+                        .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, exposure.iso)
+                    if (info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true)
+                        builder.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
+                    exposure.postRawBoost?.let {
+                        builder.setCaptureRequestOption(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, it)
+                    }
+                    return builder.build()
+                }
+                val caps = info?.getCameraCharacteristic(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                val times = info?.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                val isoRange = info?.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                val boostRange = info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE)
+                val manual = caps?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true
                 if (hdr && control != null) {
                     val applied = applyOptions(control, app, baseOptions())
                     CameraDiagnostics.frame(captureId, "baseOptionsAcknowledged=$applied")
@@ -400,8 +421,7 @@ class CameraViewModel : ViewModel() {
                     Log.d("HachiCam-Detection", "shutter=${if (detection == null) "full-image" else "complete-crop"} latestPartial=${_detectedQuad.value?.partial}")
                 repeat(if (hdr) 4 else 1) { index ->
                     check(isCameraSession(captureGeneration)) { "Camera session changed during burst" }
-                    val frame = takeFrame(capture, app, 0, captureId)
-                    retain(frame)
+                    var frame = takeFrame(capture, app, 0, captureId)
                     if (index == 0 && hdr && control != null && heldFocus == null) {
                         heldFocus = BurstFocusPolicy.heldDistance(focusConfirmed, frame?.evidence, 0, minimumFocus, supportsFocusOff)
                         if (heldFocus != null) {
@@ -410,18 +430,56 @@ class CameraViewModel : ViewModel() {
                             check(applied) { "Focus hold options were not acknowledged" }
                         }
                     }
+                    val probe = frame
+                    val sensorBase = probe?.evidence?.exposure
+                    if (index == 0 && hdr && control != null && manual && times != null && isoRange != null &&
+                        boostRange?.contains(100) == true && (heldFocus != null || minimumFocus == 0f) &&
+                        probe != null && sensorBase?.postRawBoost != null && boostRange.contains(sensorBase.postRawBoost) &&
+                        AnchorHeadroomPolicy.requiresProbe(sensorBase)) {
+                        val before = readHeadroomProbe(probe)
+                        val requested = before?.let { AnchorHeadroomPolicy.plan(sensorBase, it.statistics,
+                            times.lower, times.upper, isoRange.lower, isoRange.upper, true) }
+                        CameraDiagnostics.frame(captureId, "anchorHeadroomProfile=${AnchorHeadroomPolicy.VERSION} probe=${before?.statistics} requested=$requested")
+                        if (requested != null) {
+                            check(isCameraSession(captureGeneration)) { "Camera session changed during exposure probe" }
+                            val applied = applyOptions(control, app, manualOptions(requested))
+                            val replacement = if (applied) takeFrame(capture, app, 0, captureId) else null
+                            val evidenceValid = replacement?.rotation == probe.rotation &&
+                                AnchorHeadroomPolicy.acceptsEvidence(requested, probe.evidence, replacement?.evidence,
+                                    heldFocus, minimumFocus == 0f)
+                            val after = if (evidenceValid) readHeadroomProbe(replacement) else null
+                            val improved = after != null && after.sourceWidth == before.sourceWidth &&
+                                after.sourceHeight == before.sourceHeight && AnchorHeadroomPolicy.improves(before.statistics, after.statistics)
+                            val fitsBudget = replacement != null && probe.bytes.size.toLong() + replacement.bytes.size <= CapturePolicy.ENCODED_LIMIT
+                            check(isCameraSession(captureGeneration)) { "Camera session changed during exposure verification" }
+                            if (evidenceValid && improved && fitsBudget) {
+                                // The probe is not an anchor. All four retained anchors now share the new manual baseline.
+                                encodedBytes += probe.bytes.size
+                                if (BuildConfig.SENSITIVE_DIAGNOSTICS) diagnosticProbe = probe
+                                frame = replacement
+                                headroomAdopted = true
+                                frozenBase = replacement.evidence?.exposure
+                            } else {
+                                // AE must not relock whatever exposure happened to follow the failed manual request.
+                                check(applyOptions(control, app, manualOptions(sensorBase))) { "Exposure probe fallback options were not acknowledged" }
+                                frozenBase = sensorBase
+                            }
+                            CameraDiagnostics.frame(captureId, "anchorHeadroomAdopted=$headroomAdopted applied=$applied evidenceValid=$evidenceValid improved=$improved fitsBudget=$fitsBudget observed=${replacement?.evidence?.exposure} after=${after?.statistics}")
+                        }
+                    }
+                    if (index > 0 && frozenBase != null && (!AnchorHeadroomPolicy.matches(frozenBase!!, frame?.evidence?.exposure) ||
+                            frame?.evidence?.aeState != 0 || frame?.evidence?.aeLocked != false)) {
+                        CameraDiagnostics.frame(captureId, "anchorHeadroomDropped=index$index requested=$frozenBase observed=${frame?.evidence}")
+                        frame = null
+                    }
+                    retain(frame)
                 }
                 if (BuildConfig.SENSITIVE_DIAGNOSTICS) CameraDiagnostics.frame(captureId, "focusConfirmed=$focusConfirmed heldDistance=$heldFocus")
                 check(frames.isNotEmpty()) { "No camera frame received" }
                 val base = frames.first().exposure
-                val caps = info?.getCameraCharacteristic(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
-                val times = info?.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-                val isoRange = info?.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-                val manual = caps?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true
                 if (hdr && control != null && manual && base != null && times != null && isoRange != null) {
                     for ((tier, count, stops) in listOf(Triple(1, 2, 2.5), Triple(2, 1, 6.0))) {
-                        val boostRange = info?.getCameraCharacteristic(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE)
-                        val exposure = (if (tier == 2) ExposurePlan.cleanBracket(base, stops, times.lower, times.upper,
+                        val exposure = (if (tier == 2 || headroomAdopted) ExposurePlan.cleanBracket(base, stops, times.lower, times.upper,
                             isoRange.lower, isoRange.upper, boostRange?.contains(100) == true)
                         else ExposurePlan.bracket(base, stops, times.lower, times.upper, isoRange.lower, isoRange.upper)) ?: continue
                         val options = focusOptions(CaptureRequestOptions.Builder())
@@ -463,7 +521,7 @@ class CameraViewModel : ViewModel() {
                     Log.e("HachiCam-Burst", "Capture job unavailable", error)
                 }, dequeued = { timing.end("queue"); timing.start("heavyPermitWait") },
                     admitted = { timing.end("heavyPermitWait") }) {
-                    processFrames(app, frames, detection, id, output, hdr, highResolution, timing)
+                    processFrames(app, frames, detection, id, output, hdr, highResolution, timing, diagnosticProbe)
                 }
                 submitted = true
                 onPageSaved(id)
@@ -479,6 +537,12 @@ class CameraViewModel : ViewModel() {
                 if (!submitted) BurstProcessor.cancelReservation(ticket)
             }
         }
+    }
+
+    private suspend fun readHeadroomProbe(frame: Frame): AnchorHeadroomProbe.Result? = withContext(Dispatchers.Default) {
+        try { AnchorHeadroomProbe.read(frame.bytes) }
+        catch (_: RuntimeException) { null }
+        catch (_: OutOfMemoryError) { null } // Optional bounded probe must not prevent saving the original burst.
     }
 
     private suspend fun restoreOptions(control: CameraControl?, context: Context): Boolean {
@@ -578,7 +642,8 @@ class CameraViewModel : ViewModel() {
 
     private fun retainBurstDiagnostics(context: Context, frames: List<Frame>, id: String, output: File,
                                        w: Float, h: Float, mode: String, reference: Int, domain: String,
-                                       timing: com.scanner.app.data.util.ProcessingTimeline, reconstruction: JSONObject? = null) {
+                                       timing: com.scanner.app.data.util.ProcessingTimeline, reconstruction: JSONObject? = null,
+                                       probe: Frame? = null) {
         if (!BuildConfig.SENSITIVE_DIAGNOSTICS) return
         runCatching {
             val sourceLease=PageRepository.readMaster(id) ?: return@runCatching
@@ -588,6 +653,11 @@ class CameraViewModel : ViewModel() {
                 .put("build", BuildConfig.BUILD_TIME).put("source", BuildConfig.GIT_HASH)
                 .put("outputWidth", w.toInt()).put("outputHeight", h.toInt())
                 .put("exposureDomain", domain).put("result", mode).put("referenceIndex", reference)
+                .put("exposureProbeFile", if (probe != null) "metering-probe.jpg" else JSONObject.NULL)
+                .put("exposureProbeProfile", if (probe != null) AnchorHeadroomPolicy.VERSION else JSONObject.NULL)
+                .put("exposureProbeSensorTimestamp", probe?.evidence?.timestamp ?: JSONObject.NULL)
+                .put("exposureProbeRotation", probe?.rotation ?: JSONObject.NULL)
+                .put("exposureProbeSensorExposure", probe?.evidence?.exposure?.toString() ?: JSONObject.NULL)
                 .put("reconstruction", reconstruction ?: JSONObject.NULL)
                 .put("timing", JSONObject().put("schema", 1).put("clock", "elapsedRealtimeNanos")
                     .put("elapsedToSnapshotMs", timing.elapsedMs()).put("stages", JSONArray().apply {
@@ -611,7 +681,8 @@ class CameraViewModel : ViewModel() {
                         .put("focusDistance", frame.evidence?.focusDistance?.takeIf { it.isFinite() } ?: JSONObject.NULL))
                 } })
             val stored = BurstArchiveStore(File(context.cacheDir, "debug_burst"), true).replace(
-                frames.mapIndexed { index, frame -> String.format(Locale.US, "%02d-tier%d.jpg", index, frame.tier) to frame.bytes },
+                frames.mapIndexed { index, frame -> String.format(Locale.US, "%02d-tier%d.jpg", index, frame.tier) to frame.bytes } +
+                    (probe?.let { listOf("metering-probe.jpg" to it.bytes) } ?: emptyList()),
                 output, metadata.toString(2), CameraDiagnostics.snapshot(id))
             CameraDiagnostics.frame(id, "diagnosticArchiveStored=$stored")
             CameraDiagnostics.memory(id,"finalDiagnosticSnapshot")
@@ -620,7 +691,7 @@ class CameraViewModel : ViewModel() {
     }
 
     private fun processFrames(context: Context, frames: List<Frame>, detection: DetectionResult?, id: String, output: File, hdr: Boolean, highResolution: Boolean,
-                              timing: com.scanner.app.data.util.ProcessingTimeline) {
+                              timing: com.scanner.app.data.util.ProcessingTimeline, probe: Frame? = null) {
         val mats = mutableListOf<Mat>()
         val valid = mutableListOf<Frame>()
         var fused: Mat? = null
@@ -721,7 +792,7 @@ class CameraViewModel : ViewModel() {
                 computeTargetQuad(detection, w, h, frames[0].rotation, if (hdr) report else null)
             } ?: return
             CameraDiagnostics.frame(id,"saved=${w.toInt()}x${h.toInt()} exposureDomain=${evidence.description} $mode")
-            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description, timing, srRecord)
+            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description, timing, srRecord, probe)
             _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
             if (hdr && (report.anchors < 2 || report.multiFrameFraction <= 0.0))
                 _errorMessage.value = context.getString(R.string.fusion_single_frame)
@@ -743,7 +814,7 @@ class CameraViewModel : ViewModel() {
                     val (w, h) = saveUpright(fallback, frames[0], output, "Fallback reference (fusion failed)", timing) { w, h ->
                         computeTargetQuad(detection, w, h, frames[0].rotation)
                     } ?: return
-                    retainBurstDiagnostics(context, frames, id, output, w, h, "Fallback reference (fusion failed)", 0, "see per-frame metadata", timing)
+                    retainBurstDiagnostics(context, frames, id, output, w, h, "Fallback reference (fusion failed)", 0, "see per-frame metadata", timing, probe = probe)
                     _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
                     CameraDiagnostics.frame(id,"savedFallback=${w.toInt()}x${h.toInt()} first-base reference")
                     _errorMessage.value = context.getString(R.string.fusion_fallback)

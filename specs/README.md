@@ -1,6 +1,6 @@
 # HachiCam Specifications
 
-> Revised 2026-10-16. Authoritative specifications are written in English.
+> Revised 2026-10-18. Authoritative specifications are written in English.
 > Chinese reports explain the changes and do not override the English contracts.
 
 ## 1. Required workflow and status
@@ -20,10 +20,11 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Current work: [rc18 resident global ECC](reports/RC18_RESIDENT_GLOBAL_ECC_2026-10-16.zh-CN.md).
+Current work/device evidence: [rc19 dark-screen anchor headroom](reports/RC19_DARK_SCREEN_HEADROOM_2026-10-18.zh-CN.md).
+Previous: [rc18 resident global ECC](reports/RC18_RESIDENT_GLOBAL_ECC_2026-10-16.zh-CN.md).
 Previous: [rc17 GPU selection and scheduling](reports/RC17_GPU_SCHEDULING_2026-10-16.zh-CN.md),
 following [the rc16 bright PPT evidence](reports/RC16_BRIGHT_PPT_DEVICE_2026-10-16.zh-CN.md).
-Latest device observation: [rc17 PPT time and selected GPU stages](reports/RC17_PPT_DEVICE_2026-10-16.zh-CN.md).
+Previous device observation: [rc17 PPT time and selected GPU stages](reports/RC17_PPT_DEVICE_2026-10-16.zh-CN.md).
 Previous delivery: [rc16 GPU compute expansion](reports/RC16_GPU_COMPUTE_EXPANSION_2026-10-16.zh-CN.md).
 Previous correction: [rc15 PPT highlight noise](reports/RC15_PPT_HIGHLIGHT_NOISE_2026-10-15.zh-CN.md).
 Previous checkpoint: [rc14 registration performance](reports/RC14_REGISTRATION_PERFORMANCE_2026-10-15.zh-CN.md).

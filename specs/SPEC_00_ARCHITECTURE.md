@@ -312,6 +312,14 @@ snapshot-lock and ZIP times; no input-only snapshot may be called a final result
 Keep the release no-retention rule and source read leases while copying a READY
 image. No new automatic network sharing is introduced.
 
+The rc19 SPEC_01 headroom experiment may add one adopted `metering-probe.jpg`
+beside at most seven fusion inputs in that same completed group. This name is
+explicitly allowlisted; traversal, duplicate names, probe-only groups and eight
+fusion inputs remain invalid. The existing 96 MiB compressed-input and 192 MiB
+aggregate retained-group limits include the probe. It is never duplicated into
+the manifest's fusion `frames` list or a legacy exported directory. Release
+builds retain no probe image or associated sensitive camera metadata.
+
 The final-image export request may wait for the admitted burst worker to become
 idle, off the UI thread with a bounded wait. Include snapshot work in that idle
 definition; page READY alone does not certify a completed diagnostic archive.
