@@ -93,7 +93,16 @@ SPEC_06 `CAP-HEADROOM-19`；诊断容量扩展在SPEC_00中明确。随后实现
 
 两种模式各101项单测通过（零失败/错误/跳过），standard Kotlin编译通过。
 本轮未修改原生/Vulkan算法，不将这些采集策略单测当作新的GPU速度或机上画质验收。
-APK校验与发送记录在完成后补充。
+Universal构建通过；版本43 /`0.1.2-rc19-test`、包名`moe.hachimi.cam.test`、
+原debug签名、ZIP CRC、三ABI、Banner哈希、无宿主故障注入钩子及源码身份检查通过。
+APK包含的原生算法沿用rc18，本轮不重复宣称新的原生性能回归结果。
+ZIP entry alignment通过不替代所有依赖原生库的16 KiB兼容验收；既有OpenCV限制保持。
+
+交付文件：`HachiCamTest-0.1.2-rc19-1109-universal.apk`，126,843,307字节；
+SHA-256 `3d9850fc6f006917d7c2a387eade72f7a24445d6c1b82bfafbe4cc7bd0d9d4bd`。
+源码为干净提交 `4bac7dd98b64eb4f73bc05638f47be33482063ee`，已推送`gpu-hdr`。
+2026-10-18 11:11:45 +08:00，发送Hyper-obs（100.79.217.41）成功，退出码0，
+发送前后不可变副本哈希一致。接收端哈希/安装与画质性能没有独立验证。
 
 仍需手机验证：
 

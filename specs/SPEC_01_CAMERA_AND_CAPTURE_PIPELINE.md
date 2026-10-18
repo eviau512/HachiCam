@@ -165,6 +165,9 @@ bright slide on a dark surround; compare preview, first base and final result.
 
 ### Dark clipped foreground headroom (2026-10-18; experimental contract)
 
+Implemented experimentally in rc19; pure-policy/archive checks pass. Device
+control/decoder, readability, flicker and complete latency acceptance are pending.
+
 The three rc18 dark-screen bursts have clipped, joined white strokes already in
 their base JPEGs. Lower-exposure observations retain more stroke gaps, but local
 HDR support is zero. A settled AE result is not a certificate of usable text.
