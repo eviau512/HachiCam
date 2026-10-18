@@ -19,6 +19,8 @@ object ComputeLoadMonitor {
     private var scheduled: ScheduledFuture<*>? = null
     private var helper: Helper? = null // Only the sampler executor owns process lifecycle.
     @Volatile private var power: android.os.PowerManager? = null
+    private var thermalObservedNs = Long.MIN_VALUE
+    private var thermalCached: Int? = null
 
     fun start(id: String, timeline: ProcessingTimeline, context: android.content.Context): Session {
         if (power == null) power = context.applicationContext.getSystemService(android.os.PowerManager::class.java)
@@ -69,11 +71,14 @@ object ComputeLoadMonitor {
                 (snapshot == null || now / 1e6 - snapshot.observedMs > 3000)) reader.stop()
             val cpuMs = android.os.Process.getElapsedCpuTime()
             val cores = Runtime.getRuntime().availableProcessors()
-            // Thermal severity is separate from CPU/GPU load and is not a temperature.
-            val thermal = runCatching { power?.currentThermalStatus }.getOrNull()
+            // Thermal severity is separate from load. Do not issue 20 Binder calls/sec.
+            if (thermalObservedNs == Long.MIN_VALUE || now - thermalObservedNs >= ComputeLoadTrace.THERMAL_INTERVAL_MS * 1_000_000) {
+                thermalCached = runCatching { power?.currentThermalStatus }.getOrNull()
+                thermalObservedNs = now
+            }
             active.forEach { session ->
                 session.trace.record(now, cpuMs, cores, session.timeline.pending().lastOrNull() ?: "between_stages",
-                    snapshot, thermal, reader.status)
+                    snapshot, thermalCached, reader.status)
             }
         } catch (_: Exception) {
             val now = SystemClock.elapsedRealtimeNanos()
@@ -94,7 +99,7 @@ object ComputeLoadMonitor {
                 i=0
                 gpu=/sys/class/kgsl/kgsl-3d0/gpubusy
                 freq=/sys/class/kgsl/kgsl-3d0/gpuclk
-                while [ "${'$'}i" -lt 600 ]; do
+                while [ "${'$'}i" -lt ${ComputeLoadTrace.LIMIT} ]; do
                   before=; after=; cpu=; busy=; clock=
                   read -r before rest < /proc/uptime 2>/dev/null
                   IFS= read -r cpu < /proc/stat 2>/dev/null
@@ -104,7 +109,7 @@ object ComputeLoadMonitor {
                   printf 'HCLOAD|%s|%s|%s|%s|%s\n' "${'$'}before" "${'$'}after" "${'$'}cpu" "${'$'}busy" "${'$'}clock" || exit 0
                   i=${'$'}((i+1))
                   stop=
-                  read -r -t 0.5 stop
+                  read -r -t ${ComputeLoadTrace.INTERVAL_MS / 1000.0} stop
                   [ "${'$'}stop" = stop ] && exit 0
                 done
             """.trimIndent()
@@ -116,7 +121,7 @@ object ComputeLoadMonitor {
                     try {
                         owned.inputStream.bufferedReader().use { reader ->
                             val line = StringBuilder(); var total = 0
-                            while (total++ < 1024 * 1024) {
+                            while (total++ < 4 * 1024 * 1024) {
                                 val next = reader.read(); if (next < 0) break
                                 if (next == 10) {
                                     ComputeLoadMath.device(line.toString())?.let {
@@ -152,14 +157,18 @@ object ComputeLoadMonitor {
             is Double -> if (v.isFinite()) kotlin.math.round(v * 1000) / 1000 else JSONObject.NULL
             else -> v
         }
-        val result = JSONObject().put("schema", 1).put("captureId", snapshot.captureId)
+        val result = JSONObject().put("schema", 2).put("captureId", snapshot.captureId)
             .put("clock", "elapsedRealtime/procUptime").put("targetIntervalMs", ComputeLoadTrace.INTERVAL_MS)
             .put("durationMs", snapshot.durationMs).put("droppedSamples", snapshot.dropped).put("endReason", snapshot.endReason)
             .put("scope", "app CPU is whole process; device CPU/GPU include other jobs/apps/display/camera; not per-capture attribution")
             .put("appCpuProvider", "Process.getElapsedCpuTime; one-core equivalent may exceed 100; capacity uses stable availableProcessors")
-            .put("appCpuMinimumIntervalMs", 100)
+            .put("appCpuMinimumIntervalMs", ComputeLoadTrace.CPU_MIN_INTERVAL_MS)
+            .put("appCpuResolution", "millisecond counters; short-window ratios may be quantized; retain raw deltas for weighted aggregation")
+            .put("deviceFreshnessMs", ComputeLoadTrace.FRESH_MS)
+            .put("thermalTargetIntervalMs", ComputeLoadTrace.THERMAL_INTERVAL_MS)
             .put("deviceCpuProvider", "/proc/stat aggregate first eight fields; idle+iowait are non-busy")
             .put("gpuProvider", "Qualcomm KGSL gpubusy; busy/total recent driver window, not cumulative or sampler interval")
+            .put("gpuCadence", "50 ms read target; driver windows may repeat or update more slowly")
             .put("rootAvailableAtFinish", DiagnosticAccess.rootAvailable)
             .put("sampleCount", snapshot.samples.size)
             .put("validAppCpuSamples", snapshot.samples.count { it.appOneCorePct != null })
@@ -167,13 +176,14 @@ object ComputeLoadMonitor {
             .put("validGpuSamples", snapshot.samples.count { it.gpuPct != null })
             .put("columns", JSONArray(listOf("offsetMs", "intervalMs", "stage", "appCpuOneCorePct", "appCpuCapacityPct", "availableLogicalProcessors",
                 "deviceCpuPct", "deviceGpuBusyPct", "gpuClockHz", "thermalSeverity", "readerAgeMs", "counterReadMs",
-                "gpuBusyRaw", "gpuTotalRaw", "status")))
+                "gpuBusyRaw", "gpuTotalRaw", "status", "processCpuMs", "processCpuDeltaMs", "deviceCpuIntervalMs")))
             .put("samples", JSONArray().apply { snapshot.samples.forEach { s ->
                 put(JSONArray(listOf(value(s.offsetMs), value(s.intervalMs), s.stage, value(s.appOneCorePct), value(s.appCapacityPct), value(s.availableCores),
                     value(s.deviceCpuPct), value(s.gpuPct), value(s.gpuHz), value(s.thermal), value(s.readerAgeMs),
-                    value(s.readMs), value(s.gpuBusy), value(s.gpuTotal), s.status)))
+                    value(s.readMs), value(s.gpuBusy), value(s.gpuTotal), s.status,
+                    value(s.processCpuMs), value(s.processCpuDeltaMs), value(s.deviceCpuIntervalMs))))
             } })
-        return result.toString().takeIf { it.toByteArray(Charsets.UTF_8).size <= 128 * 1024 }
-            ?: JSONObject().put("schema", 1).put("captureId", snapshot.captureId).put("error", "trace_size_limit").toString()
+        return result.toString().takeIf { it.toByteArray(Charsets.UTF_8).size <= ComputeLoadTrace.MAX_BYTES }
+            ?: JSONObject().put("schema", 2).put("captureId", snapshot.captureId).put("error", "trace_size_limit").toString()
     }
 }

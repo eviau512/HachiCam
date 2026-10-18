@@ -59,13 +59,15 @@ class ComputeLoadTraceTest {
     @Test fun deviceReadFreshnessAndDistinctCpuSnapshotsAreRequired() {
         val trace = ComputeLoadTrace("A", 1_000_000_000, 100, 4)
         trace.record(1_500_000_000, 200, 4, "queue", device(1500.0), null, "normal")
-        trace.record(2_000_000_000, 300, 4, "nativeFusion", device(2000.0, 140, 160), null, "normal")
-        trace.record(2_500_000_000, 400, 4, "nativeFusion", device(2000.0, 140, 160), null, "normal")
-        trace.record(4_000_000_000, 500, 4, "save", device(2000.0), null, "normal")
-        val samples = trace.finish(4_000_000_000, "finished").samples
+        trace.record(1_550_000_000, 300, 4, "nativeFusion", device(1550.0, 140, 160), null, "normal")
+        trace.record(1_600_000_000, 400, 4, "nativeFusion", device(1550.0, 140, 160), null, "normal")
+        trace.record(2_000_000_000, 500, 4, "save", device(1550.0), null, "normal")
+        val samples = trace.finish(2_000_000_000, "finished").samples
         assertNull(samples[0].deviceCpuPct)
         assertEquals(40.0, samples[1].deviceCpuPct!!, 1e-9)
+        assertEquals(50.0, samples[1].deviceCpuIntervalMs!!, 1e-9)
         assertNull(samples[2].deviceCpuPct)
+        assertNull(samples[2].deviceCpuIntervalMs)
         assertEquals(25.0, samples[2].gpuPct!!, 1e-9)
         assertNull(samples[3].gpuPct); assertNull(samples[3].gpuHz)
         assertEquals("stale_device_snapshot", samples[3].status)
@@ -88,13 +90,32 @@ class ComputeLoadTraceTest {
         assertNull(trace.finish(1_002_000_000, "finished").samples.single().appOneCorePct)
     }
 
+    @Test fun fiftyMillisecondCpuSamplesRetainRawCountersAndAreNotDiscarded() {
+        val trace = ComputeLoadTrace("A", 1_000_000_000, 100, 4)
+        trace.record(1_050_000_000, 110, 4, "nativeFusion", null, null, "missing")
+        trace.record(1_100_000_000, 160, 4, "nativeFusion", null, null, "missing")
+        trace.record(1_150_000_000, 90, 4, "nativeFusion", null, null, "missing")
+        val samples = trace.finish(1_160_000_000, "finished").samples
+        assertEquals(50.0, samples[0].intervalMs, 0.0)
+        assertEquals(20.0, samples[0].appOneCorePct!!, 1e-9)
+        assertEquals(5.0, samples[0].appCapacityPct!!, 1e-9)
+        assertEquals(110L, samples[0].processCpuMs)
+        assertEquals(10L, samples[0].processCpuDeltaMs)
+        assertEquals(100.0, samples[1].appOneCorePct!!, 1e-9)
+        assertEquals(50L, samples[1].processCpuDeltaMs)
+        assertEquals(90L, samples[2].processCpuMs)
+        assertNull(samples[2].processCpuDeltaMs)
+        assertNull(samples[2].appOneCorePct)
+    }
+
     @Test fun boundedImmutableSnapshotsDoNotMixCaptureIdentitiesOrAcceptLaterSamples() {
         val a = ComputeLoadTrace("A", 0, 0, 4)
         val b = ComputeLoadTrace("B", 100_000_000, 0, 4)
-        for (i in 1..650) a.record(i * 500_000_000L, i.toLong(), 4, "nativeFusion", null, null, "missing")
+        for (i in 1..6050) a.record(i * 50_000_000L, i.toLong(), 4, "nativeFusion", null, null, "missing")
         b.record(600_000_000, 10, 4, "queue", null, null, "missing")
-        val frozen = a.finish(326_000_000_000, "finished")
-        assertEquals(600, frozen.samples.size); assertEquals(50, frozen.dropped)
+        val frozen = a.finish(303_000_000_000, "finished")
+        assertEquals(6000, frozen.samples.size); assertEquals(50, frozen.dropped)
+        assertEquals(299_950.0, frozen.samples.last().offsetMs - frozen.samples.first().offsetMs, 0.0)
         assertEquals("A", frozen.captureId)
         a.record(327_000_000_000, 999, 4, "late", null, null, "missing")
         assertSame(frozen, a.finish(328_000_000_000, "changed"))

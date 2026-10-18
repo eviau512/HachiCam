@@ -1,6 +1,7 @@
 package com.scanner.app.data.camera
 
 import com.scanner.app.data.util.BurstArchiveStore
+import com.scanner.app.data.util.ComputeLoadTrace
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
@@ -14,14 +15,19 @@ class BurstArchiveStoreTest {
             val store = BurstArchiveStore(File(base, "archive"), true)
             val output = File(base, "fused.jpg").apply { writeText("result") }
             val inputs = listOf("00-tier0.jpg" to byteArrayOf(1))
-            val trace = "{\"schema\":1,\"captureId\":\"A\",\"samples\":[[0,20]]}"
+            val rows = (0 until 6000).joinToString(",") {
+                "[${it * 50},50,\"nativeFusion\",240.0,30.0,8,75.0,60.0,500000000,1,12.5,0.0,600,1000,\"root_helper:device_driver_window\",1000000,120,50.0]"
+            }
+            val trace = "{\"schema\":2,\"captureId\":\"A\",\"samples\":[$rows]}"
+            assertTrue(trace.toByteArray().size > 128 * 1024)
+            assertTrue(trace.toByteArray().size < ComputeLoadTrace.MAX_BYTES)
             assertTrue(store.replace(inputs, output, "A", computeLoad = trace))
             val log = File(base, "log.txt").apply { writeText("live B") }
             ZipFile(store.export(log, File(base, "capture.zip"))!!).use { zip ->
                 assertEquals(trace, zip.getInputStream(latestEntry(zip, "compute-load.json")).reader().readText())
                 assertFalse(zip.entries().asSequence().any { it.name.startsWith("capture/") })
             }
-            try { store.replace(inputs, output, "bad", computeLoad = "x".repeat(128 * 1024 + 1)); fail("Oversize load trace accepted") }
+            try { store.replace(inputs, output, "bad", computeLoad = "x".repeat(ComputeLoadTrace.MAX_BYTES + 1)); fail("Oversize load trace accepted") }
             catch (_: IllegalArgumentException) { }
             assertEquals(trace, File(base, "archive/current/compute-load.json").readText())
         } finally { base.deleteRecursively() }

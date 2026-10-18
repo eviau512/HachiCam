@@ -191,7 +191,7 @@ intents do not replace the last committed recipe.
 
 ## 5. Quality, resources and acceptance
 
-### rc20 sampled CPU/GPU load diagnostics (2026-10-18 contract)
+### rc20/rc21 sampled CPU/GPU load diagnostics (2026-10-18 contract)
 
 Test builds must record a capture-owned `compute-load.json` alongside the final
 image/manifest, with versioned units, monotonic sample offsets and processing
@@ -200,8 +200,11 @@ complete latency or proof of shader occupancy. Release provides a no-op collecto
 with no root process, `/proc`/GPU-node reads or retained load trace.
 
 Use one process-wide background sampler shared by at most three active capture
-sessions, including acquisition/queue/processing/save. Target 500 ms, at most
-600 samples per capture and <=128 KiB compact trace. Record actual interval,
+sessions, including acquisition/queue/processing/save. rc21 targets 50 ms
+(20 Hz, superseding rc20's 500 ms), at most 6000 samples per capture and
+<=2 MiB compact trace, preserving approximately five minutes of nominal coverage.
+The fixed helper uses the same target interval and a bounded 6000-read lifetime;
+its output is bounded independently. Record actual interval,
 read latency/freshness, dropped/invalid samples and sampling scope. Stop bounded
 helpers when the last session finishes/fails/cancels; export must not launch a
 retrospective sampler or wait for a helper to exit. Queued/concurrent capture
@@ -216,8 +219,13 @@ capacity denominator is inspectable, including idle or count-change intervals.
 Device CPU uses nonnegative deltas of the first eight `/proc/stat` aggregate
 fields, excluding guest/guest_nice double counting and treating idle+iowait as
 non-busy. Invalid/reset/zero intervals are unknown, never fabricated idle.
-Process intervals shorter than 100 ms remain unknown because CPU-time tick
-resolution can otherwise produce misleading startup percentages.
+Retain cumulative process CPU milliseconds and each interval's nonnegative
+delta. rc21 permits intervals of at least 25 ms, so real 50 ms samples are not
+discarded by rc20's conservative 100 ms gate. Shorter startup intervals, resets
+and invalid counters remain unknown. Millisecond values do not promise
+millisecond accuracy: short-window CPU percentages may be quantized; raw deltas
+and actual intervals permit later 250 ms or longer weighted aggregation without
+inventing resolution. Device CPU retains its own distinct-counter interval.
 
 For supported Qualcomm KGSL, retain the device-reported `gpubusy` busy/total
 pair and compute its ratio directly; these are recent driver-window values,
@@ -228,6 +236,10 @@ clock in Hz when readable, plus Android thermal severity if available. Do not
 infer load from clock, Vulkan call duration or executed block counts. Zero
 denominator, denied/absent/malformed node, stale snapshot and unsupported driver
 remain null with a reason. No clock/governor/permission-node writes are allowed.
+At 50 ms read cadence, driver windows may repeat or have a longer update period;
+do not claim every sample is a fresh 50 ms GPU measurement. Limit device-counter
+snapshot freshness to 250 ms. Cache thermal severity for a target 500 ms rather
+than making a thermal service call on every 50 ms tick, and label that cadence.
 
 Read bounded fixed allowlisted nodes using one long-lived shell helper while
 sampling. Use `su` only when the existing test-only root probe already reports
@@ -239,7 +251,9 @@ overhead and distinguish sampled driver load from missing coverage.
 
 Validate synthetic counters (multicore >100, reset, zero/malformed, guest fields,
 driver windows), bounds, concurrent identity/stop/failure, read freshness and
-release exclusion. Physical-device availability, sampling cost and GPU utilization
+release exclusion. Also test 50 ms CPU samples, startup/reset raw counters,
+distinct device intervals, five-minute retention/export capacity, and the helper
+cadence/stop protocol. Physical-device availability, sampling cost and GPU utilization
 remain pending until a newly exported capture contains valid observations.
 
 The quality matrix in [SPEC_06](./SPEC_06_IMAGE_QUALITY_AND_ACCEPTANCE.md) governs

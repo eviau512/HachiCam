@@ -63,7 +63,7 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
         val metadata = manifest.toByteArray(Charsets.UTF_8)
         val context = diagnostics.toByteArray(Charsets.UTF_8)
         val load = computeLoad.toByteArray(Charsets.UTF_8)
-        require(load.size <= 128 * 1024)
+        require(load.size <= ComputeLoadTrace.MAX_BYTES)
         require(context.size <= 128 * 1024)
         require(metadata.isNotEmpty() && metadata.size <= 128 * 1024 && output.isFile && output.length()>0 && inputs.all { it.second.isNotEmpty() })
         val inputBytes = inputs.sumOf { it.second.size.toLong() }
