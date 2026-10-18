@@ -45,4 +45,13 @@ GPU 节点速度或权限验收，更不能承诺手机固定 50ms 或无额外�
 
 ## 交付
 
-rc21 /versionCode 45 universal 的最终身份与传输凭据待构建校验后补入。
+rc21 /versionCode 45、`HachiCamTest`、`moe.hachimi.cam.test` universal 已构建并校验：
+
+- `HachiCamTest-0.1.2-rc21-1702-universal.apk`，126,901,487 字节。
+- SHA-256 `6c75fde1e2d6e911b70b88478ef145a62b9eebc667a3ba67bad5b77eb7c8374c`。
+- 干净源码 `6dc065cbadac18f1cc662f490b7932dc857c505f` 已推送 `gpu-hdr`，实时远端核对一致。
+- 原调试证书/v2 签名、版本/名称、ZIP CRC/对齐、三 ABI/Banner、新采样标记与不可变副本哈希通过；
+  测试钩子仍未进入 APK，三 ABI 原生库逐字节等同 rc20。原有第三方库完整 16KiB 页兼容
+  待办保持，不能将 ZIP 对齐当作其验收。
+- **2026-10-18 17:04:23 +08:00**，Tailscale 发送 Hyper-obs（100.79.217.41）成功，退出码 0，
+  前后本地大小/哈希一致；接收端完整性、安装及手机实际采样频率/开销仍未独立验收。
