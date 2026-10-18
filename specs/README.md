@@ -20,7 +20,8 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Current work: [rc21 50 ms load sampling](reports/RC21_50MS_LOAD_SAMPLING_2026-10-18.zh-CN.md).
+Current research: [lamp HDR seams, algorithm options and MotoCam evidence limits](reports/LAMP_HDR_ALGORITHM_RESEARCH_2026-10-18.zh-CN.md).
+Latest delivered build: [rc21 50 ms load sampling](reports/RC21_50MS_LOAD_SAMPLING_2026-10-18.zh-CN.md).
 Previous work/device evidence: [rc20 sampled CPU/GPU load and local ECC return parity](reports/RC20_COMPUTE_LOAD_AND_LOCAL_ECC_2026-10-18.zh-CN.md).
 Previous: [rc19 dark-screen anchor headroom](reports/RC19_DARK_SCREEN_HEADROOM_2026-10-18.zh-CN.md).
 Previous: [rc18 resident global ECC](reports/RC18_RESIDENT_GLOBAL_ECC_2026-10-16.zh-CN.md).

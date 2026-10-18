@@ -1,6 +1,6 @@
 # Specification 02: Computational Photography and HDR Reconstruction
 
-> Status: Authoritative. Revised 2026-10-15.
+> Status: Authoritative. Revised 2026-10-18.
 > Filename retained for compatibility; Vulkan HDR is not integrated.
 > Language: English.
 > Noise follow-up: [2026-10-13 contract](research/NOISE_REVISION_2026-10-13.md).
@@ -405,6 +405,63 @@ latency, thermal behavior or a new resolving-power gain.
 Temporal averaging can reduce independent noise, but correlated ISP processing,
 misalignment and subject motion change the result. A four-frame count is not an
 unconditional signal-to-noise or sharpness guarantee.
+
+### Spatially continuous highlight recovery (2026-10-18 research contract)
+
+**Required / not implemented.** The rc21 near/far lamp captures expose visible
+rectangular HDR transitions, despite useful lamp contours in their original
+deep-short observations. Current 256-pixel local nodes, <=140-pixel rectangular
+patch interiors, nearest-node selection and binary recovery gates can imprint
+their support on the image. Production-code native-grid probes reproduce new
+edges at node centre +141, before 2x reconstruction or JPEG encoding. This is
+evidence of a recovery/support discontinuity, not proof that the 64-pixel SR
+tile size or JPEG block size caused the artifact. Shrinking a grid alone is not
+an accepted fix. Existing nearest-patch behavior above describes rc21; it is not
+a claim of visually continuous output or complete lamp recovery.
+
+Research candidate order is overlapping locally verified reconstruction with
+normalized continuous weights, edge-aware confidence/response fields, then
+bounded multiscale exposure blending. Adaptive quadtree or superpixel scheduling
+may refine high-gradient/clipping/uncertain regions, but partition boundaries
+must not become radiometric boundaries. Use an observed, geometrically aligned
+short/composite guide where the reference is clipped: a clipped flat reference
+does not supply the lamp boundary. Never blur the finished image to hide seams.
+
+Do not feather observations into unsupported or displacement-conflicting
+regions. Geometry confidence, available exposure/detail, photometric response
+confidence and radiometric blending are separate contracts. A useful short can
+fail current fitting beside a clipped reference; investigate shape/gradient and
+exposure-normalized local consistency without simply weakening correlation,
+blur/occlusion or 1.5-pixel conflict limits. Diagnostic rejection must distinguish
+no source observation, failed global/local geometry, unsupported footprint,
+response uncertainty, channel-compatibility denial and final blending failure.
+
+The rc15 unclipped-channel/PPT protection remains production authority. Offline
+research may compare spatial response/shoulder alternatives, but promoting a
+candidate that modifies observed channels requires a further explicit response
+contract revision and white-PPT/color/text negative acceptance. A global JPEG
+response gain is not calibrated radiance: these lamp captures show approximate
+response gains around 39..43 versus metadata exposure ratios around 5.66 for the
+mild bracket. Do not force either ratio or infer proprietary local tone mapping
+parameters from that discrepancy.
+
+HDR-SEAM-22 research acceptance must freeze these two captures and independently
+held-out lamps/screens/colored LEDs. Record native before-HDR/after-HDR and final
+outputs, support/conflict/weight maps and corresponding observed short ROIs.
+Compare support-edge residual jumps, lamp contour coverage/edge displacement,
+clipped/changed channels, hue drift, noise and text ghosts at matched source
+coordinates. Lower seam energy alone cannot pass by disabling recovery,
+darkening the whole image, blurring texture or inventing unsupported detail.
+Retain all-clipped, moving/occluded, partial-channel white-field and physical
+discontinuity negatives. Parameter selection on these scenes is tuning, not an
+independent quality benchmark or proof of MotoCam parity.
+
+Prioritize GPU-resident bounded ROI/gain/weight filtering, separable pyramids
+and per-pixel composition; keep per-frame CPU/GPU transfers and actual cold/warm
+cost visible. Avoid full 50-MP float pyramids for every bracket or uniformly
+multiplying ECC work. Preserve the shared admission/failure/crop contracts and
+public-camera fallback. OEM RAW/HDR extension access is only a capability-gated
+research option, not evidence that HachiCam can invoke MotoCam's private path.
 
 ## 6. Capture quality versus preview steadiness
 
