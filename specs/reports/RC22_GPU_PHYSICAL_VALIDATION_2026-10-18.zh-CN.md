@@ -84,4 +84,13 @@
 
 ## 构建与交付
 
-rc22（46）构建/包校验及发送结果将随交付记录更新。此前 rc21 仍是已交付版本。
+- 源码 `7946a30d4842ea61c67e1c76c9b71014762c2e5b` 已推送并核对 GitHub `gpu-hdr`。
+  从临时干净 checkout 构建，没有带入同项目其它对话的未提交图像/规格修改。
+- 两种模式各 111 单测全部通过，standard Kotlin 与两种模式三 ABI 原生构建通过。
+- `HachiCamTest-0.1.2-rc22-2242-universal.apk`，版本 46，126,949,807 bytes。
+  原 debug 证书、包身份、ZIP CRC、三 ABI、原 Banner、无测试钩子、源 hash 与 ZIP 对齐已校验。
+- APK SHA256：`d6de0423fa7d90e8ee5ec507789739725792d533c8e737c082a7367ba6b533fb`。
+- 2026-10-18 22:46:10 +08:00，经 Tailscale 发往 Hyper-obs 成功，退出码 0，
+  发送前后文件大小及 SHA256 一致。发送成功不替代接收端校验、安装或手机性能/画质验收。
+- 既有第三方 OpenCV 的完整 16 KiB LOAD/RELRO 兼容限制仍存在；ZIP 对齐不是该限制已修复。
+  本机 `.tools/rc22-artifact.json` 与 `.tools/rc22-taildrop-receipt.json` 保留完整证据。
