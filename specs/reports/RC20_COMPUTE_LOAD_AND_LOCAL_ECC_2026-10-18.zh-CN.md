@@ -108,5 +108,15 @@ Windows/OpenCV 5 重放与 Android/OpenCV 4.10 实机验收分开记录。
 
 ### 交付
 
-rc20 universal 测试包身份与传输凭据待构建后记录；源数据、原始样张、解码平面及宿主
-工具留在本地忽略目录，不进入 Git/APK。
+rc20 /versionCode 44、`HachiCamTest`、`moe.hachimi.cam.test` universal 已构建：
+
+- 文件 `HachiCamTest-0.1.2-rc20-1647-universal.apk`，126,899,007 字节。
+- SHA-256 `69111ab666771f9aa759f891736e72a4847a1c6ca4f419ca6ae201736eecd39f`。
+- 干净源码 `f73b338c53a9d9985ffc5b9d45291c76687a9b63` 已推送 `gpu-hdr`，实时远端核对一致。
+- 版本/名称、ZIP CRC、原调试证书/v2 签名、ZIP 对齐、三 ABI、Banner、不可变副本哈希通过；
+  新采样/参数标记存在，强制后端/故障注入/有界迭代测试钩子不在 APK 中。release 编译产物
+  的新采样入口为空实现。原有第三方原生库完整 16 KiB 页兼容待办仍未验收。
+- **2026-10-18 16:50:10 +08:00**，Tailscale 发送 Hyper-obs（100.79.217.41）成功，退出码 0；
+  发送前后本地大小/哈希相同。接收端完整性、安装及新包手机画质/负载/速度未独立验收。
+
+源数据、原始样张、解码平面及宿主工具留在本地忽略目录，不进入 Git/APK。
