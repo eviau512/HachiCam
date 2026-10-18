@@ -4,6 +4,7 @@
 
 namespace fusion {
 void resetGpuDiagnostics();
+void recordFusionDiagnostic(const std::string& line);
 std::string gpuDiagnostics();
 struct GpuGlobalStats {int calls=0,iterations=0;double ms=0;};
 GpuGlobalStats gpuGlobalStats();

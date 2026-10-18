@@ -23,6 +23,8 @@ int main(int argc,char** argv){
         if(fusion::gpuGlobalECC(ref,src,transform,cv::MOTION_EUCLIDEAN,{cv::TermCriteria::COUNT|cv::TermCriteria::EPS,4,1e-5},1,output,cc,reason))throw std::runtime_error("failed context admitted global optimization");
         cv::Mat hp;ref.convertTo(hp,CV_32F);std::vector<uchar> flags;fusion::GpuSelectionStats selection;
         if(fusion::gpuStrongSelection(ref,src,hp,hp,{},{{0,0,65,65}},{{0,0}},flags,selection,reason))throw std::runtime_error("failed context admitted selector");
+        std::vector<cv::Vec2d> metrics;fusion::GpuPhysicalStats physical;
+        if(fusion::gpuPhysicalChecks(ref,hp,hp,{},{{{0,0,65,65},{0,0},{0,0}}},false,metrics,physical,reason))throw std::runtime_error("failed context admitted physical checks");
         cv::Mat color(ref.size(),CV_8UC3,cv::Scalar(100,100,100));
         std::vector<fusion::SamplingPlate> plates(2,{&model,cv::Matx33d::eye(),ref.size(),&color});
         long long n=0,m=0;fusion::GpuComputeStats stats;

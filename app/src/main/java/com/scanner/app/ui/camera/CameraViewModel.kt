@@ -786,6 +786,7 @@ class CameraViewModel : ViewModel() {
                     .put("gpuSelectorPatches",perf.gpuSelectorPatches).put("cpuSelectorPatches",perf.cpuSelectorPatches).put("selectorMs",perf.selectorMs)
                     .put("gpuGlobalCalls",perf.gpuGlobalCalls).put("gpuGlobalIterations",perf.gpuGlobalIterations).put("gpuGlobalMs",perf.gpuGlobalMs)
                     .put("gpuComputeVersion","resident-global-ecc-v1")
+                    .put("gpuPhysicalCheckVersion",if(useStreaming) "not-used" else "batched-physical-v1")
                     .put("remainingScope","reference/decode/prepare/fusion/HDR/reconstruction; not pure SR")
             } ?: JSONObject.NULL)
             srRecord.put("backendDecisions",report.backendDecisions)

@@ -3,8 +3,32 @@
 #include <cmath>
 #include <string>
 #include <array>
+#include <opencv2/imgproc.hpp>
 
 namespace fusion {
+struct PhysicalPatch {cv::Rect roi;cv::Point2f shift;cv::Vec2d noise;};
+inline cv::Vec2d physicalMetrics(double count,double va,double vb,double covariance,cv::Vec2d noise) {
+    if(count<256)return {-1,0};
+    va=std::max(0.,va-noise[0]);vb=std::max(0.,vb-noise[1]);
+    return {covariance/std::max(std::sqrt(va*vb),.01),std::sqrt(vb/std::max(va,.01))};
+}
+inline cv::Vec2d cpuPhysicalCheck(const cv::Mat& reference,const cv::Mat& refHP,const cv::Mat& srcHP,
+    const cv::Mat& validity,const PhysicalPatch& p) {
+    cv::Mat corrected,transform=(cv::Mat_<float>(2,3)<<1,0,p.shift.x,0,1,p.shift.y);
+    cv::warpAffine(srcHP(p.roi),corrected,transform,p.roi.size(),cv::INTER_LINEAR|cv::WARP_INVERSE_MAP,cv::BORDER_REFLECT_101);
+    cv::Mat mask=(reference(p.roi)>8)&(reference(p.roi)<247);
+    if(!validity.empty())mask &= validity(p.roi);
+    mask.rowRange(0,10).setTo(0);mask.rowRange(mask.rows-10,mask.rows).setTo(0);
+    mask.colRange(0,10).setTo(0);mask.colRange(mask.cols-10,mask.cols).setTo(0);
+    const int count=cv::countNonZero(mask);if(count<256)return {-1,0};
+    const auto a=refHP(p.roi);cv::Scalar ma,sa,mb,sb;
+    cv::meanStdDev(a,ma,sa,mask);cv::meanStdDev(corrected,mb,sb,mask);
+    return physicalMetrics(count,sa[0]*sa[0],sb[0]*sb[0],cv::mean(a.mul(corrected),mask)[0]-ma[0]*mb[0],p.noise);
+}
+struct GpuPhysicalStats {int patches=0,cpuPatches=0;double ms=0;};
+bool gpuPhysicalChecks(const cv::Mat& reference,const cv::Mat& refHP,const cv::Mat& srcHP,
+    const cv::Mat& validity,const std::vector<PhysicalPatch>& patches,bool highlight,
+    std::vector<cv::Vec2d>& metrics,GpuPhysicalStats& stats,std::string& reason);
 inline cv::Mat localFitMask(const cv::Mat& raw,const cv::Mat& validity,const cv::Rect& patch) {
     cv::Mat mask=(raw(patch)>8)&(raw(patch)<247);
     if(!validity.empty())mask &= validity(patch);
@@ -51,6 +75,7 @@ bool gpuPatchFits(const cv::Mat& refAlign,const cv::Mat& srcAlign,const cv::Mat&
     std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs=0);
 bool gpuFittingAvailable(size_t sourcePixels,bool highlight);
 #ifdef HACHICAM_GPU_TEST_CONTROL
+bool gpuTestQuantizedPhysical(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const std::vector<PhysicalPatch>&,std::vector<cv::Vec2d>&);
 bool gpuTestCountLimitedFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
     const std::vector<cv::Rect>& patches,int iterations,std::vector<cv::Vec4f>& fits,int& bounded);
 struct GpuTestState { bool healthy=false,inFlight=false; unsigned long long allocation=0; };

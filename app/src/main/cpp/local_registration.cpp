@@ -10,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <vector>
+#include <cstdio>
 
 namespace fusion {
 cv::Mat highlightNeighborhood(const cv::Mat& image,float gain) {
@@ -322,29 +323,45 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     for(const auto& fit:fittedNodes)if(fit[3]==1)++gpuFitCount;
     model.gpuFitProposals=gpuFitCount;
     __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","local fit GPU proposals=%d nodes=%d preparedNodes=%d reason=%s",gpuFitCount,nx*ny,preparedNodes,fitBackend.c_str());
-    int gpuPhysicalFallbacks=0;
+    int gpuPhysicalFallbacks=0,cpuRetryChecks=0;
+    // Keep ECC and its independent physical validation separate so the latter
+    // can warp/reduce a bounded batch without per-node GPU synchronization.
+    std::vector<cv::Vec4f> pending(nx*ny,cv::Vec4f(0,0,-1,0));
+    std::vector<int> rejection(nx*ny,0);std::vector<double> fitCorrelation(nx*ny,0);
+    auto patchAt=[&](int index) {
+        const int gx=index%nx,gy=index/nx;
+        const int cx=singlePatch ? reference.cols/2 : std::min(gx*model.spacing,reference.cols-1);
+        const int cy=singlePatch ? reference.rows/2 : std::min(gy*model.spacing,reference.rows-1);
+        return cv::Rect(std::max(0,cx-160),std::max(0,cy-160),
+            std::min(reference.cols,cx+161)-std::max(0,cx-160),std::min(reference.rows,cy+161)-std::max(0,cy-160));
+    };
+    auto fitCpu=[&](const cv::Rect& roi,cv::Vec4f& result,double& correlationValue) {
+        try {
+            cv::Mat mask=localFitMask(warped,geometryValidity,roi);
+            if(cv::countNonZero(mask)<256)return 3;
+            cv::Mat t=cv::Mat::eye(2,3,CV_32F);
+            const double cc=cv::findTransformECC(refAlign(roi),srcAlign(roi),t,cv::MOTION_TRANSLATION,
+                cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,.0001),mask,3);
+            const float dx=t.at<float>(0,2),dy=t.at<float>(1,2);
+            if(!std::isfinite(cc)||cc<.65||!std::isfinite(dx)||!std::isfinite(dy)||std::hypot(dx,dy)>8)return 5;
+            result={dx,dy,float(cc),2};correlationValue=cc;return 0;
+        } catch(const cv::Exception&){return 4;}
+    };
+    const auto proposalsStarted=std::chrono::steady_clock::now();
     #pragma omp parallel for schedule(dynamic)
-    for (int gy = 0; gy < ny; ++gy) for (int gx = 0; gx < nx; ++gx) {
+    for(int index=0;index<nx*ny;++index) {
+        const int gx=index%nx,gy=index/nx;
         if(!activeNodes.empty() && !activeNodes.at<uchar>(gy,gx))continue;
-        const int cx = singlePatch ? reference.cols/2 : std::min(gx * model.spacing, reference.cols - 1);
-        const int cy = singlePatch ? reference.rows/2 : std::min(gy * model.spacing, reference.rows - 1);
-        const cv::Rect roi(std::max(0, cx - 160), std::max(0, cy - 160),
-            std::min(reference.cols, cx + 161) - std::max(0, cx - 160),
-            std::min(reference.rows, cy + 161) - std::max(0, cy - 160));
-        if (roi.width < 32 || roi.height < 32) continue;
-        const cv::Mat ref=refAlign(roi),src=srcAlign(roi);
-        const auto& node=nodes[gy*nx+gx];
-        const double refNoise=node.refNoise,srcNoise=node.srcNoise;
+        const auto roi=patchAt(index);if(roi.width<32||roi.height<32)continue;
+        const auto& node=nodes[index];
+        const double refSignal=std::max(0.,node.refVariance-noiseGain*node.refNoise*node.refNoise);
+        const double srcSignal=std::max(0.,node.srcVariance-noiseGain*node.srcNoise*node.srcNoise);
         const cv::Rect interior(roi.x+10,roi.y+10,roi.width-20,roi.height-20);
-        const double refSignal=std::max(0.,node.refVariance-noiseGain*refNoise*refNoise);
-        const double srcSignal=std::max(0.,node.srcVariance-noiseGain*srcNoise*srcNoise);
-        if (refSignal < 2.25 && srcSignal < 2.25) {
+        if(refSignal<2.25 && srcSignal<2.25) {
             cv::Mat difference;cv::absdiff(refAlign(interior),srcAlign(interior),difference);
-            // No translation fit to random grain, and no SR credit. The globally
-            // aligned low-frequency observations must still agree locally.
-            if (!highlight && cv::mean(difference)[0] < std::max(3.,.28*std::hypot(refNoise,srcNoise)))
+            if(!highlight && cv::mean(difference)[0]<std::max(3.,.28*std::hypot(node.refNoise,node.srcNoise)))
                 model.field.at<cv::Vec3f>(gy,gx)={0,0,.85f};
-            continue;
+            rejection[index]=1;continue;
         }
         if(highlight) {
             cv::Mat mask=cv::Mat::zeros(roi.size(),CV_8U);
@@ -353,50 +370,67 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
             if(!geometryValidity.empty())mask &= geometryValidity(roi);
             double ratio=0;
             const double score=correlation(refHP(roi),srcHP(roi),mask,
-                noiseGain*refNoise*refNoise,noiseGain*srcNoise*srcNoise,ratio);
+                noiseGain*node.refNoise*node.refNoise,noiseGain*node.srcNoise*node.srcNoise,ratio);
             if(score>=.95 && ratio>=.68) {
                 model.field.at<cv::Vec3f>(gy,gx)={0,0,float(std::min(1.,score))};
-                model.detail.at<uchar>(gy,gx)=255;continue;
+                model.detail.at<uchar>(gy,gx)=255;rejection[index]=2;continue;
             }
         }
-        const auto proposal=fittedNodes[gy*nx+gx];
-        for(int attempt=0;attempt<(proposal[3]==1 ? 2 : 1);++attempt) {
-        if(attempt) {
-            #pragma omp atomic update
-            ++gpuPhysicalFallbacks;
-        }
-        try {
-            cv::Mat transform = cv::Mat::eye(2, 3, CV_32F);
-            cv::Mat mask = localFitMask(warped,geometryValidity,roi);
-            if(cv::countNonZero(mask)<256)continue;
-            double cc;
-            if(attempt==0 && proposal[3]>=1) {
-                transform.at<float>(0,2)=proposal[0];transform.at<float>(1,2)=proposal[1];cc=proposal[2];
-            } else cc=cv::findTransformECC(ref, src, transform, cv::MOTION_TRANSLATION,
-                cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, .0001), mask, 3);
-            const float dx = transform.at<float>(0, 2), dy = transform.at<float>(1, 2);
-            if (!std::isfinite(cc) || cc < .65 || std::hypot(dx, dy) > 8) continue;
-            cv::Mat correctedHP;
-            cv::warpAffine(srcHP(roi), correctedHP, transform, roi.size(), cv::INTER_LINEAR | cv::WARP_INVERSE_MAP, cv::BORDER_REFLECT_101);
-            cv::Mat valid(roi.size(), CV_8U, cv::Scalar(255));
-            valid.rowRange(0, 10).setTo(0); valid.rowRange(valid.rows-10, valid.rows).setTo(0);
-            valid.colRange(0, 10).setTo(0); valid.colRange(valid.cols-10, valid.cols).setTo(0);
-            valid &= (reference(roi) > 8) & (reference(roi) < 247);
-            if(!geometryValidity.empty())valid &= geometryValidity(roi);
-            double detailRatio = 0;
-            const double score = correlation(refHP(roi), correctedHP, valid,
-                noiseGain*refNoise*refNoise,noiseGain*srcNoise*srcNoise,detailRatio);
-            const bool strict = score >= (highlight ? .80 : .90);
-            const bool denoiseOnly = !highlight && std::max(refNoise,srcNoise)>1 && cc>=.95 && score>=.80;
-            if ((!strict && !denoiseOnly) || detailRatio < .68) continue;
-            model.field.at<cv::Vec3f>(gy, gx) = {dx, dy, float(std::clamp(score, 0.0, 1.0))};
-            // Subpixel detail requires substantial structure above the grain.
-            if(strict && refSignal>=std::max(2.25,4*noiseGain*refNoise*refNoise) &&
-               srcSignal>=std::max(2.25,4*noiseGain*srcNoise*srcNoise))model.detail.at<uchar>(gy,gx)=255;
-            break;
-        } catch (const cv::Exception&) { /* Insufficient local evidence. */ }
-        }
+        if(fittedNodes[index][3]>=1){pending[index]=fittedNodes[index];fitCorrelation[index]=pending[index][2];}
+        else rejection[index]=fitCpu(roi,pending[index],fitCorrelation[index]);
     }
+    std::vector<PhysicalPatch> checks;std::vector<int> checkedIndices;
+    for(int index=0;index<nx*ny;++index)if(pending[index][3]) {
+        const auto& node=nodes[index];const auto p=pending[index];
+        checks.push_back({patchAt(index),{p[0],p[1]},
+            {noiseGain*node.refNoise*node.refNoise,noiseGain*node.srcNoise*node.srcNoise}});
+        checkedIndices.push_back(index);
+    }
+    const auto physicalStarted=std::chrono::steady_clock::now();
+    const double proposalMs=std::chrono::duration<double,std::milli>(physicalStarted-proposalsStarted).count();
+    std::vector<cv::Vec2d> metrics;GpuPhysicalStats physicalStats;std::string physicalReason="no pending fits";
+    const bool accelerated=!singlePatch && !checks.empty() &&
+        gpuPhysicalChecks(reference,refHP,srcHP,geometryValidity,checks,highlight,metrics,physicalStats,physicalReason);
+    if(!accelerated) {
+        metrics.resize(checks.size());
+        #pragma omp parallel for schedule(dynamic)
+        for(int i=0;i<int(checks.size());++i)metrics[i]=cpuPhysicalCheck(reference,refHP,srcHP,geometryValidity,checks[i]);
+        physicalStats.cpuPatches=int(checks.size());
+    }
+    #pragma omp parallel for schedule(dynamic) reduction(+:gpuPhysicalFallbacks,cpuRetryChecks)
+    for(int i=0;i<int(checks.size());++i) {
+        const int index=checkedIndices[i],gx=index%nx,gy=index/nx;auto proposal=pending[index];
+        auto m=metrics[i];const auto& node=nodes[index];
+        auto admitted=[&] {
+            const bool strict=m[0]>=(highlight ? .80 : .90);
+            const bool denoiseOnly=!highlight && std::max(node.refNoise,node.srcNoise)>1 && fitCorrelation[index]>=.95 && m[0]>=.80;
+            return (strict||denoiseOnly) && m[1]>=.68;
+        };
+        if(!admitted() && proposal[3]==1) {
+            ++gpuPhysicalFallbacks;const int failed=fitCpu(checks[i].roi,proposal,fitCorrelation[index]);
+            if(failed){rejection[index]=failed;continue;}
+            auto retry=checks[i];retry.shift={proposal[0],proposal[1]};
+            m=cpuPhysicalCheck(reference,refHP,srcHP,geometryValidity,retry);++cpuRetryChecks;
+        }
+        if(!admitted()){rejection[index]=m[1]<.68 ? 7 : 6;continue;}
+        model.field.at<cv::Vec3f>(gy,gx)={proposal[0],proposal[1],float(std::clamp(m[0],0.,1.))};
+        const double refSignal=std::max(0.,node.refVariance-noiseGain*node.refNoise*node.refNoise);
+        const double srcSignal=std::max(0.,node.srcVariance-noiseGain*node.srcNoise*node.srcNoise);
+        if(m[0]>=(highlight ? .80 : .90) && refSignal>=std::max(2.25,4*noiseGain*node.refNoise*node.refNoise) &&
+            srcSignal>=std::max(2.25,4*noiseGain*node.srcNoise*node.srcNoise))model.detail.at<uchar>(gy,gx)=255;
+        rejection[index]=8;
+    }
+    physicalStats.cpuPatches+=cpuRetryChecks;
+    physicalStats.ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-physicalStarted).count();
+    int counts[9]{};for(int code:rejection)++counts[code];
+    char evidence[512];std::snprintf(evidence,sizeof(evidence),
+        "local-validation-v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d reason=%s",
+        int(highlight),physicalStats.patches,physicalStats.cpuPatches,proposalMs,physicalStats.ms,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],physicalReason.c_str());
+    recordFusionDiagnostic(evidence);
+    __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf",
+        "local physical v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f reason=%s; nodes lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d",
+        int(highlight),physicalStats.patches,physicalStats.cpuPatches,proposalMs,physicalStats.ms,physicalReason.c_str(),
+        counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8]);
     if(gpuPhysicalFallbacks)__android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU physical-check CPU completions=%d",gpuPhysicalFallbacks);
     int detailNodes = 0,denoiseOnlyNodes=0;
     for (int y = 0; y < ny; ++y) for (int x = 0; x < nx; ++x) {

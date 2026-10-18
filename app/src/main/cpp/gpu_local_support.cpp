@@ -1,9 +1,11 @@
 #include "local_support.h"
 #include "gpu_compute.h"
 #include "gpu_policy.h"
+#include <opencv2/core/version.hpp>
 namespace fusion {
 namespace {thread_local std::string computeTrace;thread_local GpuGlobalStats globalStats;}
 void resetGpuDiagnostics(){computeTrace.clear();globalStats={};}
+void recordFusionDiagnostic(const std::string& line){if(computeTrace.size()+line.size()+1<=16352){computeTrace+=line;computeTrace+='\n';}else if(computeTrace.find("[trace truncated]")==std::string::npos)computeTrace+="[trace truncated]\n";}
 std::string gpuDiagnostics(){return computeTrace;}
 GpuGlobalStats gpuGlobalStats(){return globalStats;}
 static void traceDecision(const GpuCostProfile& profile,const char* stage,int key) {
@@ -21,6 +23,7 @@ bool gpuLocalSupport(const cv::Mat&,const cv::Mat&,const LocalRegistration&,cv::
 bool gpuPatchFits(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const std::vector<cv::Rect>&,bool,
     std::vector<cv::Vec4f>&,std::string& reason,double){reason="Vulkan backend not built";return false;}
 bool gpuFittingAvailable(size_t,bool){return false;}
+bool gpuPhysicalChecks(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const std::vector<PhysicalPatch>&,bool,std::vector<cv::Vec2d>&,GpuPhysicalStats&,std::string& reason){reason="Vulkan backend not built";return false;}
 bool gpuStrongSelection(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,
     const std::vector<cv::Rect>&,const std::vector<cv::Vec2d>&,std::vector<uchar>&,GpuSelectionStats& stats,std::string& reason){stats={};reason="Vulkan backend not built";return false;}
 bool gpuNoiseGrid(const cv::Mat&,int,const cv::Mat&,cv::Mat&,std::string& reason){reason="Vulkan backend not built";return false;}
@@ -35,6 +38,7 @@ bool gpuMergeAnchors(const std::vector<SamplingPlate>&,const cv::Mat&,const cv::
 #include "shaders/color_merge_spv.h"
 #include "shaders/strong_selection_spv.h"
 #include "shaders/global_ecc_spv.h"
+#include "shaders/physical_check_spv.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video.hpp>
 #include <array>
@@ -111,6 +115,7 @@ struct Context {
     VkShaderModule eccShader=VK_NULL_HANDLE;
     VkShaderModule noiseShader=VK_NULL_HANDLE,mergeShader=VK_NULL_HANDLE;
     VkPipeline noisePipeline=VK_NULL_HANDLE,mergePipeline=VK_NULL_HANDLE;
+    VkShaderModule physicalShader=VK_NULL_HANDLE;std::array<VkPipeline,2> physicalStages{};GpuCostProfile physicalPolicy[18];
     VkShaderModule selectionShader=VK_NULL_HANDLE;
     std::array<VkPipeline,2> selectionStages{};
     VkShaderModule globalShader=VK_NULL_HANDLE;std::array<VkPipeline,7> globalStages{};
@@ -246,6 +251,13 @@ struct Context {
             pc.stage.module=module;
             r=vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pc,nullptr,&compute);if(r!=VK_SUCCESS)return error("additional pipeline",r);
         }
+        sm.codeSize=physical_check_spv_size;sm.pCode=physical_check_spv;
+        r=vkCreateShaderModule(device,&sm,nullptr,&physicalShader);if(r!=VK_SUCCESS)return error("physical shader",r);
+        pc.stage.module=physicalShader;
+        for(int stage=0;stage<2;++stage) {
+            const VkSpecializationInfo info{1,&specializationEntry,sizeof(stage),&stage};pc.stage.pSpecializationInfo=&info;
+            r=vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pc,nullptr,&physicalStages[stage]);if(r!=VK_SUCCESS)return error("physical pipeline",r);
+        }
         sm.codeSize=strong_selection_spv_size;sm.pCode=strong_selection_spv;
         r=vkCreateShaderModule(device,&sm,nullptr,&selectionShader);if(r!=VK_SUCCESS)return error("selector shader",r);
         pc.stage.module=selectionShader;
@@ -286,6 +298,7 @@ struct Context {
             X(vkDestroyShaderModule,noiseShader);X(vkDestroyShaderModule,mergeShader);
             for(auto stage:selectionStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
             X(vkDestroyShaderModule,selectionShader);
+            for(auto stage:physicalStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);X(vkDestroyShaderModule,physicalShader);
             for(auto stage:globalStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
             X(vkDestroyShaderModule,globalShader);
             for(auto stage:eccStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
@@ -371,6 +384,13 @@ struct Context {
                 stage(1,true);stage(4,false);
             }
             stage(5,false);
+        } else if(selected==physicalStages[0]) {
+            vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());
+            vkCmdDispatch(command,uint32_t(shape[2]),groups,1);
+            VkMemoryBarrier dependency{VK_STRUCTURE_TYPE_MEMORY_BARRIER};dependency.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+            dependency.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
+            vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&dependency,0,nullptr,0,nullptr);
+            vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,physicalStages[1]);vkCmdDispatch(command,groups,1,1);
         } else if(selected==selectionStages[0]) {
             vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());
             vkCmdDispatch(command,uint32_t(shape[4]),groups,1);
@@ -575,6 +595,54 @@ struct Context {
             output.at<cv::Vec3b>(y,x)=color;contributors+=std::max(1,count);multi+=count>=2;
         }
         if(invalid){healthy=false;failure="invalid GPU merge output";return false;}
+        return true;
+    }
+    bool runPhysical(const cv::Mat& reference,const cv::Mat& refHP,const cv::Mat& srcHP,
+        const cv::Mat& validity,const std::vector<PhysicalPatch>& patches,bool highlight,
+        std::vector<cv::Vec2d>& metrics,int& ambiguous,int warpMode=-1) {
+        if(warpMode<0)warpMode=CV_VERSION_MAJOR>=5 ? 1 : 0;
+        size_t largest=0;for(const auto& p:patches)largest=std::max(largest,size_t(p.roi.area()));
+        const size_t batch=std::min(size_t(64),patches.size()),chunks=(largest+1023)/1024;
+        const VkDeviceSize reserved[]{batch*((largest+3)/4)*8,batch*largest*8,batch*(4+chunks*2)*16};
+        if(chunks>properties.limits.maxComputeWorkGroupCount[0] || batch>properties.limits.maxComputeWorkGroupCount[1])return false;
+        if(!workspace(reserved))return false;
+        metrics.resize(patches.size());ambiguous=0;
+        for(size_t begin=0;begin<patches.size();begin+=64) {
+            const size_t count=std::min(size_t(64),patches.size()-begin);
+            auto* bytes=static_cast<uchar*>(buffers[0].mapped);auto* hp=static_cast<float*>(buffers[1].mapped);
+            auto* work=static_cast<cv::Vec4f*>(buffers[2].mapped);size_t byteOffset=0,offset=0;
+            for(size_t j=0;j<count;++j) {
+                const auto& p=patches[begin+j];const auto& r=p.roi;
+                work[j*2]={float(r.width),float(r.height),float(offset),float(byteOffset/4)};
+                work[j*2+1]={float(cvRound(p.shift.x*1024)),float(cvRound(p.shift.y*1024)),p.shift.x,p.shift.y};
+                const size_t plane=(size_t(r.area())+3)/4*4;std::memset(bytes+byteOffset+plane,255,plane);
+                for(int y=0;y<r.height;++y) {
+                    std::memcpy(bytes+byteOffset+size_t(y)*r.width,reference.ptr(r.y+y)+r.x,size_t(r.width));
+                    if(!validity.empty())std::memcpy(bytes+byteOffset+plane+size_t(y)*r.width,validity.ptr(r.y+y)+r.x,size_t(r.width));
+                }
+                for(int k=0;k<2;++k)for(int y=0;y<r.height;++y)
+                    std::memcpy(hp+offset+size_t(k)*r.area()+size_t(y)*r.width,
+                        (k ? srcHP : refHP).ptr<float>(r.y+y)+r.x,size_t(r.width)*4);
+                byteOffset+=plane*2;offset+=size_t(r.area())*2;
+            }
+            const VkDeviceSize sizes[]{byteOffset,offset*4,count*(4+chunks*2)*16};
+            if(!dispatch(physicalStages[0],sizes,{int(count),warpMode,int(chunks),0,0,0,0,0},uint32_t(count)))return false;
+            for(size_t j=0;j<count;++j) {
+                const auto centre=work[count*2+j*2],moments=work[count*2+j*2+1];
+                for(float v:{centre[0],centre[1],centre[2],moments[0],moments[1],moments[2]})
+                    if(!std::isfinite(v)){failure="invalid GPU physical moments";return false;}
+                const double n=centre[2];if(n<0 || n>patches[begin+j].roi.area() || std::floor(n)!=n){failure="invalid physical count";return false;}
+                const auto noise=patches[begin+j].noise;
+                const double va=n>0 ? moments[0]/n : 0,vb=n>0 ? moments[1]/n : 0,cov=n>0 ? moments[2]/n : 0;
+                auto m=physicalMetrics(n,va,vb,cov,noise);
+                const double floor=std::max(.1,.1*std::max(noise[0],noise[1]));
+                if(n>=256 && (va-noise[0]<floor || vb-noise[1]<floor ||
+                    std::abs(m[0]-(highlight ? .80 : .90))<.002 || std::abs(m[0]-.80)<.002 || std::abs(m[1]-.68)<.002)) {
+                    ++ambiguous;m=cpuPhysicalCheck(reference,refHP,srcHP,validity,patches[begin+j]);
+                }
+                metrics[begin+j]=m;
+            }
+        }
         return true;
     }
     bool runSelection(const cv::Mat& reference,const cv::Mat& source,const cv::Mat& refHP,const cv::Mat& srcHP,
@@ -826,6 +894,63 @@ bool gpuNoiseGrid(const cv::Mat& gray,int spacing,const cv::Mat& active,cv::Mat&
         __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU noise v1 nodes=%d pixels=%zu callMs=%.3f",shape.area(),gray.total(),std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count());
         return true;
     } catch(const std::exception&){c->healthy=false;reason="GPU noise host failure";output.release();return false;}
+}
+bool gpuPhysicalChecks(const cv::Mat& reference,const cv::Mat& refHP,const cv::Mat& srcHP,
+    const cv::Mat& validity,const std::vector<PhysicalPatch>& patches,bool highlight,
+    std::vector<cv::Vec2d>& metrics,GpuPhysicalStats& stats,std::string& reason) {
+    stats={};metrics.clear();
+#ifdef HACHICAM_GPU_TEST_CONTROL
+    if(std::getenv("HACHICAM_FORCE_CPU")){reason="forced CPU benchmark";return false;}
+#endif
+    if(reference.empty()||reference.dims!=2||reference.type()!=CV_8U||reference.total()>16000000||
+        refHP.dims!=2||srcHP.dims!=2||refHP.type()!=CV_32F||srcHP.type()!=CV_32F||refHP.size()!=reference.size()||srcHP.size()!=reference.size()||
+        patches.empty()||patches.size()>4096||(!validity.empty() && (validity.dims!=2||validity.type()!=CV_8U||validity.size()!=reference.size()))) {
+        reason="unsupported physical workload";return false;
+    }
+    for(const auto& p:patches) {
+        const auto r=p.roi;
+        if(r.x<0||r.y<0||r.width<32||r.height<32||r.width>321||r.height>321||r.x>reference.cols-r.width||r.y>reference.rows-r.height||
+            !std::isfinite(p.shift.x)||!std::isfinite(p.shift.y)||std::hypot(p.shift.x,p.shift.y)>8||
+            !std::isfinite(p.noise[0])||!std::isfinite(p.noise[1])||p.noise[0]<0||p.noise[1]<0) {reason="invalid physical patch";return false;}
+    }
+    auto* c=sharedContext();if(!c){reason="GPU context unavailable";return false;}
+    std::lock_guard<std::mutex> lock(c->guard);if(!c->healthy){reason=c->failure;return false;}
+    const int key=sizeBucket(reference.total())*6+(highlight ? 3 : 0)+(patches.size()<=4 ? 0 : patches.size()<=16 ? 1 : 2);
+    auto& policy=c->physicalPolicy[key];
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+    if(!policy.eligible()){traceDecision(policy,"physical",key);reason="calibrated CPU physical preference";return false;}
+#endif
+    const auto start=std::chrono::steady_clock::now();int ambiguous=0;
+    try {
+        if(!c->runPhysical(reference,refHP,srcHP,validity,patches,highlight,metrics,ambiguous)){c->healthy=false;reason=c->failure;return false;}
+        const auto gpuEnd=std::chrono::steady_clock::now();const double cold=std::chrono::duration<double,std::milli>(gpuEnd-start).count();
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+        if(policy.needsProbe()) {
+            std::vector<cv::Vec2d> cpu(patches.size());
+            #pragma omp parallel for schedule(dynamic)
+            for(int i=0;i<int(patches.size());++i)cpu[i]=cpuPhysicalCheck(reference,refHP,srcHP,validity,patches[i]);
+            const double cpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-gpuEnd).count();
+            auto matches=[&] {for(size_t i=0;i<cpu.size();++i) {
+                const auto a=metrics[i],b=cpu[i];
+                if(!std::isfinite(a[0])||!std::isfinite(a[1])||std::abs(a[0]-b[0])>.002||std::abs(a[1]-b[1])>.002||
+                    (a[0]>=(highlight ? .80 : .90))!=(b[0]>=(highlight ? .80 : .90))||
+                    (a[0]>=.80)!=(b[0]>=.80)||(a[1]>=.68)!=(b[1]>=.68))return false;
+            }return true;};
+            const bool first=matches();const auto warmStart=std::chrono::steady_clock::now();
+            if(!c->runPhysical(reference,refHP,srcHP,validity,patches,highlight,metrics,ambiguous)){c->healthy=false;reason=c->failure;return false;}
+            const double warm=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-warmStart).count();
+            policy.record(first && matches(),cold,warm,cpuMs,GpuCostProfile::reusedCost(cold,warm),cpuMs,"patches="+std::to_string(patches.size())+" completed="+std::to_string(ambiguous));
+            traceDecision(policy,"physical-calibration",key);
+            // Reuse the already calculated authority, including a calibration failure.
+            metrics=cpu;stats.cpuPatches=int(cpu.size());
+            stats.ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+            reason="calibration reused CPU physical checks";return true;
+        }
+#endif
+        stats.patches=int(patches.size());stats.cpuPatches=ambiguous;
+        stats.ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+        traceDecision(policy,"physical",key);reason="validated GPU physical checks";return true;
+    } catch(const std::exception&){c->healthy=false;reason="GPU physical host failure";return false;}
 }
 bool gpuStrongSelection(const cv::Mat& reference,const cv::Mat& source,const cv::Mat& refHP,const cv::Mat& srcHP,
     const cv::Mat& validity,const std::vector<cv::Rect>& patches,const std::vector<cv::Vec2d>& noise,
@@ -1090,6 +1215,11 @@ bool gpuFittingAvailable(size_t pixels,bool highlight) {
     return false;
 }
 #ifdef HACHICAM_GPU_TEST_CONTROL
+bool gpuTestQuantizedPhysical(const cv::Mat& ref,const cv::Mat& a,const cv::Mat& b,const cv::Mat& validity,
+    const std::vector<PhysicalPatch>& patches,std::vector<cv::Vec2d>& got) {
+    auto* c=sharedContext();if(!c)return false;std::lock_guard<std::mutex> lock(c->guard);int ambiguous=0;
+    return c->healthy && c->runPhysical(ref,a,b,validity,patches,true,got,ambiguous,0);
+}
 bool gpuTestCountLimitedFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
     const std::vector<cv::Rect>& patches,int iterations,std::vector<cv::Vec4f>& fits,int& bounded) {
     if(iterations<1 || iterations>30 || patches.empty() || patches.size()>16)return false;

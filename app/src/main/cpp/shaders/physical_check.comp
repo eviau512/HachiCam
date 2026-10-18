@@ -1,0 +1,53 @@
+#version 450
+layout(local_size_x=128) in;
+layout(constant_id=0) const int kernelStage=0;
+layout(std430,binding=0) readonly buffer Pixels {uint mask[];};
+layout(std430,binding=1) readonly buffer Planes {float hp[];};
+layout(std430,binding=2) buffer Work {vec4 work[];};
+layout(push_constant) uniform Shape {int jobs;int a;int chunks;int c;int d;int e;int f;int g;} p;
+shared vec4 reduction[128];shared vec3 centre;
+int reflect101(int x,int size) {if(x<0)return -x;if(x>=size)return 2*size-x-2;return x;}
+float observed(int base,ivec2 size,ivec2 q) {return hp[base+reflect101(q.y,size.y)*size.x+reflect101(q.x,size.x)];}
+float warped(int base,ivec2 size,ivec2 xy,ivec2 shift,vec2 rawShift) {
+    // OpenCV translation warp: AB_BITS=10, INTER_BITS=5, round_delta=16.
+    ivec2 coordinate=(xy*1024+shift+16)>>5;
+    ivec2 q=coordinate>>5;vec2 frac=vec2(coordinate&31)/32.;
+    if(p.a==1){precise vec2 pos=vec2(xy)+rawShift;q=ivec2(floor(pos));frac=pos-vec2(q);}
+    precise float upper=observed(base,size,q)*(1.-frac.x)+observed(base,size,q+ivec2(1,0))*frac.x;
+    precise float lower=observed(base,size,q+ivec2(0,1))*(1.-frac.x)+observed(base,size,q+ivec2(1,1))*frac.x;
+    return upper*(1.-frac.y)+lower*frac.y;
+}
+bool validPixel(int offset,ivec2 size,int i) {
+    int x=i%size.x,y=i/size.x;if(x<10||y<10||x>=size.x-10||y>=size.y-10)return false;
+    uint value=(mask[offset+(i>>2)]>>(8*(i&3)))&255u;
+    uint observed=(mask[offset+(size.x*size.y+3)/4+(i>>2)]>>(8*(i&3)))&255u;
+    return value>8u&&value<247u&&observed>0u;
+}
+void reduceValues() {barrier();for(uint step=64u;step>0u;step>>=1u){if(gl_LocalInvocationID.x<step)reduction[gl_LocalInvocationID.x]+=reduction[gl_LocalInvocationID.x+step];barrier();}}
+void main() {
+    uint job=kernelStage==0 ? gl_WorkGroupID.y : gl_WorkGroupID.x,lane=gl_LocalInvocationID.x;
+    if(job>=uint(p.jobs))return;
+    ivec4 meta=ivec4(work[job*2u]);ivec2 shift=ivec2(work[job*2u+1u].xy),size=meta.xy;
+    vec2 rawShift=work[job*2u+1u].zw;int count=size.x*size.y;
+    uint partialBase=uint(p.jobs)*4u+job*uint(p.chunks)*2u;
+    uint start=gl_WorkGroupID.x*1024u,end=min(uint(count),start+1024u);
+    precise vec3 sums=vec3(0.);
+    if(kernelStage==0) {
+        for(uint k=start+lane;k<end;k+=128u)if(validPixel(meta.w,size,int(k)))
+            sums+=vec3(hp[meta.z+int(k)],warped(meta.z+count,size,ivec2(int(k)%size.x,int(k)/size.x),shift,rawShift),1.);
+    } else if(lane<uint(p.chunks)){vec4 v=work[partialBase+lane*2u];sums=vec3(v.xy*v.z,v.z);}
+    reduction[lane]=vec4(sums,0.);reduceValues();
+    if(lane==0u)centre=vec3(reduction[0].z>0. ? reduction[0].xy/reduction[0].z : vec2(0.),reduction[0].z);
+    barrier();precise vec3 moments=vec3(0.);
+    if(kernelStage==0) {
+        for(uint k=start+lane;k<end;k+=128u)if(validPixel(meta.w,size,int(k))) {
+            precise vec2 delta=vec2(hp[meta.z+int(k)],warped(meta.z+count,size,ivec2(int(k)%size.x,int(k)/size.x),shift,rawShift))-centre.xy;
+            moments+=vec3(delta.x*delta.x,delta.y*delta.y,delta.x*delta.y);
+        }
+    } else if(lane<uint(p.chunks)) {
+        vec4 v=work[partialBase+lane*2u];precise vec2 delta=v.xy-centre.xy;
+        moments=work[partialBase+lane*2u+1u].xyz+v.z*vec3(delta.x*delta.x,delta.y*delta.y,delta.x*delta.y);
+    }
+    reduction[lane]=vec4(moments,0.);reduceValues();
+    if(lane==0u){uint target=kernelStage==0 ? partialBase+gl_WorkGroupID.x*2u : uint(p.jobs)*2u+job*2u;work[target]=vec4(centre,0.);work[target+1u]=reduction[0];}
+}

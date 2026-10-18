@@ -512,6 +512,50 @@ retain natural tone. HDR, super-resolution and paper whitening are independent
 choices. No mode should enable all processing merely because a document quad
 exists. Scene-specific defaults are **required / not implemented**.
 
+### rc22 implementation slice: local validation before continuous HDR
+
+Specified before implementation on 2026-10-18; implemented as an experimental
+debug path with host CPU/hardware-GPU regressions passed. Phone adoption and
+performance remain unaccepted. Continuous lamp recovery above
+remains unimplemented; rc22 must not claim that feathering alone restores the
+lamp. The first implementation slice migrates the existing post-ECC physical
+validation and records why highlight nodes are rejected.
+
+* Collect translation proposals first, then batch their high-pass warp and
+  masked, centred variance/covariance reduction on Vulkan (at most 64 patches,
+  each <=321x321, shared 64 MiB pool). Reproduce OpenCV INTER_LINEAR's 1/32-pixel
+  coordinates and BORDER_REFLECT_101 within each patch. Use the same reference
+  mask, 10-pixel interior and noise-subtracted statistics as the CPU authority.
+  Host OpenCV 5 and shipped Android OpenCV 4.10 have different float-warp
+  interpolation: select the matching backend explicitly. Test Android's quantized
+  kernel independently on the host against quantized CPU shifts; a host float
+  comparison alone cannot certify the Android sampling path.
+  Use 1024-pixel partial reductions then combine centred moments; a single
+  workgroup per 321x321 patch underutilizes the GPU. The 64-patch upper bound
+  needs about 56.3 MB of logical workspace and reduces transfers/submissions;
+  actual allocated bytes must still fit the shared pool. ECC remains capped
+  at its existing 16-patch batch; this change applies only to validation.
+* The CPU still decides correlation >=0.80 for highlights /0.90 for base,
+  detail ratio >=0.68, denoise-only and structure qualification. Near thresholds,
+  near noise cancellation, invalid output or insufficient samples use the
+  unchanged CPU calculation. Numerical calibration is separate for highlight
+  and base; include actual upload/dispatch/readback and CPU completion in cost.
+  A rejected GPU fitting proposal still receives the original CPU ECC retry.
+* Keep CPU-only results byte-identical. Release and unsupported devices retain
+  CPU completion. No new shared-structure, displacement or clipping admission
+  is granted by the GPU implementation.
+* Per-frame bounded diagnostics distinguish low shared signal, verified identity,
+  insufficient fit mask, failed/nonfinite ECC, displacement/correlation rejection,
+  physical correlation versus detail rejection, and admitted nodes. Record actual
+  GPU physical checks / CPU completions and timings in the capture's existing
+  bounded native decision trace; do not create another capture directory.
+* Acceptance GPU-PHYSICAL-22 requires real hardware execution with padded/edge
+  ROIs, subpixel rounding, clipped/occluded/flat/noisy patches, threshold and
+  count boundaries, batches >16, CPU-only image parity, full HDR/SR/PPT negative
+  regressions and existing failure/capability tests. Compare frozen near/far lamp
+  and PPT total/local times; host gains are not phone acceptance. A device whose
+  measured hybrid path is slower must prefer CPU.
+
 ## 7. Resource and failure contract
 
 The experimental native-high-resolution profile uses exclusive admission,

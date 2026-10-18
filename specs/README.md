@@ -20,6 +20,7 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
+Current implementation: [rc22 GPU physical verification and rejection diagnostics](reports/RC22_GPU_PHYSICAL_VALIDATION_2026-10-18.zh-CN.md) (host verified; delivery pending).
 Current research: [lamp HDR seams, algorithm options and MotoCam evidence limits](reports/LAMP_HDR_ALGORITHM_RESEARCH_2026-10-18.zh-CN.md).
 Latest delivered build: [rc21 50 ms load sampling](reports/RC21_50MS_LOAD_SAMPLING_2026-10-18.zh-CN.md).
 Previous work/device evidence: [rc20 sampled CPU/GPU load and local ECC return parity](reports/RC20_COMPUTE_LOAD_AND_LOCAL_ECC_2026-10-18.zh-CN.md).

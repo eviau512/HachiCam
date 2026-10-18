@@ -8,6 +8,7 @@ using namespace fusion;
 void runGpuFittingTests();
 void runGpuComputeTests();
 void runGpuSelectionTests();
+void runGpuPhysicalTests();
 void runGpuPolicyTests();
 void runGpuGlobalTests();
 static void compare(const cv::Mat& ref,const cv::Mat& src,const LocalRegistration& m,const cv::Mat& validity={}) {
@@ -50,7 +51,7 @@ int main() {
         std::cout<<"GPU threshold/boundary and unsupported-workload tests PASS\n";
         runGpuFittingTests();
         runGpuComputeTests();
-        runGpuSelectionTests();runGpuPolicyTests();runGpuGlobalTests();
+        runGpuSelectionTests();runGpuPhysicalTests();runGpuPolicyTests();runGpuGlobalTests();
         return 0;
     } catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}
 }
