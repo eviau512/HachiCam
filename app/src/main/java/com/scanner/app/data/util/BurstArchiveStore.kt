@@ -53,7 +53,7 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
         File(root,"current").takeIf { File(it,"manifest.json").isFile }?.let(::groupId)
     }
     fun replace(inputs: List<Pair<String, ByteArray>>, output: File, manifest: String, diagnostics: String = "",
-        requestNs: Long = System.nanoTime()): Boolean = synchronized(guard) {
+        requestNs: Long = System.nanoTime(), computeLoad: String = ""): Boolean = synchronized(guard) {
         val acquiredNs=System.nanoTime()
         if (!enabled) return@synchronized false
         require(inputs.isNotEmpty() && inputs.size <= 8)
@@ -62,10 +62,12 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
             inputs.count { it.first != "metering-probe.jpg" } in 1..7)
         val metadata = manifest.toByteArray(Charsets.UTF_8)
         val context = diagnostics.toByteArray(Charsets.UTF_8)
+        val load = computeLoad.toByteArray(Charsets.UTF_8)
+        require(load.size <= 128 * 1024)
         require(context.size <= 128 * 1024)
         require(metadata.isNotEmpty() && metadata.size <= 128 * 1024 && output.isFile && output.length()>0 && inputs.all { it.second.isNotEmpty() })
         val inputBytes = inputs.sumOf { it.second.size.toLong() }
-        val total = inputBytes + output.length() + metadata.size + context.size + 1024 // timing footer allowance
+        val total = inputBytes + output.length() + metadata.size + context.size + load.size + 1024 // timing footer allowance
         val parent = root.parentFile ?: return@synchronized false
         if (inputBytes > 96L * 1024 * 1024 || total > LIMIT ||
             parent.usableSpace < total * 3 + 64L * 1024 * 1024) return@synchronized false
@@ -79,6 +81,7 @@ class BurstArchiveStore(private val root: File, private val enabled: Boolean) {
             check(pending.mkdir())
             inputs.forEach { (name, bytes) -> File(pending, name).writeBytes(bytes) }
             File(pending, "manifest.json").writeBytes(metadata)
+            if (load.isNotEmpty()) File(pending, "compute-load.json").writeBytes(load)
             output.copyTo(File(pending, "fused.jpg"))
             val copiedNs=System.nanoTime()
             val measured = diagnostics + "\nSnapshot timing: clock=System.nanoTime lockWaitMs=${(acquiredNs-requestNs).coerceAtLeast(0)/1e6} copyMs=${(copiedNs-acquiredNs).coerceAtLeast(0)/1e6}; excludes final metadata/rename\n"

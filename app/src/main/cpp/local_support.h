@@ -51,6 +51,8 @@ bool gpuPatchFits(const cv::Mat& refAlign,const cv::Mat& srcAlign,const cv::Mat&
     std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs=0);
 bool gpuFittingAvailable(size_t sourcePixels,bool highlight);
 #ifdef HACHICAM_GPU_TEST_CONTROL
+bool gpuTestCountLimitedFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
+    const std::vector<cv::Rect>& patches,int iterations,std::vector<cv::Vec4f>& fits,int& bounded);
 struct GpuTestState { bool healthy=false,inFlight=false; unsigned long long allocation=0; };
 GpuTestState gpuTestState();
 bool gpuTestPreparedPlanes(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,

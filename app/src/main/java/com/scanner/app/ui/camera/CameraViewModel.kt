@@ -333,6 +333,11 @@ class CameraViewModel : ViewModel() {
         val capturedControl = cameraControl
         val capturedInfo = cameraInfo
         viewModelScope.launch {
+            val load = try { com.scanner.app.data.util.ComputeLoadMonitor.start(captureId, timing, app) }
+                catch (error: Exception) {
+                    CameraDiagnostics.frame(captureId, "loadSamplerUnavailable=${error.javaClass.simpleName}")
+                    null
+                }
             var submitted = false
             var restoreAttempted = false
             val control = capturedControl
@@ -516,12 +521,13 @@ class CameraViewModel : ViewModel() {
                 PageRepository.addPage(ScannedPage(id = id, originalImagePath = output.absolutePath,
                     filter = ImageFilter.ORIGINAL, status = PageStatus.PROCESSING))
                 BurstProcessor.submit(ticket, failure = { error ->
+                    load?.close()
                     timing.finishPending("workerFailed")
                     PageRepository.updatePage(id) { if (it.status == PageStatus.PROCESSING) it.copy(status = PageStatus.FAILED) else it }
                     Log.e("HachiCam-Burst", "Capture job unavailable", error)
                 }, dequeued = { timing.end("queue"); timing.start("heavyPermitWait") },
                     admitted = { timing.end("heavyPermitWait") }) {
-                    processFrames(app, frames, detection, id, output, hdr, highResolution, timing, diagnosticProbe)
+                    processFrames(app, frames, detection, id, output, hdr, highResolution, timing, diagnosticProbe, load)
                 }
                 submitted = true
                 onPageSaved(id)
@@ -534,7 +540,7 @@ class CameraViewModel : ViewModel() {
                 restoreCaptureControls()
                 _isCapturing.value = false
                 frameAnalyzer?.resetStability()
-                if (!submitted) BurstProcessor.cancelReservation(ticket)
+                if (!submitted) { load?.close(); BurstProcessor.cancelReservation(ticket) }
             }
         }
     }
@@ -643,7 +649,7 @@ class CameraViewModel : ViewModel() {
     private fun retainBurstDiagnostics(context: Context, frames: List<Frame>, id: String, output: File,
                                        w: Float, h: Float, mode: String, reference: Int, domain: String,
                                        timing: com.scanner.app.data.util.ProcessingTimeline, reconstruction: JSONObject? = null,
-                                       probe: Frame? = null) {
+                                       probe: Frame? = null, computeLoad: String = "") {
         if (!BuildConfig.SENSITIVE_DIAGNOSTICS) return
         runCatching {
             val sourceLease=PageRepository.readMaster(id) ?: return@runCatching
@@ -653,6 +659,7 @@ class CameraViewModel : ViewModel() {
                 .put("build", BuildConfig.BUILD_TIME).put("source", BuildConfig.GIT_HASH)
                 .put("outputWidth", w.toInt()).put("outputHeight", h.toInt())
                 .put("exposureDomain", domain).put("result", mode).put("referenceIndex", reference)
+                .put("computeLoadFile", if (computeLoad.isNotEmpty()) "compute-load.json" else JSONObject.NULL)
                 .put("exposureProbeFile", if (probe != null) "metering-probe.jpg" else JSONObject.NULL)
                 .put("exposureProbeProfile", if (probe != null) AnchorHeadroomPolicy.VERSION else JSONObject.NULL)
                 .put("exposureProbeSensorTimestamp", probe?.evidence?.timestamp ?: JSONObject.NULL)
@@ -683,7 +690,7 @@ class CameraViewModel : ViewModel() {
             val stored = BurstArchiveStore(File(context.cacheDir, "debug_burst"), true).replace(
                 frames.mapIndexed { index, frame -> String.format(Locale.US, "%02d-tier%d.jpg", index, frame.tier) to frame.bytes } +
                     (probe?.let { listOf("metering-probe.jpg" to it.bytes) } ?: emptyList()),
-                output, metadata.toString(2), CameraDiagnostics.snapshot(id))
+                output, metadata.toString(2), CameraDiagnostics.snapshot(id), computeLoad = computeLoad)
             CameraDiagnostics.frame(id, "diagnosticArchiveStored=$stored")
             CameraDiagnostics.memory(id,"finalDiagnosticSnapshot")
             }
@@ -691,7 +698,8 @@ class CameraViewModel : ViewModel() {
     }
 
     private fun processFrames(context: Context, frames: List<Frame>, detection: DetectionResult?, id: String, output: File, hdr: Boolean, highResolution: Boolean,
-                              timing: com.scanner.app.data.util.ProcessingTimeline, probe: Frame? = null) {
+                              timing: com.scanner.app.data.util.ProcessingTimeline, probe: Frame? = null,
+                              load: com.scanner.app.data.util.ComputeLoadMonitor.Session? = null) {
         val mats = mutableListOf<Mat>()
         val valid = mutableListOf<Frame>()
         var fused: Mat? = null
@@ -766,7 +774,7 @@ class CameraViewModel : ViewModel() {
                 .put("contrastRangeFloor", 12).put("noiseSigmaFactor", 6).put("patchHalo", 8)
                 .put("maximumPatchObservations", 50_000).put("maximumSourceSearch", 128)
             srRecord.put("registrationParameterVersion","masked-ecc-edges-v1").put("optimizerMargin",10)
-            srRecord.put("gpuFitParameterVersion","ecc-return-parity-v3-shared-node-preparation")
+            srRecord.put("gpuFitParameterVersion","ecc-count-limit-parity-v4")
                 .put("highlightScheduling",if(hdr && !useStreaming) "clipped-demand-v2" else "not-used")
                 .put("highlightResponseVersion","clipped-channel-preservation-v1")
             srRecord.put("nativePerformance",report.performance?.let { perf ->
@@ -792,7 +800,7 @@ class CameraViewModel : ViewModel() {
                 computeTargetQuad(detection, w, h, frames[0].rotation, if (hdr) report else null)
             } ?: return
             CameraDiagnostics.frame(id,"saved=${w.toInt()}x${h.toInt()} exposureDomain=${evidence.description} $mode")
-            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description, timing, srRecord, probe)
+            retainBurstDiagnostics(context, valid, id, output, w, h, mode, if (hdr) report.reference else 0, evidence.description, timing, srRecord, probe, load?.finish().orEmpty())
             _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
             if (hdr && (report.anchors < 2 || report.multiFrameFraction <= 0.0))
                 _errorMessage.value = context.getString(R.string.fusion_single_frame)
@@ -814,7 +822,8 @@ class CameraViewModel : ViewModel() {
                     val (w, h) = saveUpright(fallback, frames[0], output, "Fallback reference (fusion failed)", timing) { w, h ->
                         computeTargetQuad(detection, w, h, frames[0].rotation)
                     } ?: return
-                    retainBurstDiagnostics(context, frames, id, output, w, h, "Fallback reference (fusion failed)", 0, "see per-frame metadata", timing, probe = probe)
+                    retainBurstDiagnostics(context, frames, id, output, w, h, "Fallback reference (fusion failed)", 0, "see per-frame metadata", timing,
+                        probe = probe, computeLoad = load?.finish().orEmpty())
                     _lastOutputSize.value = CapturePolicy.Size(w.toInt(), h.toInt())
                     CameraDiagnostics.frame(id,"savedFallback=${w.toInt()}x${h.toInt()} first-base reference")
                     _errorMessage.value = context.getString(R.string.fusion_fallback)
@@ -825,6 +834,7 @@ class CameraViewModel : ViewModel() {
                 _errorMessage.value = context.getString(R.string.capture_failed)
             }
         } finally {
+            load?.close()
             timing.finishPending("interrupted")
             fused?.release(); mats.forEach(Mat::release)
             temporaryInputs.forEach { if (it.exists() && !it.delete()) Log.w("HachiCam-Burst", "Temporary burst cleanup failed") }

@@ -1024,6 +1024,40 @@ packets supported and attach model, resolution, costs and failure reasons to the
 same result trace. Release stays CPU. Actual global adoption, full capture time,
 frozen text/HDR fidelity and phone sustained acceptance are separate gates.
 
+### 7.7 rc20 bounded-iteration local ECC return (2026-10-18 contract)
+
+The rc19 device capture cce962ae took 23.505 s native, including 13.322 s local
+registration/verification. Strong-fit calibration includes CPU completion for
+3/16 and 9/12 missing GPU proposals. Code inspection identifies a CPU/GPU return
+contract discrepancy: the CPU COUNT|EPS call can return a finite final transform
+when 30 iterations expire without epsilon convergence, whereas the current
+shader publishes only the epsilon-converged state. Missing GPU output can thus
+force valid bounded work back onto CPU. This is not proof that all observed
+missing proposals have that cause or that accepting them is physically valid.
+
+The local GPU optimizer may publish either its epsilon-converged state or the
+finite final update/last correlation after exactly the unchanged 30-iteration
+limit. Preserve failure/singular/mask/offset rejection and all original physical
+checks. Reaching the count limit is not itself convergence or quality approval.
+Keep 0.05-source-pixel/0.002 CPU calibration, separate cold/warm/full hybrid
+cost including real completion, the 90% rule, numerical quarantine and CPU reuse.
+Do not broaden eligibility, disable CPU completion or relax text/HDR/SR gates.
+
+Count-limited proposals need their own per-workload numerical admission, separate
+from the existing epsilon-converged proposals. If any newly count-limited cold or
+warm proposal disagrees with CPU, quarantine that optional return class and use
+CPU completion for it; do not poison an otherwise conforming converged class.
+Unknown count-limited classes cannot be adopted before a CPU comparison. Reuse
+the same bounded calibration observations and retain all CPU results on fallback.
+
+Test known bounded-count outputs against the same CPU COUNT|EPS call, retaining
+flat/insufficient-mask/numerical-failure negative cases. Require actual GPU
+execution and a bounded-count-return observation; CPU fallback alone is not a
+GPU pass. Re-run complete native CPU/GPU image regressions and failure policy,
+then freeze the latest and prior text/white-PPT/lamp cases for matched-output
+checks and paired total native timings. Report remaining CPU work and phone
+validation separately; this changes return parity, not the entire GPU pipeline.
+
 ## 8. Acceptance and limits
 
 Apply PHOTO-01 through PHOTO-09 and CAP-01 through CAP-05 in

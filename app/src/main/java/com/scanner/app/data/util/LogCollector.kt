@@ -77,6 +77,7 @@ object LogCollector {
                     if(latestRequested.isNotBlank() && latestRetained!=latestRequested)
                         appendLine("Latest attempt has no retained complete final diagnostic; any included images belong to earlier completed captures.")
                     appendLine("Use export-timing.json for the latest capture ID and ordered groups; each group's matching evidence is in captures/<captureId>/manifest.json and diagnostics.txt.")
+                    appendLine("When present, captures/<captureId>/compute-load.json contains sampled app/device CPU and device GPU driver-window load; null means unavailable, not idle.")
                     appendLine("--- App process log ---")
                     appendLine(logs.first)
                     if (logs.second!=null) {

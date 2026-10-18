@@ -191,6 +191,57 @@ intents do not replace the last committed recipe.
 
 ## 5. Quality, resources and acceptance
 
+### rc20 sampled CPU/GPU load diagnostics (2026-10-18 contract)
+
+Test builds must record a capture-owned `compute-load.json` alongside the final
+image/manifest, with versioned units, monotonic sample offsets and processing
+stage. This complements wall-time/backend counters; it is not a replacement for
+complete latency or proof of shader occupancy. Release provides a no-op collector
+with no root process, `/proc`/GPU-node reads or retained load trace.
+
+Use one process-wide background sampler shared by at most three active capture
+sessions, including acquisition/queue/processing/save. Target 500 ms, at most
+600 samples per capture and <=128 KiB compact trace. Record actual interval,
+read latency/freshness, dropped/invalid samples and sampling scope. Stop bounded
+helpers when the last session finishes/fails/cancels; export must not launch a
+retrospective sampler or wait for a helper to exit. Queued/concurrent capture
+records may observe the same process/device load and must not claim exclusive
+attribution to that image. Snapshot immutable results under capture identity.
+
+Application CPU uses the observed process CPU-time delta over monotonic wall
+time. Report one-core-equivalent percent (may exceed 100), and separately the
+percent of available logical-processor capacity only when that count is stable.
+Retain the observed available logical-processor count with each sample so the
+capacity denominator is inspectable, including idle or count-change intervals.
+Device CPU uses nonnegative deltas of the first eight `/proc/stat` aggregate
+fields, excluding guest/guest_nice double counting and treating idle+iowait as
+non-busy. Invalid/reset/zero intervals are unknown, never fabricated idle.
+Process intervals shorter than 100 ms remain unknown because CPU-time tick
+resolution can otherwise produce misleading startup percentages.
+
+For supported Qualcomm KGSL, retain the device-reported `gpubusy` busy/total
+pair and compute its ratio directly; these are recent driver-window values,
+not cumulative counters to difference and not necessarily the sampler interval.
+Label it device-wide (camera/display/other processes included), not HachiCam GPU
+share or execution-unit occupancy. Record the explicit provider and current GPU
+clock in Hz when readable, plus Android thermal severity if available. Do not
+infer load from clock, Vulkan call duration or executed block counts. Zero
+denominator, denied/absent/malformed node, stale snapshot and unsupported driver
+remain null with a reason. No clock/governor/permission-node writes are allowed.
+
+Read bounded fixed allowlisted nodes using one long-lived shell helper while
+sampling. Use `su` only when the existing test-only root probe already reports
+availability; otherwise keep process CPU and any directly readable device data.
+Never request root anew per sample or block UI/processing on shell IO. Bound
+helper output/lifetime and quarantine stale helpers; continuously sampling
+permission failures must not fork a new helper every 500 ms. Account for helper
+overhead and distinguish sampled driver load from missing coverage.
+
+Validate synthetic counters (multicore >100, reset, zero/malformed, guest fields,
+driver windows), bounds, concurrent identity/stop/failure, read freshness and
+release exclusion. Physical-device availability, sampling cost and GPU utilization
+remain pending until a newly exported capture contains valid observations.
+
 The quality matrix in [SPEC_06](./SPEC_06_IMAGE_QUALITY_AND_ACCEPTANCE.md) governs
 cross pipeline acceptance. It separates hard correctness invariants from measured
 image quality and device dependent performance.

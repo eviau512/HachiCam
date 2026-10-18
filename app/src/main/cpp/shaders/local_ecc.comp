@@ -78,7 +78,10 @@ void main() {
     }
     vec4 state=work[at];
     if(kernelStage==5) {
-        if(lane==0)work[id]=state.w==1. ? vec4(state.xyz,1.) : vec4(0.,0.,-1.,0.);
+        // COUNT|EPS returns the final update even when the count bound, rather
+        // than epsilon, ended optimization. Physical acceptance remains on host.
+        if(lane==0)work[id]=state.w==1. ? vec4(state.xyz,1.) :
+            state.w==0. ? vec4(state.xyz,3.) : vec4(0.,0.,-1.,0.);
         return;
     }
     if(state.w!=0.)return;

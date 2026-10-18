@@ -133,6 +133,8 @@ struct Context {
     bool eccReady=false;
     GpuCostProfile bucketPolicy[6],noisePolicy[6],mergePolicy[9],fitPolicy[18],selectionPolicy[3];
     int fitScopeSkip[2]{0,0};
+    // New count-bound returns must not numerically quarantine established converged proposals.
+    int boundedFitState[18]{}; // 0 unknown, 1 admitted, 2 CPU completion only
     std::string failure="uninitialized";
     std::mutex guard;
     Context() {
@@ -446,7 +448,7 @@ struct Context {
         return true;
     }
     bool runFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
-                 const std::vector<cv::Rect>& patches,std::vector<cv::Vec4f>& results) {
+                 const std::vector<cv::Rect>& patches,std::vector<cv::Vec4f>& results,int iterations=30,int* countLimited=nullptr,bool keepBoundedTags=false) {
         if(patches.empty() || patches.size()>16){failure="unsupported fitting batch";return false;}
         std::vector<uint32_t> packed;
         size_t pixels=0,largest=0;
@@ -474,13 +476,19 @@ struct Context {
         if(chunks>properties.limits.maxComputeWorkGroupCount[0] || patches.size()>properties.limits.maxComputeWorkGroupCount[1]){failure="fitting dispatch limit";return false;}
         if(!workspace(sizes))return false;
         std::memcpy(buffers[1].mapped,packed.data(),sizes[1]);
-        std::array<int,8> shape{int(patches.size()),30,0,0,int(chunks),0,0,0};const float epsilon=.0001f;
+        std::array<int,8> shape{int(patches.size()),iterations,0,0,int(chunks),0,0,0};const float epsilon=.0001f;
         std::memcpy(&shape[2],&epsilon,sizeof(float));
         if(!dispatch(eccPipeline,sizes,shape,uint32_t(patches.size())))return false;
         results.resize(patches.size());static_assert(sizeof(cv::Vec4f)==16);
         std::memcpy(results.data(),buffers[2].mapped,results.size()*sizeof(cv::Vec4f));
-        for(auto& fit:results)if(fit[3]!=1 || !std::isfinite(fit[0]) || !std::isfinite(fit[1]) || !std::isfinite(fit[2]) || fit[2]<.65f || std::hypot(fit[0],fit[1])>8)
-            fit={0,0,-1,0};
+        int bounded=0;
+        for(auto& fit:results) {
+            if((fit[3]!=1 && fit[3]!=3) || !std::isfinite(fit[0]) || !std::isfinite(fit[1]) || !std::isfinite(fit[2]) || fit[2]<.65f || std::hypot(fit[0],fit[1])>8)
+                fit={0,0,-1,0};
+            else {bounded+=fit[3]==3;if(!keepBoundedTags)fit[3]=1;}
+        }
+        if(countLimited)*countLimited=bounded;
+        if(bounded)__android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU ECC count-limit v1 returned=%d patches=%zu iterations=%d; proposal only",bounded,patches.size(),iterations);
         return true;
     }
     bool runNoise(const cv::Mat& gray,int spacing,const cv::Mat& active,cv::Mat& output) {
@@ -979,11 +987,12 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
             const std::vector<cv::Rect> batch(patches.begin()+begin,patches.begin()+end);
             std::vector<cv::Vec4f> output;
             const auto start=std::chrono::steady_clock::now();
-            if(!context->runFits(ref,src,raw,validity,batch,output)) {
+            if(!context->runFits(ref,src,raw,validity,batch,output,30,nullptr,true)) {
                 context->healthy=false;reason=context->failure;fits.clear();return false;
             }
 #if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
-            if(policy.needsProbe()) {
+            const bool newBounded=context->boundedFitState[key]==0 && std::any_of(output.begin(),output.end(),[](const auto& v){return v[3]==3;});
+            if(policy.needsProbe() || newBounded) {
                 const auto gpuEnd=std::chrono::steady_clock::now();
                 std::vector<cv::Vec4f> cpu(batch.size());
                 #pragma omp parallel for schedule(dynamic)
@@ -991,8 +1000,22 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
                 const auto cpuEnd=std::chrono::steady_clock::now();
                 const auto warmStart=std::chrono::steady_clock::now();
                 std::vector<cv::Vec4f> warm;
-                if(!context->runFits(ref,src,raw,validity,batch,warm)){context->healthy=false;reason=context->failure;fits.clear();return false;}
+                if(!context->runFits(ref,src,raw,validity,batch,warm,30,nullptr,true)){context->healthy=false;reason=context->failure;fits.clear();return false;}
                 const double warmMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-warmStart).count();
+                bool hasBounded=false,boundedMatch=true;
+                for(size_t i=0;i<batch.size();++i)for(const auto& candidate:{output[i],warm[i]})if(candidate[3]==3) {
+                    hasBounded=true;
+                    if(!cpu[i][3] || std::hypot(cpu[i][0]-candidate[0],cpu[i][1]-candidate[1])>.05 || std::abs(cpu[i][2]-candidate[2])>.002)boundedMatch=false;
+                }
+                if(context->boundedFitState[key]==0 && hasBounded)context->boundedFitState[key]=boundedMatch ? 1 : 2;
+                if(hasBounded) {
+                    const auto line=std::string("fit-count-bound key=")+std::to_string(key)+" state="+(context->boundedFitState[key]==1 ? "admitted" : "CPU-completion")+"\n";
+                    if(computeTrace.size()+line.size()<16352)computeTrace+=line;
+                }
+                if(context->boundedFitState[key]!=1)for(size_t i=0;i<batch.size();++i) {
+                    if(output[i][3]==3)output[i]={0,0,-1,0};
+                    if(warm[i][3]==3)warm[i]={0,0,-1,0};
+                }
                 bool match=true;int usable=0,missing=0;
                 for(size_t i=0;i<batch.size();++i) {
                     if(output[i][3]) {
@@ -1000,7 +1023,7 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
                         if(!cpu[i][3] || std::hypot(cpu[i][0]-output[i][0],cpu[i][1]-output[i][1])>.05 || std::abs(cpu[i][2]-output[i][2])>.002)match=false;
                     } else ++missing;
                     if(warm[i][3] && (!cpu[i][3] || std::hypot(cpu[i][0]-warm[i][0],cpu[i][1]-warm[i][1])>.05 || std::abs(cpu[i][2]-warm[i][2])>.002))match=false;
-                    if(output[i][3]!=warm[i][3])match=false;
+                    if(bool(output[i][3])!=bool(warm[i][3]))match=false;
 #ifdef HACHICAM_GPU_TEST_CONTROL
                     __android_log_print(ANDROID_LOG_INFO,"HachiCam-GPU-Test","ECC probe i=%zu CPU=%g,%g,%g,%g GPU=%g,%g,%g,%g",
                         i,cpu[i][0],cpu[i][1],cpu[i][2],cpu[i][3],output[i][0],output[i][1],output[i][2],output[i][3]);
@@ -1035,6 +1058,12 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
                 for(size_t i=0;i<cpu.size();++i)if(!output[i][3] && cpu[i][3]){output[i]=cpu[i];output[i][3]=2;}
             }
 #endif
+            for(auto& fit:output)if(fit[3]==3) {
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+                if(context->boundedFitState[key]!=1){fit={0,0,-1,0};continue;}
+#endif
+                fit[3]=1;
+            }
             std::copy(output.begin(),output.end(),fits.begin()+begin);
         }
         traceDecision(policy,"fit",key);reason="validated batched ECC proposals";return true;
@@ -1061,6 +1090,13 @@ bool gpuFittingAvailable(size_t pixels,bool highlight) {
     return false;
 }
 #ifdef HACHICAM_GPU_TEST_CONTROL
+bool gpuTestCountLimitedFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
+    const std::vector<cv::Rect>& patches,int iterations,std::vector<cv::Vec4f>& fits,int& bounded) {
+    if(iterations<1 || iterations>30 || patches.empty() || patches.size()>16)return false;
+    auto* context=sharedContext();if(!context)return false;
+    std::lock_guard<std::mutex> lock(context->guard);
+    return context->healthy && context->eccReady && context->runFits(ref,src,raw,validity,patches,fits,iterations,&bounded);
+}
 GpuTestState gpuTestState() {
     auto* c=sharedContext();if(!c)return {};
     std::lock_guard<std::mutex> lock(c->guard);GpuTestState s;s.healthy=c->healthy;s.inFlight=c->inFlight;

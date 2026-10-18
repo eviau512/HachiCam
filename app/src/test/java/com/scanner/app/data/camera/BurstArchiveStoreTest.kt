@@ -8,6 +8,24 @@ import java.nio.file.Files
 import java.util.zip.ZipFile
 
 class BurstArchiveStoreTest {
+    @Test fun loadTraceStaysWithItsOwnCompletedGroupAndOversizeCannotReplaceIt() {
+        val base = Files.createTempDirectory("capture-load").toFile()
+        try {
+            val store = BurstArchiveStore(File(base, "archive"), true)
+            val output = File(base, "fused.jpg").apply { writeText("result") }
+            val inputs = listOf("00-tier0.jpg" to byteArrayOf(1))
+            val trace = "{\"schema\":1,\"captureId\":\"A\",\"samples\":[[0,20]]}"
+            assertTrue(store.replace(inputs, output, "A", computeLoad = trace))
+            val log = File(base, "log.txt").apply { writeText("live B") }
+            ZipFile(store.export(log, File(base, "capture.zip"))!!).use { zip ->
+                assertEquals(trace, zip.getInputStream(latestEntry(zip, "compute-load.json")).reader().readText())
+                assertFalse(zip.entries().asSequence().any { it.name.startsWith("capture/") })
+            }
+            try { store.replace(inputs, output, "bad", computeLoad = "x".repeat(128 * 1024 + 1)); fail("Oversize load trace accepted") }
+            catch (_: IllegalArgumentException) { }
+            assertEquals(trace, File(base, "archive/current/compute-load.json").readText())
+        } finally { base.deleteRecursively() }
+    }
     @Test fun oneProbeIsArchivedBesideSevenFusionFramesWithoutCreatingLegacyLayout() {
         val base = Files.createTempDirectory("capture-headroom").toFile()
         try {

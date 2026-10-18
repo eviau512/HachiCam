@@ -9,6 +9,23 @@ void runGpuFittingTests() {
     rng.fill(reference,cv::RNG::UNIFORM,40,200);cv::GaussianBlur(reference,reference,{0,0},1.2);
     const std::vector<cv::Rect> patches{{0,0,321,321},{160,62,321,321},{33,18,257,193}};
     int accepted=0;
+    {
+        cv::Mat source;const cv::Mat h=(cv::Mat_<float>(2,3)<<1,0,.7f,0,1,.4f);
+        cv::warpAffine(reference,source,h,reference.size(),cv::INTER_LINEAR,cv::BORDER_REFLECT_101);
+        for(int limit:{1,2}) {
+            std::vector<cv::Vec4f> got;int bounded=0;
+            if(!fusion::gpuTestCountLimitedFits(reference,source,source,{},patches,limit,got,bounded) || !bounded)
+                throw std::runtime_error("No actual bounded-count GPU return");
+            for(size_t i=0;i<patches.size();++i) {
+                cv::Mat transform=cv::Mat::eye(2,3,CV_32F);
+                const double cc=cv::findTransformECC(reference(patches[i]),source(patches[i]),transform,cv::MOTION_TRANSLATION,
+                    cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,limit,.0001),fusion::localFitMask(source,{},patches[i]),3);
+                if(got[i][3]!=1 || std::hypot(got[i][0]-transform.at<float>(0,2),got[i][1]-transform.at<float>(1,2))>.05 || std::abs(got[i][2]-cc)>.002)
+                    throw std::runtime_error("Bounded-count final update/correlation mismatch");
+            }
+        }
+        std::cout<<"Actual GPU COUNT-bound final-update return parity PASS\n";
+    }
     for(auto shift:{cv::Point2f(0,0),cv::Point2f(.25f,-.125f),cv::Point2f(.7f,.4f),cv::Point2f(2.25f,-1.5f)}) {
         cv::Mat source;const cv::Mat h=(cv::Mat_<float>(2,3)<<1,0,shift.x,0,1,shift.y);
         cv::warpAffine(reference,source,h,reference.size(),cv::INTER_LINEAR,cv::BORDER_REFLECT_101);

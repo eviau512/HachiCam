@@ -20,7 +20,8 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Current work/device evidence: [rc19 dark-screen anchor headroom](reports/RC19_DARK_SCREEN_HEADROOM_2026-10-18.zh-CN.md).
+Current work/device evidence: [rc20 sampled CPU/GPU load and local ECC return parity](reports/RC20_COMPUTE_LOAD_AND_LOCAL_ECC_2026-10-18.zh-CN.md).
+Previous: [rc19 dark-screen anchor headroom](reports/RC19_DARK_SCREEN_HEADROOM_2026-10-18.zh-CN.md).
 Previous: [rc18 resident global ECC](reports/RC18_RESIDENT_GLOBAL_ECC_2026-10-16.zh-CN.md).
 Previous: [rc17 GPU selection and scheduling](reports/RC17_GPU_SCHEDULING_2026-10-16.zh-CN.md),
 following [the rc16 bright PPT evidence](reports/RC16_BRIGHT_PPT_DEVICE_2026-10-16.zh-CN.md).
