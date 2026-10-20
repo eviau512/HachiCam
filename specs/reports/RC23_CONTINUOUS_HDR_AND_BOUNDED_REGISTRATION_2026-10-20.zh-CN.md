@@ -45,7 +45,12 @@
 
 没有稳定的大幅提速，首轮还存在退步；不能标记手机等待目标完成。自动后端仍受运行成本校准影响，近灯新/旧本次选择的颜色合成后端不同，不能把总差异都归因于某个新优化。三组资格 tile 仍为 512 /0 /110；不能拿 50MP 尺寸变化当提速。下一轮应继续针对全局准备、实际局部拟合和重建/合成热点，统计小核或更高 GPU 占用率不能代表完整等待下降。
 
-Android 干净构建、原签名 universal 校验和发送回执在完成后补充。
+- 从源码 `bfc2e270099e892e16025a6f7d6185ca757b9066` 的干净 checkout 构建，已推送并核对 GitHub `gpu-hdr`；没有包含其它对话未提交的图像/规格修改。
+- 测试版和 release 各 111 项单测全部通过，standard Kotlin 与两模式三 ABI 原生构建通过。CPU 和实际 GPU 回归也通过。
+- 测试包 `HachiCamTest-0.1.2-rc23-1406-universal.apk`，版本 47，126,970,531 bytes。包身份、原 debug 证书、CRC、三 ABI、新核/诊断标记、Banner、无测试钩子、干净源码 hash 与 ZIP 对齐通过。
+- APK SHA256：`08740ea42ce85259759b5084661b9d16383e1f7c189425ccf6163a14bf0c7d0c`。
+- 2026-10-20 14:09:54 +08:00，经 Tailscale 发往 Hyper-obs 成功，退出 0，发送前后大小和 SHA256 一致；发送成功不替代接收端安装和手机验收。
+- 既有第三方 OpenCV 的完整 16 KiB LOAD/RELRO 兼容限制仍存在；ZIP 对齐不表示该限制已修复。本机 `.tools/rc23-artifact.json` 与 `.tools/rc23-taildrop-receipt.json` 保留校验和传输回执。
 
 ## 后续验收与优先项
 
