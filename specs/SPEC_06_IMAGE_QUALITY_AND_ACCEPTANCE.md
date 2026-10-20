@@ -48,6 +48,112 @@ outcome. Use the same source, geometry, output size and encoding when comparing
 alternative algorithms. Keep training/tuning cases separate from final
 evaluation cases where parameters are fitted.
 
+### 2.1 Full-body character photography fixtures (2026-10-18)
+
+**Digital artifacts created and verified; physical print/display/camera checks
+pending.** Deliver two separate portrait
+images, each exactly **6000 x 8000 pixels** (48 MP): Gemini / Hachimi cat girl
+and GPT white dragon girl. These are standalone photography-test artworks, not
+settings-banner replacements. The latest user clarification requires full-body
+figures, superseding the earlier half-body choice.
+
+Use the familiar cropped Lenna image only as a head/shoulder pose reference:
+three-quarter rear-facing torso, head turned back over the near shoulder, eyes
+looking toward the viewer. Extend that pose naturally to a standing, full-body
+view. Do not copy the real person's face or import photo pixels into the output.
+Both feet, footwear, cat ears / dragon horns, hands and tails remain visible with
+margin. Maintain the selected community identities: blue-violet long hair,
+cat ears/tail, prismatic star ornament and magenta/gold eyes for Gemini; white
+long hair, pale eyes, two pale horns, dragon wings/scaled tail and white/silver
+fantasy costume for GPT. Use the established moe anime illustration style.
+
+The user-selected footwear is dark blue-violet **over-the-knee boots** for Gemini
+and white/silver **high-heeled shoes** for GPT. The gown must not hide GPT's shoes.
+Use a natural standing pose, a gentle expression and one character per file.
+The user's follow-up requires Gemini's boots to read as leather, with subtle
+grain, credible bending creases, stitching, panel seams and shaped reflections,
+and slimmer heels than the first generated candidate. Revise only those boot
+materials and heel width while preserving the scene and character. The user
+approved the GPT candidate on 2026-10-18; preserve that artwork and only perform
+the previously requested resolution/export processing on it.
+The latest Gemini direction request mirrors her **pose orientation only** relative
+to candidate v1: face/toe direction switches to the opposite side while she
+retains the three-quarter back view and over-the-shoulder gaze. The atelier's
+window/light side and dark furniture/curtain side stay fixed; do not horizontally
+flip the entire scene. This supersedes matching the two subjects' facing sides.
+
+The scene must offer usable detail in all four qualitative combinations:
+
+| Tone / spatial detail | Example physical scene material |
+| --- | --- |
+| Bright / fine | Lace, individual feather strands, fine silver engravings |
+| Bright / broad | Smooth sunlit plaster, pale silk folds and soft skin shading |
+| Dark / fine | Low-contrast velvet embroidery, boot stitching, walnut grain |
+| Dark / broad | Deep navy drape folds and smooth shadow gradients |
+
+Use a coherent atelier / still-life setting with a bright side and a substantial
+shadow side. Keep the dark textures visibly separated above black, with some
+low-contrast detail rather than rendering the shadows as a flat black silhouette.
+Use deep focus and legible materials; do not hide the test details in extensive
+bokeh, haze, artificial grain or heavy bloom. Both subjects should have similar
+lighting/material coverage; exact scene pixels need not match.
+
+For this artwork set only, the initial **experimental 8-bit code-value profile**
+requires at least 15% of pixels with Rec.709-weighted display-code luma Y' <=64,
+at least 5% with Y' >=200, less than 1.5% with Y' <=2 and less than 3% with
+Y' >=253. Annotate at least one bright fine-detail, bright smooth, dark
+fine-detail and dark smooth ROI per final. A dark fine-detail ROI must have mean
+Y' in 12..64 and standard deviation >=3. These are scene-distribution checks,
+not calibrated scene luminance, dynamic range, sensor-noise or MTF measurements.
+If a candidate misses the profile, revise lighting and repeat the affected checks.
+The initial <2% near-white target was revised to <3% before final export:
+Gemini v2 measures 2.40% at native size, concentrated in intentional bright
+window/specular cores; GPT measures 1.83%. Retain those bounded highlight-stress
+areas and the user-approved artwork. This provisional change does not classify
+clipped pixels as recovered detail; fine bright ROIs must be inspected separately.
+The approved source dimensions are 1086 x 1448. Use dedicated anime 4x SR to
+4344 x 5792, then one high-quality resampling to exact 6000 x 8000. Record both
+stages rather than claiming 48 MP of independent native source detail.
+Verification found raw SR introduced extra endpoint clipping in Gemini (2.07%
+Y' <=2 and 3.85% Y' >=253), versus 1.05% / 2.40% in her native source.
+Before accepting that export, apply a source-guided endpoint guard: compare
+against a bicubic resampling of the selected native scene; taper excess darkening
+below Y'=16 and excess brightening above Y'=239 back toward source luma.
+Preserve midtones, geometry and the selected boot/pose design. Record the guarded
+result and remeasure, rather than silently increasing the clipping budget.
+
+Save opaque lossless RGB PNG masters and record sRGB interpretation / profile,
+actual native-generation dimensions, any super-resolution stages, final pixel
+dimensions, hashes, prompts and selected reference roles under
+`artwork/photography-test-2026-10-18/`. Per the 2026-10-20 repository handoff,
+version only the two final PNG masters from this photography set. Preserve
+native sources, previews, prompts, processing code and verification manifests
+locally under ignored paths; do not delete them when removing Git tracking.
+Keep attribution, rights limitations and the final-file hashes in the tracked
+root `ARTWORK_NOTICE.md`. Apply the same images-only policy to the existing
+settings-banner artwork directory, retaining its selected image deliverables.
+This policy does not exclude authoritative specifications or the root notice.
+If generation
+does not produce 6000 x 8000, use the established dedicated anime SR workflow
+and export exact final dimensions, without claiming native 48 MP source detail.
+These invented scenes support qualitative repeatable photography comparisons;
+they are not calibrated resolution/color charts or natural-scene sensor truth.
+Reference-photo pixels and third-party reference files are not app resources.
+
+Acceptance ART-FIXTURE-01: verify two independently decodable 6000 x 8000 RGB
+PNGs, full-body Lenna-inspired pose and selected footwear/identities, all four
+annotated tone/detail regions, measured code-value profile and complete local
+source/processing records. Repository acceptance additionally requires final
+images only under tracked `artwork/` paths, retained attribution and hashes,
+and ignored supporting files still present locally. Physical print/display/camera capture acceptance remains
+pending until those actual capture conditions are measured.
+Executed result: both final PNGs decode as 6000 x 8000, 8-bit opaque RGB with
+sRGB/gAMA tags; every PNG chunk CRC passes. Gemini dark/bright shares are
+33.69% / 17.69%, endpoint shares 1.10% / 2.19%; GPT shares are 31.00% / 32.45%
+and 0.69% / 2.60%. Both dark fine-detail ROIs pass the stated mean/variation
+profile. Source images, user-approved GPT and output hashes are retained in
+the artwork set; superseded Gemini source/SR candidates are distinguished.
+
 ## 3. Measurements and release gate
 
 | Concern | Required evidence |

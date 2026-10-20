@@ -32,3 +32,6 @@ The user's requests to commit or submit (for example, "提交") also mean commit
 and push the authorized changes to GitHub on the current branch by default.
 Do not stop after a local commit or ask for push confirmation again. Verify the
 live remote branch points to the resulting commit before reporting completion.
+
+Keep commit subjects focused on the change. Do not include the user's device
+names or delivery destinations in commit subjects.
