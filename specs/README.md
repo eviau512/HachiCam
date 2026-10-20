@@ -20,7 +20,7 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Latest implementation: [rc24 regional GPU mapping and solver](reports/RC24_REGIONAL_GPU_MAPPING_AND_SOLVER_2026-10-20.zh-CN.md) (phone acceptance pending).
+Latest delivered build: [rc24 regional GPU mapping and solver](reports/RC24_REGIONAL_GPU_MAPPING_AND_SOLVER_2026-10-20.zh-CN.md) (rc24-2004 universal sent to Hyper-obs; phone acceptance pending).
 Previous delivery: [rc23 continuous HDR support and bounded registration](reports/RC23_CONTINUOUS_HDR_AND_BOUNDED_REGISTRATION_2026-10-20.zh-CN.md) (full lamp recovery and phone performance acceptance pending).
 Previous delivery: [rc22 GPU physical verification and rejection diagnostics](reports/RC22_GPU_PHYSICAL_VALIDATION_2026-10-18.zh-CN.md).
 Current research: [lamp HDR seams, algorithm options and MotoCam evidence limits](reports/LAMP_HDR_ALGORITHM_RESEARCH_2026-10-18.zh-CN.md).
