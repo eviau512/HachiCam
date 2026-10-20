@@ -376,6 +376,7 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
         } catch(const cv::Exception&){return 4;}
     };
     const auto proposalsStarted=std::chrono::steady_clock::now();
+    std::vector<uchar> needsFit(nx*ny,0);
     #pragma omp parallel for schedule(dynamic)
     for(int index=0;index<nx*ny;++index) {
         const int gx=index%nx,gy=index/nx;
@@ -410,9 +411,43 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
             if(node.srcVariance<node.refVariance*.8 && cannotRetainDetail(reference,refHP,srcHP,geometryValidity,roi,
                 {noiseGain*node.refNoise*node.refNoise,noiseGain*node.srcNoise*node.srcNoise})) {rejection[index]=9;continue;}
 #endif
-            rejection[index]=fitCpu(roi,pending[index],fitCorrelation[index]);
+            needsFit[index]=1;
         }
     }
+    const double preflightMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-proposalsStarted).count();
+    int residualCandidates=int(std::count(needsFit.begin(),needsFit.end(),uchar(1))),residualGpu=0,cpuReused=0,cpuEccCalls=0;
+    std::string residualReason="CPU residual fitting";
+    if(!singlePatch && gpuFittingAvailable(reference.total(),highlight,true)) {
+        const auto gatherStart=std::chrono::steady_clock::now();
+        std::vector<cv::Rect> patches;std::vector<int> indices;
+        for(int i=0;i<nx*ny;++i)if(needsFit[i]){patches.push_back(patchAt(i));indices.push_back(i);}
+        residualCandidates=int(patches.size());
+        const double gatherMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-gatherStart).count();
+        std::vector<cv::Vec4f> proposals;std::vector<double> cpuCorrelations;
+        if(!patches.empty() && gpuPatchFits(refAlign,srcAlign,warped,geometryValidity,patches,highlight,
+            proposals,residualReason,gatherMs,true,&cpuCorrelations)) {
+            for(size_t i=0;i<indices.size();++i) {
+                const int index=indices[i];const auto fit=proposals[i];
+                if(fit[3]<0) {rejection[index]=int(-fit[3]);needsFit[index]=0;++cpuReused;}
+                else if(fit[3]>0) {
+                    pending[index]=fit;fitCorrelation[index]=fit[3]==2 ? cpuCorrelations[i] : double(fit[2]);
+                    needsFit[index]=0;
+                    if(fit[3]==1)++residualGpu;else ++cpuReused;
+                }
+            }
+        }
+    }
+    #pragma omp parallel for schedule(dynamic) reduction(+:cpuEccCalls)
+    for(int index=0;index<nx*ny;++index)if(needsFit[index]) {
+        ++cpuEccCalls;rejection[index]=fitCpu(patchAt(index),pending[index],fitCorrelation[index]);
+    }
+    model.gpuFitProposals+=residualGpu;
+    char residualTrace[512];std::snprintf(residualTrace,sizeof(residualTrace),
+        "residual-ecc-v1 highlight=%d candidates=%d gpuProposals=%d cpuReused=%d cpuTailCalls=%d prepareMs=%.3f preflightMs=%.3f phaseMs=%.3f reason=%s",
+        int(highlight),residualCandidates,residualGpu,cpuReused,cpuEccCalls,
+        std::chrono::duration<double,std::milli>(preparedAt-started).count(),preflightMs,
+        std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-proposalsStarted).count(),residualReason.c_str());
+    recordFusionDiagnostic(residualTrace);
     std::vector<PhysicalPatch> checks;std::vector<int> checkedIndices;
     for(int index=0;index<nx*ny;++index)if(pending[index][3]) {
         const auto& node=nodes[index];const auto p=pending[index];
@@ -458,8 +493,8 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     physicalStats.ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-physicalStarted).count();
     int counts[10]{};for(int code:rejection)++counts[code];
     char evidence[512];std::snprintf(evidence,sizeof(evidence),
-        "local-validation-v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d detailBound=%d reason=%s",
-        int(highlight),physicalStats.patches,physicalStats.cpuPatches,proposalMs,physicalStats.ms,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],physicalReason.c_str());
+        "local-validation-v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d detailBound=%d gpuRetries=%d reason=%s",
+        int(highlight),physicalStats.patches,physicalStats.cpuPatches,proposalMs,physicalStats.ms,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],gpuPhysicalFallbacks,physicalReason.c_str());
     recordFusionDiagnostic(evidence);
     __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf",
         "local physical v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f reason=%s; nodes lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d detailBound=%d",

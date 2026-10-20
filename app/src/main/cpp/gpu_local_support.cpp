@@ -23,8 +23,8 @@ bool gpuLocalSupport(const cv::Mat&,const cv::Mat&,const LocalRegistration&,cv::
     reason="Vulkan backend not built"; return false;
 }
 bool gpuPatchFits(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const std::vector<cv::Rect>&,bool,
-    std::vector<cv::Vec4f>&,std::string& reason,double){reason="Vulkan backend not built";return false;}
-bool gpuFittingAvailable(size_t,bool){return false;}
+    std::vector<cv::Vec4f>&,std::string& reason,double,bool,std::vector<double>*){reason="Vulkan backend not built";return false;}
+bool gpuFittingAvailable(size_t,bool,bool){return false;}
 bool gpuPhysicalChecks(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const std::vector<PhysicalPatch>&,bool,std::vector<cv::Vec2d>&,GpuPhysicalStats&,std::string& reason){reason="Vulkan backend not built";return false;}
 bool gpuStrongSelection(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,
     const std::vector<cv::Rect>&,const std::vector<cv::Vec2d>&,std::vector<uchar>&,GpuSelectionStats& stats,std::string& reason){stats={};reason="Vulkan backend not built";return false;}
@@ -72,16 +72,21 @@ bool testFault(const char* phase) {const auto fault=std::getenv("HACHICAM_GPU_TE
 #else
 bool testFault(const char*){return false;}
 #endif
-cv::Vec4f cpuPatchFit(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,const cv::Rect& patch) {
+cv::Vec4f cpuPatchFit(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,const cv::Rect& patch,
+                     bool coded=false,double* correlation=nullptr) {
+    if(correlation)*correlation=0;
     try {
         cv::Mat mask=localFitMask(raw,validity,patch);
-        if(cv::countNonZero(mask)<256)return {0,0,-1,0};
+        if(cv::countNonZero(mask)<256)return {0,0,-1,coded ? -3.f : 0.f};
         cv::Mat transform=cv::Mat::eye(2,3,CV_32F);
         const double cc=cv::findTransformECC(ref(patch),src(patch),transform,cv::MOTION_TRANSLATION,
             cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,.0001),mask,3);
         const float dx=transform.at<float>(0,2),dy=transform.at<float>(1,2);
-        return !std::isfinite(cc) || cc<.65 || std::hypot(dx,dy)>8 ? cv::Vec4f(0,0,-1,0) : cv::Vec4f(dx,dy,float(cc),1);
-    } catch(const cv::Exception&){return {0,0,-1,0};}
+        if(!std::isfinite(cc) || cc<.65 || !std::isfinite(dx) || !std::isfinite(dy) || std::hypot(dx,dy)>8)
+            return {0,0,-1,coded ? -5.f : 0.f};
+        if(correlation)*correlation=cc;
+        return {dx,dy,float(cc),1};
+    } catch(const cv::Exception&){return {0,0,-1,coded ? -4.f : 0.f};}
 }
 cv::Mat cpuNoiseGrid(const cv::Mat& gray,int spacing,const cv::Mat& active) {
     const int nx=(gray.cols-1+spacing-1)/spacing+1,ny=(gray.rows-1+spacing-1)/spacing+1;
@@ -135,7 +140,7 @@ struct Context {
     VkPipelineLayout layout=VK_NULL_HANDLE;
     VkPipeline pipeline=VK_NULL_HANDLE;
     VkPipeline eccPipeline=VK_NULL_HANDLE;
-    std::array<VkPipeline,8> eccStages{};
+    std::array<VkPipeline,9> eccStages{};
     VkCommandPool commands=VK_NULL_HANDLE;
     VkCommandBuffer command=VK_NULL_HANDLE;
     VkDescriptorPool descriptors=VK_NULL_HANDLE;
@@ -147,10 +152,10 @@ struct Context {
         VkDeviceSize capacity=0, allocation=0; void* mapped=nullptr; } buffers[3];
     bool healthy=false, inFlight=false;
     bool eccReady=false;
-    GpuCostProfile bucketPolicy[6],noisePolicy[6],mergePolicy[9],fitPolicy[18],selectionPolicy[3];
-    int fitScopeSkip[2]{0,0};
+    GpuCostProfile bucketPolicy[6],noisePolicy[6],mergePolicy[9],fitPolicy[36],selectionPolicy[3];
+    int fitScopeSkip[4]{};
     // New count-bound returns must not numerically quarantine established converged proposals.
-    int boundedFitState[18]{}; // 0 unknown, 1 admitted, 2 CPU completion only
+    int boundedFitState[36]{}; // 0 unknown, 1 admitted, 2 CPU completion only
     std::string failure="uninitialized";
     std::mutex guard;
     Context() {
@@ -381,7 +386,7 @@ struct Context {
             auto stage=[&](int number,uint32_t count){vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,globalStages[number]);vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());vkCmdDispatch(command,count,1,1);vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&dependency,0,nullptr,0,nullptr);};
             if(selected==globalStages[0]){stage(0,groups);stage(1,groups);stage(2,groups);}
             else{stage(3,groups);stage(4,1);stage(5,groups);stage(6,14);}
-        } else if(selected==eccPipeline) {
+        } else if(selected==eccPipeline || selected==eccStages[8]) {
             auto constants=shape;
             VkMemoryBarrier dependency{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
             dependency.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
@@ -395,9 +400,8 @@ struct Context {
                     0,1,&dependency,0,nullptr,0,nullptr);
             };
             stage(0,false);stage(6,true);stage(7,true);
-            for(int iteration=0;iteration<shape[1];++iteration) {
-                stage(1,true);stage(4,false);
-            }
+            if(selected==eccStages[8])stage(8,false);
+            else for(int iteration=0;iteration<shape[1];++iteration) {stage(1,true);stage(4,false);}
             stage(5,false);
         } else if(selected==physicalStages[0]) {
             vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());
@@ -581,8 +585,20 @@ struct Context {
         if(invalid){failure="invalid shader output";return false;}
         return true;
     }
+    bool residentFitTried=false;
+    bool ensureResidentFit() {
+        if(residentFitTried)return eccStages[8]!=VK_NULL_HANDLE;
+        residentFitTried=true;
+        const int stage=8;const VkSpecializationMapEntry entry{0,0,sizeof(int)};
+        const VkSpecializationInfo specialization{1,&entry,sizeof(stage),&stage};
+        VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};info.layout=layout;
+        info.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};info.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;
+        info.stage.module=eccShader;info.stage.pName="main";info.stage.pSpecializationInfo=&specialization;
+        const auto status=vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&info,nullptr,&eccStages[8]);
+        if(status!=VK_SUCCESS){failure="optional resident ECC pipeline unavailable";return false;}return true;
+    }
     bool runFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
-                 const std::vector<cv::Rect>& patches,std::vector<cv::Vec4f>& results,int iterations=30,int* countLimited=nullptr,bool keepBoundedTags=false) {
+                 const std::vector<cv::Rect>& patches,std::vector<cv::Vec4f>& results,int iterations=30,int* countLimited=nullptr,bool keepBoundedTags=false,bool resident=false) {
         if(patches.empty() || patches.size()>16){failure="unsupported fitting batch";return false;}
         std::vector<uint32_t> packed;
         size_t pixels=0,largest=0;
@@ -612,7 +628,7 @@ struct Context {
         std::memcpy(buffers[1].mapped,packed.data(),sizes[1]);
         std::array<int,8> shape{int(patches.size()),iterations,0,0,int(chunks),0,0,0};const float epsilon=.0001f;
         std::memcpy(&shape[2],&epsilon,sizeof(float));
-        if(!dispatch(eccPipeline,sizes,shape,uint32_t(patches.size())))return false;
+        if(!dispatch(resident ? eccStages[8] : eccPipeline,sizes,shape,uint32_t(patches.size())))return false;
         results.resize(patches.size());static_assert(sizeof(cv::Vec4f)==16);
         std::memcpy(results.data(),buffers[2].mapped,results.size()*sizeof(cv::Vec4f));
         int bounded=0;
@@ -1318,7 +1334,7 @@ bool gpuMergeAnchors(const std::vector<SamplingPlate>& plates,const cv::Mat& ref
     } catch(const std::exception&){c->healthy=false;reason="GPU merge host failure";return false;}
 }
 bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
-    const std::vector<cv::Rect>& patches,bool highlight,std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs) {
+    const std::vector<cv::Rect>& patches,bool highlight,std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs,bool residual,std::vector<double>* cpuCorrelations) {
     if(ref.empty() || ref.dims!=2 || src.dims!=2 || raw.dims!=2 || (!validity.empty() && validity.dims!=2) ||
         ref.type()!=CV_8U || src.type()!=CV_8U || raw.type()!=CV_8U || ref.size()!=src.size() || ref.size()!=raw.size() ||
         ref.total()>16000000 || patches.empty() || patches.size()>4096 || !std::isfinite(selectionMs) || selectionMs<0 ||
@@ -1328,37 +1344,41 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
     auto* context=sharedContext();if(!context){reason="GPU context unavailable";return false;}
     std::lock_guard<std::mutex> lock(context->guard);
     if(!context->healthy || !context->eccReady){reason=context->healthy ? "ECC startup conformance unavailable" : context->failure;return false;}
-    const int key=(patches.size()<=8 ? 0 : patches.size()<=16 ? 1 : 2)+(highlight ? 3 : 0)+sizeBucket(ref.total())*6;
+    const char* fitStage=residual ? "residual-fit" : "fit";
+    const int scope=(highlight ? 1 : 0)+(residual ? 2 : 0);
+    const int key=(patches.size()<=8 ? 0 : patches.size()<=16 ? 1 : 2)+(highlight ? 3 : 0)+sizeBucket(ref.total())*6+(residual ? 18 : 0);
     auto& policy=context->fitPolicy[key];
 #if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
-    if(!policy.eligible()){context->fitScopeSkip[highlight ? 1 : 0]=3;traceDecision(policy,"fit",key);reason="calibrated CPU fitting preference";return false;}
+    if(!policy.eligible()){context->fitScopeSkip[scope]=3;traceDecision(policy,fitStage,key);reason="calibrated CPU fitting preference";return false;}
 #endif
     fits.assign(patches.size(),cv::Vec4f(0,0,-1,0));
+    if(cpuCorrelations)cpuCorrelations->assign(patches.size(),0);
     try {
         for(size_t begin=0;begin<patches.size();begin+=16) {
             const size_t end=std::min(begin+16,patches.size());
             const std::vector<cv::Rect> batch(patches.begin()+begin,patches.begin()+end);
             std::vector<cv::Vec4f> output;
             const auto start=std::chrono::steady_clock::now();
-            if(!context->runFits(ref,src,raw,validity,batch,output,30,nullptr,true)) {
+            if(!context->runFits(ref,src,raw,validity,batch,output,30,nullptr,true,false)) {
                 context->healthy=false;reason=context->failure;fits.clear();return false;
             }
 #if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
             const bool newBounded=context->boundedFitState[key]==0 && std::any_of(output.begin(),output.end(),[](const auto& v){return v[3]==3;});
             if(policy.needsProbe() || newBounded) {
                 const auto gpuEnd=std::chrono::steady_clock::now();
-                std::vector<cv::Vec4f> cpu(batch.size());
+                std::vector<cv::Vec4f> cpu(batch.size());std::vector<double> cpuCc(batch.size());
                 #pragma omp parallel for schedule(dynamic)
-                for(int i=0;i<int(batch.size());++i)cpu[i]=cpuPatchFit(ref,src,raw,validity,batch[i]);
+                for(int i=0;i<int(batch.size());++i)cpu[i]=cpuPatchFit(ref,src,raw,validity,batch[i],residual,&cpuCc[i]);
                 const auto cpuEnd=std::chrono::steady_clock::now();
                 const auto warmStart=std::chrono::steady_clock::now();
                 std::vector<cv::Vec4f> warm;
-                if(!context->runFits(ref,src,raw,validity,batch,warm,30,nullptr,true)){context->healthy=false;reason=context->failure;fits.clear();return false;}
+                if(!context->runFits(ref,src,raw,validity,batch,warm,30,nullptr,true,false)){context->healthy=false;reason=context->failure;fits.clear();return false;}
                 const double warmMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-warmStart).count();
+                if(residual && testFault("residual_numeric") && !output.empty())output[0]={.5f,0,.99f,1};
                 bool hasBounded=false,boundedMatch=true;
                 for(size_t i=0;i<batch.size();++i)for(const auto& candidate:{output[i],warm[i]})if(candidate[3]==3) {
                     hasBounded=true;
-                    if(!cpu[i][3] || std::hypot(cpu[i][0]-candidate[0],cpu[i][1]-candidate[1])>.05 || std::abs(cpu[i][2]-candidate[2])>.002)boundedMatch=false;
+                    if(cpu[i][3]<=0 || std::hypot(cpu[i][0]-candidate[0],cpu[i][1]-candidate[1])>.05 || std::abs(cpu[i][2]-candidate[2])>.002)boundedMatch=false;
                 }
                 if(context->boundedFitState[key]==0 && hasBounded)context->boundedFitState[key]=boundedMatch ? 1 : 2;
                 if(hasBounded) {
@@ -1371,11 +1391,11 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
                 }
                 bool match=true;int usable=0,missing=0;
                 for(size_t i=0;i<batch.size();++i) {
-                    if(output[i][3]) {
+                    if(output[i][3]>0) {
                         ++usable;
-                        if(!cpu[i][3] || std::hypot(cpu[i][0]-output[i][0],cpu[i][1]-output[i][1])>.05 || std::abs(cpu[i][2]-output[i][2])>.002)match=false;
+                        if(cpu[i][3]<=0 || std::hypot(cpu[i][0]-output[i][0],cpu[i][1]-output[i][1])>.05 || std::abs(cpu[i][2]-output[i][2])>.002)match=false;
                     } else ++missing;
-                    if(warm[i][3] && (!cpu[i][3] || std::hypot(cpu[i][0]-warm[i][0],cpu[i][1]-warm[i][1])>.05 || std::abs(cpu[i][2]-warm[i][2])>.002))match=false;
+                    if(warm[i][3]>0 && (cpu[i][3]<=0 || std::hypot(cpu[i][0]-warm[i][0],cpu[i][1]-warm[i][1])>.05 || std::abs(cpu[i][2]-warm[i][2])>.002))match=false;
                     if(bool(output[i][3])!=bool(warm[i][3]))match=false;
 #ifdef HACHICAM_GPU_TEST_CONTROL
                     __android_log_print(ANDROID_LOG_INFO,"HachiCam-GPU-Test","ECC probe i=%zu CPU=%g,%g,%g,%g GPU=%g,%g,%g,%g",
@@ -1398,17 +1418,18 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
                 const double estimatedCpu=cpuMs*double(patches.size())/batch.size();
                 // Empty usable output is a cost fallback, not numerical disagreement.
                 policy.record(match,gpuMs,warmMs,cpuMs,usable ? estimatedGpu : estimatedCpu*2,estimatedCpu,
-                    "selectorMs="+std::to_string(selectionMs)+" fallbackMs="+std::to_string(fallbackMs)+" missing="+std::to_string(missing));
+                    "selectorMs="+std::to_string(selectionMs)+" fallbackMs="+std::to_string(fallbackMs)+" missing="+std::to_string(missing)+
+                    (residual ? " route=tiled" : ""));
                 __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf",
                     "GPU ECC calibration v5 key=%d patches=%zu/%zu coldCallMs=%.3f warmCallMs=%.3f cpuBatchMs=%.3f fallbackMs=%.3f selectorMs=%.3f estimatedGpuMs=%.3f estimatedCpuMs=%.3f conforming=%d usable=%d missing=%d preferred=%s",
                     key,batch.size(),patches.size(),gpuMs,warmMs,cpuMs,fallbackMs,selectionMs,estimatedGpu,estimatedCpu,int(match),usable,missing,policy.state==GpuCostProfile::Gpu ? "Vulkan" : "CPU");
-                traceDecision(policy,"fit-calibration",key);
+                traceDecision(policy,residual ? "residual-fit-calibration" : "fit-calibration",key);
                 if(policy.state!=GpuCostProfile::Gpu) {
-                    context->fitScopeSkip[highlight ? 1 : 0]=3;
-                    for(size_t i=0;i<cpu.size();++i){if(cpu[i][3])cpu[i][3]=2;fits[begin+i]=cpu[i];}
+                    context->fitScopeSkip[scope]=3;
+                    for(size_t i=0;i<cpu.size();++i){if(cpu[i][3]>0)cpu[i][3]=2;fits[begin+i]=cpu[i];if(cpuCorrelations)(*cpuCorrelations)[begin+i]=cpuCc[i];}
                     reason="calibration reused CPU fits; remaining patches use CPU";return true;
                 }
-                for(size_t i=0;i<cpu.size();++i)if(!output[i][3] && cpu[i][3]){output[i]=cpu[i];output[i][3]=2;}
+                for(size_t i=0;i<cpu.size();++i)if(!output[i][3] && (cpu[i][3]>0 || residual)){output[i]=cpu[i];if(output[i][3]>0)output[i][3]=2;if(cpuCorrelations)(*cpuCorrelations)[begin+i]=cpuCc[i];}
             }
 #endif
             for(auto& fit:output)if(fit[3]==3) {
@@ -1419,25 +1440,25 @@ bool gpuPatchFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const
             }
             std::copy(output.begin(),output.end(),fits.begin()+begin);
         }
-        traceDecision(policy,"fit",key);reason="validated batched ECC proposals";return true;
+        traceDecision(policy,fitStage,key);reason="validated batched ECC proposals";return true;
     } catch(const std::exception&) {reason="GPU ECC host failure";fits.clear();return false;}
 }
-bool gpuFittingAvailable(size_t pixels,bool highlight) {
+bool gpuFittingAvailable(size_t pixels,bool highlight,bool residual) {
 #ifdef HACHICAM_GPU_TEST_CONTROL
-    if(std::getenv("HACHICAM_FORCE_CPU"))return false;
+    if(std::getenv("HACHICAM_FORCE_CPU") && !(residual && std::getenv("HACHICAM_GPU_TEST_RESIDUAL_ONLY")))return false;
 #endif
     if(pixels>16000000)return false;
     auto* context=sharedContext();if(!context)return false;
     std::lock_guard<std::mutex> lock(context->guard);
-    const int base=(highlight ? 3 : 0)+sizeBucket(pixels)*6;
+    const int base=(highlight ? 3 : 0)+sizeBucket(pixels)*6+(residual ? 18 : 0);
     if(!context->healthy || !context->eccReady) {
         if(computeTrace.size()<16280)computeTrace+="fit unavailable: "+(context->healthy ? std::string("startup conformance") : context->failure)+"\n";
         return false;
     }
     const bool admitted=context->fitPolicy[base].state==GpuCostProfile::Gpu || context->fitPolicy[base+1].state==GpuCostProfile::Gpu || context->fitPolicy[base+2].state==GpuCostProfile::Gpu;
 #if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
-    auto& skip=context->fitScopeSkip[highlight ? 1 : 0];
-    if(!admitted && skip>0){--skip;for(int i=0;i<3;++i)if(context->fitPolicy[base+i].state!=GpuCostProfile::Unknown)traceDecision(context->fitPolicy[base+i],"fit-scope-cooldown",base+i);return false;}
+    auto& skip=context->fitScopeSkip[(highlight ? 1 : 0)+(residual ? 2 : 0)];
+    if(!admitted && skip>0){--skip;for(int i=0;i<3;++i)if(context->fitPolicy[base+i].state!=GpuCostProfile::Unknown)traceDecision(context->fitPolicy[base+i],residual ? "residual-fit-scope-cooldown" : "fit-scope-cooldown",base+i);return false;}
 #endif
     for(int i=0;i<3;++i)if(context->fitPolicy[base+i].state!=GpuCostProfile::NumericalFailure)return true;
     return false;
@@ -1449,11 +1470,11 @@ bool gpuTestQuantizedPhysical(const cv::Mat& ref,const cv::Mat& a,const cv::Mat&
     return c->healthy && c->runPhysical(ref,a,b,validity,patches,true,got,ambiguous,0);
 }
 bool gpuTestCountLimitedFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
-    const std::vector<cv::Rect>& patches,int iterations,std::vector<cv::Vec4f>& fits,int& bounded) {
+    const std::vector<cv::Rect>& patches,int iterations,std::vector<cv::Vec4f>& fits,int& bounded,bool resident) {
     if(iterations<1 || iterations>30 || patches.empty() || patches.size()>16)return false;
     auto* context=sharedContext();if(!context)return false;
     std::lock_guard<std::mutex> lock(context->guard);
-    return context->healthy && context->eccReady && context->runFits(ref,src,raw,validity,patches,fits,iterations,&bounded);
+    return context->healthy && context->eccReady && (!resident || context->ensureResidentFit()) && context->runFits(ref,src,raw,validity,patches,fits,iterations,&bounded,false,resident);
 }
 GpuTestState gpuTestState() {
     auto* c=sharedContext();if(!c)return {};

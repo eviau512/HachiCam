@@ -12,9 +12,9 @@ void runGpuFittingTests() {
     {
         cv::Mat source;const cv::Mat h=(cv::Mat_<float>(2,3)<<1,0,.7f,0,1,.4f);
         cv::warpAffine(reference,source,h,reference.size(),cv::INTER_LINEAR,cv::BORDER_REFLECT_101);
-        for(int limit:{1,2}) {
+        for(bool resident:{false,true})for(int limit:{1,2}) {
             std::vector<cv::Vec4f> got;int bounded=0;
-            if(!fusion::gpuTestCountLimitedFits(reference,source,source,{},patches,limit,got,bounded) || !bounded)
+            if(!fusion::gpuTestCountLimitedFits(reference,source,source,{},patches,limit,got,bounded,resident) || !bounded)
                 throw std::runtime_error("No actual bounded-count GPU return");
             for(size_t i=0;i<patches.size();++i) {
                 cv::Mat transform=cv::Mat::eye(2,3,CV_32F);
@@ -43,6 +43,15 @@ void runGpuFittingTests() {
             std::cout<<"GPU ECC shift="<<shift.x<<","<<shift.y<<" patch="<<i<<" gpu="<<got[i]<<" cpu="<<transform.at<float>(0,2)<<","<<transform.at<float>(1,2)<<" cc="<<cc<<" difference="<<disagreement<<"\n";
             if(got[i][3]!=1 || disagreement>.05 || std::abs(got[i][2]-cc)>.002)throw std::runtime_error("GPU fitting discrepancy");
             ++accepted;
+        }
+        if(!fusion::gpuPatchFits(reference,source,source,validity,patches,false,got,reason,0,true))
+            throw std::runtime_error("Residual batched GPU fitting not executed: "+reason);
+        for(size_t i=0;i<patches.size();++i) {
+            cv::Mat transform=cv::Mat::eye(2,3,CV_32F);
+            const double cc=cv::findTransformECC(reference(patches[i]),source(patches[i]),transform,cv::MOTION_TRANSLATION,
+                cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,.0001),fusion::localFitMask(source,validity,patches[i]),3);
+            if(got[i][3]!=1 || std::hypot(got[i][0]-transform.at<float>(0,2),got[i][1]-transform.at<float>(1,2))>.05 || std::abs(got[i][2]-cc)>.002)
+                throw std::runtime_error("Residual batched non-square/masked translation discrepancy");
         }
     }
     cv::Mat flat(321,321,CV_8U,cv::Scalar(80));std::vector<cv::Vec4f> got;std::string reason;
@@ -86,6 +95,8 @@ void runGpuFittingTests() {
     }
     if(!fusion::gpuPatchFits(flat,flat,flat,cv::Mat(),{{0,0,321,321}},false,got,reason))throw std::runtime_error("Flat solver not executed");
     if(got[0][3])throw std::runtime_error("Flat patch falsely solved");
+    if(!fusion::gpuPatchFits(flat,flat,flat,cv::Mat(),{{0,0,321,321}},true,got,reason,0,true) || got[0][3])
+        throw std::runtime_error("Residual batched flat patch falsely solved");
     if(fusion::gpuPatchFits(flat,flat,flat,cv::Mat(),{{INT_MAX,0,321,321}},false,got,reason))throw std::runtime_error("Overflowing ROI accepted");
-    std::cout<<"GPU ECC usable comparisons="<<accepted<<"; flat fallback PASS\n";
+    std::cout<<"GPU ECC usable comparisons="<<accepted<<"; resident residual/COUNT-bound and flat fallback PASS\n";
 }

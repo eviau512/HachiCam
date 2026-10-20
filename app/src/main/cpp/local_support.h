@@ -112,12 +112,16 @@ bool gpuLocalSupport(const cv::Mat& ref, const cv::Mat& src, const LocalRegistra
                      cv::Mat& output, std::string& reason,const cv::Mat& validity=cv::Mat());
 bool gpuPatchFits(const cv::Mat& refAlign,const cv::Mat& srcAlign,const cv::Mat& rawSrc,
     const cv::Mat& validity,const std::vector<cv::Rect>& patches,bool highlight,
-    std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs=0);
-bool gpuFittingAvailable(size_t sourcePixels,bool highlight);
+    std::vector<cv::Vec4f>& fits,std::string& reason,double selectionMs=0,
+    bool residual=false,std::vector<double>* cpuCorrelations=nullptr);
+// Residual calibration reuses tags 2 (CPU fit), -3/-4/-5 (original CPU
+// mask/exception/transform rejection); tag 0 is uncomputed and needs CPU work.
+// cpuCorrelations retains the double value for tag 2 physical decisions.
+bool gpuFittingAvailable(size_t sourcePixels,bool highlight,bool residual=false);
 #ifdef HACHICAM_GPU_TEST_CONTROL
 bool gpuTestQuantizedPhysical(const cv::Mat&,const cv::Mat&,const cv::Mat&,const cv::Mat&,const std::vector<PhysicalPatch>&,std::vector<cv::Vec2d>&);
 bool gpuTestCountLimitedFits(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,const cv::Mat& validity,
-    const std::vector<cv::Rect>& patches,int iterations,std::vector<cv::Vec4f>& fits,int& bounded);
+    const std::vector<cv::Rect>& patches,int iterations,std::vector<cv::Vec4f>& fits,int& bounded,bool resident=false);
 struct GpuTestState { bool healthy=false,inFlight=false; unsigned long long allocation=0; };
 GpuTestState gpuTestState();
 bool gpuTestPreparedPlanes(const cv::Mat& ref,const cv::Mat& src,const cv::Mat& raw,

@@ -60,5 +60,30 @@ int main(){try{
     cv::Mat otherProfile(1025,1025,CV_8U,cv::Scalar(128));
     if(!fusion::gpuNoiseGrid(otherProfile,256,{},noise,reason)||!fusion::gpuTestState().healthy)throw std::runtime_error("Mapping numerical rejection disabled unrelated stage");
     std::cout<<"PASS actual mapping calibration numeric rejection, exact CPU reuse and stage isolation\n";
+    const std::vector<cv::Rect> residualPatches{{0,0,reference.cols,reference.rows},{0,0,32,32}};
+    std::vector<cv::Vec4f> fits;std::vector<double> correlations;
+#ifdef _WIN32
+    _putenv_s("HACHICAM_GPU_TEST_FAULT","residual_numeric");
+#else
+    setenv("HACHICAM_GPU_TEST_FAULT","residual_numeric",1);
+#endif
+    if(!fusion::gpuPatchFits(reference,source,source,{},residualPatches,false,fits,reason,0,true,&correlations))
+        throw std::runtime_error("Residual numerical probe did not return CPU results");
+    cv::Mat expectedTransform=cv::Mat::eye(2,3,CV_32F);
+    const double residualCc=cv::findTransformECC(reference,source,expectedTransform,cv::MOTION_TRANSLATION,
+        cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,30,.0001),fusion::localFitMask(source,{},residualPatches[0]),3);
+    if(fits[0][3]!=2 || fits[0][0]!=expectedTransform.at<float>(0,2) || fits[0][1]!=expectedTransform.at<float>(1,2) ||
+       correlations[0]!=residualCc || fits[1][3]!=-3 || fusion::gpuDiagnostics().find("residual-fit-calibration key=18 state=numeric-block")==std::string::npos)
+        throw std::runtime_error("Residual rejection lost exact CPU correlation, transform or mask failure");
+#ifdef _WIN32
+    _putenv_s("HACHICAM_GPU_TEST_FAULT","");
+#else
+    unsetenv("HACHICAM_GPU_TEST_FAULT");
+#endif
+    for(int i=0;i<12;++i)if(fusion::gpuPatchFits(reference,source,source,{},residualPatches,false,fits,reason,0,true,&correlations))
+        throw std::runtime_error("Residual numerical profile re-probed");
+    if(!fusion::gpuPatchFits(reference,source,source,{},residualPatches,false,fits,reason) || !fusion::gpuTestState().healthy)
+        throw std::runtime_error("Residual numerical rejection disabled strong fits");
+    std::cout<<"PASS residual numeric isolation, exact CPU reuse including negative mask result\n";
     std::cout<<"PASS actual global calibration numeric rejection, exact CPU reuse and permanent profile isolation\n";
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

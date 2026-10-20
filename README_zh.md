@@ -1,7 +1,7 @@
 > [!NOTE]
 > 本项目的作者完全通过 Vibe Coding 构建了本项目，且并不完全清楚这个 Agent 到底偷偷写了些什么代码。 ¯\\\_(ツ)\_/¯
 
-> 当前契约、实现及限制见 [规格索引](specs/README.md)、[TODO](TODO.md) 和 [rc24 区域 GPU 报告](specs/reports/RC24_REGIONAL_GPU_MAPPING_AND_SOLVER_2026-10-20.zh-CN.md)。测试版构建入口：`scripts/build-test.ps1`。
+> 当前契约、实现及限制见 [规格索引](specs/README.md)、[TODO](TODO.md) 和 [rc25 剩余配准报告](specs/reports/RC25_RESIDUAL_LOCAL_ECC_2026-10-20.zh-CN.md)。测试版构建入口：`scripts/build-test.ps1`。
 
 <div align="center">
 

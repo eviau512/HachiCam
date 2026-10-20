@@ -105,6 +105,15 @@ numeric disagreement independently into both new stages and verifies exact CPU
 reuse, permanent class rejection and unrelated-stage operation. Mapping-only
 isolation and fault controls are host-test-only and must be absent from APKs.
 
+The rc25 suite checks actual residual tiled ECC translation, non-square/masked
+inputs, flat rejection and research resident COUNT-bound updates against OpenCV.
+Production residual calibration is independent of strong selection and injects
+a numeric disagreement into the selected tiled route, verifying exact
+CPU transform/double correlation/mask-failure reuse and permanent class isolation.
+Existing strong fitting remains available. Full image, noise, HDR, occlusion and
+streaming regressions remain required; frozen real-image replays and Android
+performance are separate evidence, not certified by these synthetic cases.
+
 Verified official package checksums used for this workspace:
 
 | Package | SHA256 |

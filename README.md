@@ -1,7 +1,7 @@
 > [!NOTE]
 > The owner of this repo built this entirely via vibe coding, and isn't quite sure what this Agent actually does. ¯\\\_(ツ)\_/¯
 
-> Current contracts and implementation limits: [specifications](specs/README.md), [TODO](TODO.md) and [rc24 regional GPU report](specs/reports/RC24_REGIONAL_GPU_MAPPING_AND_SOLVER_2026-10-20.zh-CN.md). Build the test APK with `scripts/build-test.ps1`.
+> Current contracts and implementation limits: [specifications](specs/README.md), [TODO](TODO.md) and [rc25 residual ECC report](specs/reports/RC25_RESIDUAL_LOCAL_ECC_2026-10-20.zh-CN.md). Build the test APK with `scripts/build-test.ps1`.
 
 <div align="center">
 

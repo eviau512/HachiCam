@@ -902,8 +902,10 @@ experimental selector uses the existing noise-corrected high-pass correlation
 >=0.90, detail ratio >=0.68 and both signal variances >=max(2.25, four times
 noise variance), with the original valid patch mask. These are GPU scheduling
 conditions, never replacement acceptance gates or reasons to remove CPU evidence.
-Large/multimodal residuals and noisy/weak correspondence stay CPU; no wider GPU
-discrepancy tolerance is permitted. Include selector/noise preparation in timing,
+In this initial strong-only class, large/multimodal residuals and noisy/weak
+correspondence stay CPU. Section 7.10 later adds an independently calibrated
+residual proposal class; it does not widen the GPU discrepancy tolerance or
+grant support to a failed fit. Include selector/noise preparation in timing,
 cache each computed source noise estimate for the subsequent physical check,
 and preserve deterministic original node ordering in GPU batches.
 If a usable GPU proposal fails the independent physical detail/geometry check,
@@ -996,6 +998,9 @@ classes. A medium-correlation experiment (>=0.70 and signal variances >=2.25)
 failed frozen CPU/GPU conformance by approximately 0.18–0.60 px in otherwise
 usable proposals, beyond the unchanged 0.05 px bound. It remains rejected research
 and must not be enabled or weaken calibration limits for utilization numbers.
+The rc25 residual route in section 7.10 instead uses the original CPU preflight
+and a separate real CPU/GPU calibration class; discrepant weak work remains
+numerically blocked. It does not restore this rejected >=0.70 heuristic.
 Charge the complete remaining GPU-exclusive selector duration, preserve original
 ordering and include calibration overhead in capture time. Log prepared-node
 count so zero GPU proposals cannot be mistaken for offloaded fitting. CPU-only
@@ -1104,7 +1109,8 @@ Only launch/charge CPU missing-proposal completion when a GPU proposal is actual
 missing. A zero-work OpenMP team is calibration overhead, not future completion
 cost. Reuse measured CPU fits for calibration output when CPU is selected.
 Shared physical checks and retry semantics remain unchanged, including <=0.05 px,
-<=0.002 correlation and the rejection of medium-correspondence scheduling.
+<=0.002 correlation and the rejection of the historical medium-correspondence
+heuristic. Section 7.10 separately defines calibrated residual proposal scheduling.
 
 **GPU strong selector:** preserve the original CPU cheap interior-variance and
 noise preconditions. Upload only candidate-patch reference/source/validity byte
@@ -1338,6 +1344,64 @@ coordinate tolerance may change final rounding; measure final max/p99 and change
 pixels, not just optimizer agreement. Phone adoption/performance remains separate.
 The mapping-only isolation and fault-injection controls are host-test-only and
 must be absent from shipped Android libraries.
+
+### 7.10 rc25 residual local ECC migration (specified 2026-10-20 before implementation)
+
+Status: implemented / experimental after host tests and natural-image automatic
+replays; phone performance/quality acceptance pending. Fixed-other-backend natural
+image isolation did not activate this GPU class and is not a positive GPU proof.
+The 20261020-203201 export contains three rc24 captures and one historical rc22
+capture, not four rc24 timing repetitions. rc24 native work takes 19.347–21.957 s,
+including 7.837–10.235 s local registration. Regional mapping actually executes
+on GPU, while the iterative solver correctly remains CPU-cost preferred. The
+strong selector still leaves many original local ECC nodes on CPU.
+
+After the original low-signal, highlight identity and detail-energy impossibility
+checks, permit debug GPU proposals for residual nodes lacking a strong proposal.
+Do not require the strong >=0.90 prequalification for this separate scheduling
+class: that test grants neither geometric evidence nor support. Keep original
+ECC masks, >=256 samples, COUNT|EPS 30 /0.0001, <=8 px shift / >=0.65 ECC, all
+noise-corrected physical/detail thresholds, gate creation and CPU retry semantics.
+Preserve active HDR demand, streaming single-patch exclusion and source bounds.
+
+Use a resident per-patch workgroup: existing exact Gaussian/mask preparation,
+then one dispatch for complete ECC iterations and one final publication. Stride
+all pixels, use uniform shared reductions/barriers, preserve OpenCV interpolation
+quantization and COUNT-bound final updates. One patch must not depend on another
+workgroup's progress. Host investigation showed this resident route slower and
+numerically rejected on representative weak patches. It remains a host-tested
+research kernel, not a production candidate in rc25. Production residual fitting
+uses the existing tiled-reduction route directly, avoiding the extra resident
+pipeline creation and two discarded trial calls in camera latency. Independently
+calibrate this residual tiled class against the same CPU authority and record
+route identity and all actual probe costs. A nonconforming residual class remains
+numerically isolated. No forced GPU adoption or resident speedup claim.
+Keep <=16 patches, three existing buffers and <=64 MiB
+actual combined allocations; no second context or full-image float upload.
+
+Give residual base/highlight /size/batch classes independent numerical/cost
+profiles and scope cooldowns; a weak numerical rejection must not disable strong
+fits or unrelated kernels. Compare cold/warm GPU proposals to original CPU ECC:
+<=0.05 px / <=0.002 correlation, including bounded-count proposals; inject an
+actual residual numerical disagreement in host tests. Keep the <=90% complete
+cost rule, full packing/selection/CPU missing completion costs, at most three
+probes with bounded cooldown. Calibration CPU results, including exact failure
+codes and double correlation, must be reused on rejection without refitting.
+An uncomputed missing GPU proposal still completes on CPU. Never count these
+completions as GPU work or loosen eligibility to increase GPU utilization.
+
+Record residual candidates, actual GPU proposals, reused CPU results, CPU ECC
+calls, GPU-to-CPU physical retries and preparation/proposal/validation timing in
+the same capture's bounded trace; distinguish actual counts from profile history.
+Require actual resident GPU translation/non-square/masked/flat/COUNT-bound tests,
+numeric isolation, complete CPU/GPU regressions and frozen CPU byte parity.
+Compare production automatic routes on original screen/lamp captures, disclosing
+backend qualification differences. Host timing and overall driver busy samples
+do not certify phone speedup or application-exclusive GPU utilization. Release
+remains CPU, lamp contour recovery and full streaming offload remain unfinished.
+The host-only residual-isolation control may keep all other GPU stages disabled
+while exercising this class's real numerical/cost policy. Require published GPU
+proposals in positive isolation cases; the control must be absent from APKs.
 
 ## 8. Acceptance and limits
 

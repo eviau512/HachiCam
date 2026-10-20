@@ -8,6 +8,7 @@ layout(std430,binding=2) buffer Workspace { vec4 work[]; };
 layout(push_constant) uniform Limits { int jobs; int iterations; float epsilon; int stage; int chunks; int r2; int r3; int r4; } p;
 shared vec4 a[128];shared vec4 b[128];shared vec4 c[128];
 shared vec4 center;
+shared vec4 residentState;
 uint base(uint id) {return uint(p.jobs)+id*(2u+uint(p.chunks)*4u);}
 float point(uvec4 j,int plane,int x,int y) {
     if(x<0 || y<0 || x>=int(j.y) || y>=int(j.z))return 0.;
@@ -74,6 +75,60 @@ void main() {
                 image[j.x+3u*j.w+k]=.5*(prepared(j,1,x,y+1)-prepared(j,1,x,y-1))*mask;
             }
         }
+        return;
+    }
+    if(kernelStage==8) {
+        if(lane==0)residentState=work[at];
+        barrier();
+        for(int iteration=0;iteration<p.iterations;++iteration) {
+            vec4 state=residentState;
+            if(state.w!=0.)break; // Uniform across this patch's workgroup.
+            vec4 sums=vec4(0.);
+            for(uint k=lane;k<j.w;k+=128u) {
+                int x=int(k%j.y),y=int(k/j.y);
+                if(validMask(j,x,y,state.xy))sums+=vec4(warped(j,x,y,state.xy).x,image[j.x+k],1.,0.);
+            }
+            a[lane]=sums;b[lane]=vec4(0.);c[lane]=vec4(0.);reduceAll(lane);
+            if(lane==0)center=vec4(a[0].z>0. ? a[0].xy/a[0].z : vec2(0.),a[0].z,0.);
+            barrier();
+            if(center.z<1.) {if(lane==0)residentState.w=2.;barrier();break;}
+            vec4 s0=vec4(0.),s1=vec4(0.),s2=vec4(0.);
+            for(uint k=lane;k<j.w;k+=128u) {
+                int x=int(k%j.y),y=int(k/j.y);vec3 v=warped(j,x,y,state.xy);
+                bool mask=validMask(j,x,y,state.xy);
+                float iz=mask ? v.x-center.x : v.x;
+                float tz=mask ? image[j.x+k]-center.y : 0.;
+                s0+=vec4(mask ? iz*iz : 0.,tz*tz,iz*tz,v.y*v.y);
+                s1+=vec4(v.y*v.z,v.z*v.z,v.y*iz,v.z*iz);
+                s2+=vec4(v.y*tz,v.z*tz,mask ? v.y : 0.,mask ? v.z : 0.);
+            }
+            a[lane]=s0;b[lane]=s1;c[lane]=s2;reduceAll(lane);
+            if(lane==0) {
+                float h00=a[0].w,h01=b[0].x,h11=b[0].y;
+                float determinant=h00*h11-h01*h01;
+                if(a[0].x<=0. || a[0].y<=0. || determinant<=max(1e-6,h00*h11*1e-8))residentState.w=2.;
+                else {
+                    mat2 inverse=mat2(h11,-h01,-h01,h00)/determinant;
+                    vec2 ip=b[0].zw,tp=c[0].xy,projected=inverse*ip;
+                    float denominator=a[0].z-dot(tp,projected);
+                    if(denominator<=0.)residentState.w=2.;
+                    else {
+                        float lambda=(a[0].x-dot(ip,projected))/denominator;
+                        vec2 delta=inverse*(lambda*tp-ip);
+                        float rho=a[0].z/sqrt(a[0].x*a[0].y);
+                        if(isnan(rho)||isinf(rho)||any(isnan(delta))||any(isinf(delta)))residentState.w=2.;
+                        else {
+                            bool converged=abs(rho-state.z)<p.epsilon;
+                            state.xy+=delta;state.z=rho;
+                            state.w=length(state.xy)>16. ? 2. : converged ? 1. : 0.;
+                            residentState=state;
+                        }
+                    }
+                }
+            }
+            barrier();
+        }
+        if(lane==0)work[at]=residentState;
         return;
     }
     vec4 state=work[at];
