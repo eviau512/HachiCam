@@ -789,6 +789,8 @@ class CameraViewModel : ViewModel() {
                     .put("gpuPhysicalCheckVersion",if(useStreaming) "not-used" else "batched-physical-v1")
                     .put("highlightBlendVersion",if(hdr) {if(useStreaming) "stream-bounded-coverage-v1" else "continuous-support-union-v1"} else "not-used")
                     .put("localSchedulingVersion",if(useStreaming) "patch-detail-bound-v1" else "bounded-hp-detail-bound-v1")
+                    .put("regionalSolverVersion",if(useStreaming) "not-used-streaming" else if(BuildConfig.DEBUG) "resident-regional-solver-v1" else "cpu-regional-solver-v1")
+                    .put("regionalMappingVersion",if(useStreaming) "not-used-streaming" else if(BuildConfig.DEBUG) "relative-observation-mapping-v1" else "cpu-observation-mapping-v1")
                     .put("remainingScope","reference/decode/prepare/fusion/HDR/reconstruction; not pure SR")
             } ?: JSONObject.NULL)
             srRecord.put("backendDecisions",report.backendDecisions)

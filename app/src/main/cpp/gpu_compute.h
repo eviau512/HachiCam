@@ -1,5 +1,7 @@
 #pragma once
 #include "regional_reconstruction.h"
+#include "regional_solver.h"
+#include "regional_mapping.h"
 #include <string>
 
 namespace fusion {
@@ -8,6 +10,10 @@ void recordFusionDiagnostic(const std::string& line);
 std::string gpuDiagnostics();
 struct GpuGlobalStats {int calls=0,iterations=0;double ms=0;};
 GpuGlobalStats gpuGlobalStats();
+bool gpuRegionalSolve(const cv::Mat& initial,const std::vector<RegionalObservation>& observations,
+                      RegionalSolve& result,bool& usedGpu,std::string& reason);
+bool gpuObservationMapping(const SamplingPlate& plate,const cv::Rect& source,const cv::Rect& patch,
+                           std::vector<MappedObservation>& result,bool& usedGpu,int& completed,std::string& reason);
 bool gpuGlobalECC(const cv::Mat& reference,const cv::Mat& source,const cv::Mat& initial,
     int model,cv::TermCriteria criteria,double sourceScale,cv::Mat& result,double& correlation,std::string& reason);
 struct GpuComputeStats {

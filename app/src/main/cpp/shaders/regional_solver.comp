@@ -1,0 +1,75 @@
+#version 450
+layout(local_size_x=128) in;
+layout(std430,binding=0) readonly buffer Input {uint data[];};
+layout(std430,binding=1) buffer Work {float work[];};
+layout(std430,binding=2) writeonly buffer Output {float result[];};
+layout(push_constant) uniform Shape {int pixels;int observations;int obs;int prefix;int edges;int unused;int costs;int state;} p;
+shared float errors[128];
+shared float beforeError,afterError;
+shared bool running,accepted,boundary;
+float f(int i){return uintBitsToFloat(data[i]);}
+vec3 value(int i,bool candidate){int at=4*(i+(candidate?p.pixels:0));return vec3(work[at],work[at+1],work[at+2]);}
+void writeValue(int i,vec3 v,bool candidate){int at=4*(i+(candidate?p.pixels:0));work[at]=v.x;work[at+1]=v.y;work[at+2]=v.z;}
+void storageBarrier(){memoryBarrierBuffer();barrier();}
+float residualAndCost(bool candidate){
+    int lane=int(gl_LocalInvocationID.x);precise float sum=0.;
+    for(int i=lane;i<p.observations;i+=128){
+        int at=p.obs+36*i;precise vec3 prediction=vec3(0.);
+        for(int k=0;k<16;k++)prediction+=value(int(data[at+k]),candidate)*f(at+16+k);
+        precise vec3 residual=clamp(vec3(f(at+32),f(at+33),f(at+34))-prediction,vec3(-14.),vec3(14.));
+        int r=8*p.pixels+4*i;work[r]=residual.x;work[r+1]=residual.y;work[r+2]=residual.z;
+        sum+=residual.x*residual.x+residual.y*residual.y+residual.z*residual.z;
+    }
+    errors[lane]=sum;barrier();
+    for(int step=64;step>0;step/=2){if(lane<step)errors[lane]+=errors[lane+step];barrier();}
+    return errors[0]/float(3*p.observations);
+}
+void main(){
+    int lane=int(gl_LocalInvocationID.x);
+    for(int i=lane;i<p.pixels;i+=128){
+        writeValue(i,vec3(f(4*i),f(4*i+1),f(4*i+2)),false);
+        precise float denominator=0.;
+        for(uint j=data[p.prefix+i];j<data[p.prefix+i+1];j++){
+            uint edge=data[p.edges+int(j)];denominator+=f(p.obs+36*int(edge/16u)+16+int(edge%16u));
+        }
+        work[4*i+3]=denominator;
+    }
+    storageBarrier();
+    float error=residualAndCost(false);
+    if(lane==0){beforeError=afterError=error;running=error>1.;accepted=false;boundary=abs(error-1.)<.001||isnan(error)||isinf(error);}
+    storageBarrier();
+    for(int iteration=0;iteration<8;iteration++){
+        if(!running)break;
+        for(int i=lane;i<p.pixels;i+=128){
+            precise vec3 gradient=vec3(0.);
+            for(uint j=data[p.prefix+i];j<data[p.prefix+i+1];j++){
+                uint edge=data[p.edges+int(j)];int observation=int(edge/16u),tap=int(edge%16u);
+                float w=f(p.obs+36*observation+16+tap);int r=8*p.pixels+4*observation;
+                gradient+=vec3(work[r],work[r+1],work[r+2])*w;
+            }
+            precise vec3 v=value(i,false),initial=vec3(f(4*i),f(4*i+1),f(4*i+2));
+            float denominator=work[4*i+3];
+            if(denominator>1e-5)v=clamp(v+.8*gradient/denominator,max(vec3(0.),initial-24.),min(vec3(255.),initial+24.));
+            writeValue(i,v,true);
+        }
+        storageBarrier();
+        error=residualAndCost(true);
+        if(lane==0){
+            if(isnan(error)||isinf(error)){boundary=true;running=false;accepted=false;}
+            else{
+                if(abs(error-afterError)<.0001*max(1.,afterError))boundary=true;
+                accepted=error<afterError;
+                if(accepted)afterError=error;else running=false;
+            }
+        }
+        storageBarrier();
+        if(accepted)for(int i=lane;i<p.pixels;i+=128)writeValue(i,value(i,true),false);
+        storageBarrier();
+    }
+    for(int i=lane;i<p.pixels;i+=128){vec3 v=value(i,false);result[4*i]=v.x;result[4*i+1]=v.y;result[4*i+2]=v.z;}
+    if(lane==0){
+        result[4*p.pixels]=beforeError;result[4*p.pixels+1]=afterError;
+        result[4*p.pixels+2]=beforeError>1. && afterError<=beforeError*.95?1.:0.;
+        result[4*p.pixels+3]=boundary||abs(afterError-beforeError*.95)<.0002*max(1.,beforeError)?1.:0.;
+    }
+}

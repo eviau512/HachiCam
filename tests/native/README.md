@@ -97,6 +97,14 @@ white-field/text, blur/occlusion/noise and streaming checks. Frozen full versus
 bounded preparation replays remain private local evidence; host timing and
 OpenCV 5 parity do not certify Android performance or complete lamp contours.
 
+The rc24 suite runs actual GPU quarter-sample mapping in patch-relative
+coordinates, including projective transforms, clipped sources, boundary/gate,
+missing-detail and conflict cases. It checks resident CSR solving, correction
+bounds and original reconstruction truth. Production calibration injects a
+numeric disagreement independently into both new stages and verifies exact CPU
+reuse, permanent class rejection and unrelated-stage operation. Mapping-only
+isolation and fault controls are host-test-only and must be absent from APKs.
+
 Verified official package checksums used for this workspace:
 
 | Package | SHA256 |

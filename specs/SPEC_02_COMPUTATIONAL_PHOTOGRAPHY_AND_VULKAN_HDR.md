@@ -1240,6 +1240,105 @@ then freeze the latest and prior text/white-PPT/lamp cases for matched-output
 checks and paired total native timings. Report remaining CPU work and phone
 validation separately; this changes return parity, not the entire GPU pipeline.
 
+### 7.8 rc24 bounded regional solver migration (2026-10-20, before implementation)
+
+Status: implemented / experimental, host GPU and CPU regression checked;
+complete phone adoption and performance remain unaccepted. Host decomposition of the frozen near
+lamp finds roughly 5 s in regional reconstruction, with about three quarters of
+summed worker time in original-observation mapping and one quarter in iterative
+solving. This is not a phone measurement or evidence of an irreducible limit.
+
+Keep original observations, mapping, masks, phase qualification, 16 sampling
+taps, eight iterations, +/-14 residuals, 0.8 update, +/-24 initial-image bounds,
+monotonic error stopping, before-error >1 and 5% fit improvement unchanged.
+The reference/no-local-field mapping may skip its three zero-offset iterations
+only when the resulting coordinates and admission remain identical.
+Reserve a bounded observation vector once per patch instead of repeated growth.
+Zero-weight inverse-tap edges may be omitted: they add exactly zero to the
+finite gradient/normal sums; preserve the order of every nonzero edge.
+CPU fallback must also avoid repeated invariant work: retain the per-pixel
+normalization once and reuse the candidate-cost residuals in the next accepted
+iteration. Preserve float subtraction/clamping and double cost accumulation
+order exactly. Bound residual storage to two vectors of <=50000 RGB floats,
+never a full-image cache, and require frozen CPU byte parity. Compare GPU cost
+against this improved CPU authority, not its redundant predecessor.
+
+The next debug GPU stage may migrate the iterative solver for one bounded patch
+(<=160x160 estimate and <=50000 observations) to the shared three-buffer <=64 MiB
+context. Pack source observations and stable compressed sparse inverse-tap lists
+on CPU. Preserve original observation/tap accumulation order per output pixel;
+avoid floating-point atomic scatter. Keep current/candidate estimates, residuals,
+gradient gather and cost reductions resident for all eight iterations, publishing
+only the final patch and bounded state. No full-frame float reconstruction grid.
+Use one workgroup and one submission per patch, with storage-memory/control
+barriers between its strided loops, to avoid dozens of stage dispatches for a
+small patch. Stable GPU input records may be 16-byte aligned for bulk copying.
+CPU mapping and observed-source count remain authority; HDR and capture gates
+are not broadened by this migration.
+
+Require a separate lazy optional pipeline, independent workload/cost/numerical
+profiles and actual GPU comparison against the equivalent optimized CPU authority. Cold/warm
+calibration must agree in acceptance, final patch max-channel error <=0.005 and
+initial/final cost within 0.0002*max(1,CPU cost). Near stopping/acceptance boundaries,
+nonfinite values or unsupported data complete on CPU. Retain numerical rejection
+and context submission/timeout quarantine. Reuse CPU calibration results rather
+than solve twice when it is selected. Compare full packing/CSR/dispatch/readback
+cost with effective parallel CPU cost (divide the per-patch CPU time by active
+workers when comparing a serialized GPU), using the existing <=90% rule.
+
+Record GPU/CPU solver patch counts and bounded costs in the same result's trace,
+after joining worker results. Record reconstruction wall time separately from
+summed worker observation/solver time (solver calls include queue waiting); do
+not present summed concurrent worker intervals as wall time. Release stays CPU. Require independent known-truth
+reconstruction, zero/constant/duplicate taps, clipped observations, correction
+bounds, stopping/acceptance negatives, invalid layout, actual GPU tests and
+complete HDR/text/noise/streaming regressions. Freeze near/far/PPT/dark-screen
+outputs, compare qualification and reconstruction results, and measure paired
+cold/warm full time with phone acceptance pending. This slice does not migrate
+the dominant observation mapping or claim full GPU reconstruction/lamp recovery.
+
+### 7.9 rc24 original-observation mapping (specified before implementation)
+
+Status: implemented / experimental. Actual host GPU mapping, fault isolation,
+known-truth reconstruction and four frozen CPU-fallback/isolated-mapping image
+checks pass; phone adoption and sustained performance remain unaccepted.
+
+The resident solver is implemented and passes actual GPU/CPU regressions, but
+the development machine's complete cost still selects CPU. Cached CPU residuals
+and normalization improve frozen warm timing by about 5% near the lamp and 4%
+on PPT; four frozen CPU outputs remain byte-identical. Continue the larger
+observation-mapping hotspot instead of forcing a slower solver onto GPU.
+
+Permit a separate debug GPU mapping proposal for non-highlight base plates only:
+bounded source ROI <=128x128, the unchanged four quarter-pixel samples, three
+inverse-local iterations, detail/conflict/gate checks and <=0.15 source-pixel
+round trip. Preserve clipped-source rejection, observation limits and all SR/HDR
+qualification. Recenter forward/inverse homographies around the source ROI and
+reference patch before float conversion. Return patch-relative coordinates;
+do not lose precision by adding/subtracting large world coordinates on GPU.
+Bound each normalized local transform's 2x2 coefficients to absolute <=2,
+translation <=512 and corner denominators to [0.75,1.25]; other conditioning
+uses CPU. The current reference patch is <=80x80, with <=128x128 source ROI.
+CPU mapping may stop the entire observation at its first invalid quarter sample;
+continuing the other samples cannot make that rejected observation valid.
+
+Use independent cost/numerical profiles. Near interpolation/detail/conflict,
+nearest-mask, patch or 0.15 round-trip boundaries, complete the observation with
+the unchanged double CPU mapper. Unknown profiles require full CPU observation
+status comparison and <=0.0005 source-pixel coordinate agreement on cold/warm
+results; retain/reuse CPU maps on rejection. GPU coordinates grant no evidence
+where CPU structure is absent. Cost includes ROI/field/mask packing, transfer,
+dispatch, readback and real CPU ambiguity completion, compared with effective
+parallel CPU cost under the existing 90% rule. No forced GPU adoption.
+
+Require actual GPU identity/translation/projective/border/discontinuity/missing
+detail/clipping/round-trip negatives, exact CPU fallback frozen output, original
+known-truth reconstruction and full text/HDR/noise regressions. A small accepted
+coordinate tolerance may change final rounding; measure final max/p99 and changed
+pixels, not just optimizer agreement. Phone adoption/performance remains separate.
+The mapping-only isolation and fault-injection controls are host-test-only and
+must be absent from shipped Android libraries.
+
 ## 8. Acceptance and limits
 
 Apply PHOTO-01 through PHOTO-09 and CAP-01 through CAP-05 in

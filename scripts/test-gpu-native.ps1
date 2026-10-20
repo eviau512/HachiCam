@@ -16,7 +16,7 @@ try {
     $taskFlags=@('-std=c++17','-O2','-fopenmp','-DHACHICAM_VULKAN_SUPPORT=1','-DHACHICAM_GPU_TEST_CONTROL=1',
         '-Wno-deprecated-declarations','-include','tests/native/host/opencv_compat.h',
         '-I',$taskInclude,'-I','app/src/main/cpp','-I','tests/native/host','-I',$taskHeaders)
-    $taskBasic=@('app/src/main/cpp/local_registration.cpp','app/src/main/cpp/gpu_local_support.cpp')
+    $taskBasic=@('app/src/main/cpp/local_registration.cpp','app/src/main/cpp/gpu_local_support.cpp','app/src/main/cpp/regional_reconstruction.cpp')
     $taskLibraries=@('-L',(Join-Path $OpenCvRoot 'lib'),'-lopencv_video','-lopencv_imgproc','-lopencv_core')
     & $Compiler @taskFlags 'tests/native/gpu_gate_test.cpp' 'tests/native/gpu_fitting_test.cpp' 'tests/native/gpu_compute_test.cpp' 'tests/native/gpu_selection_test.cpp' 'tests/native/gpu_policy_test.cpp' 'tests/native/gpu_global_test.cpp' @taskBasic @taskLibraries '-o' '.tools/gpu_gate_test.exe'
     if($LASTEXITCODE -ne 0){throw 'GPU primitive compilation failed'}
@@ -33,7 +33,7 @@ try {
     $taskTests=@('tests/native/quality_pipeline_test.cpp','tests/native/regional_reconstruction_test.cpp',
         'tests/native/document_boundary_test.cpp','tests/native/noise_pipeline_test.cpp','tests/native/highlight_pipeline_test.cpp')
     $taskNative=@('app/src/main/cpp/fusion_pipeline.cpp','app/src/main/cpp/stream_fusion.cpp',
-        'app/src/main/cpp/regional_reconstruction.cpp','app/src/main/cpp/regional_refinement.cpp','app/src/main/cpp/burst_fusion.cpp',
+        'app/src/main/cpp/regional_refinement.cpp','app/src/main/cpp/burst_fusion.cpp',
         'app/src/main/cpp/perspective_corrector.cpp','app/src/main/cpp/edge_detector.cpp','app/src/main/cpp/document_boundary.cpp')
     & $Compiler @taskFlags @taskTests @taskBasic @taskNative @taskLibraries '-lopencv_photo' '-lopencv_features' '-lopencv_calib' '-lopencv_geometry' '-o' '.tools/gpu_quality_test.exe'
     if($LASTEXITCODE -ne 0){throw 'GPU pipeline compilation failed'}

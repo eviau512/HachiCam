@@ -16,6 +16,8 @@ static void traceDecision(const GpuCostProfile& profile,const char* stage,int ke
 }
 #ifndef HACHICAM_VULKAN_SUPPORT
 namespace fusion {
+bool gpuObservationMapping(const SamplingPlate&,const cv::Rect&,const cv::Rect&,std::vector<MappedObservation>&,bool& usedGpu,int& completed,std::string& reason){usedGpu=false;completed=0;reason="Vulkan mapping not built";return false;}
+bool gpuRegionalSolve(const cv::Mat&,const std::vector<RegionalObservation>&,RegionalSolve&,bool& usedGpu,std::string& reason){usedGpu=false;reason="Vulkan solver not built";return false;}
 bool gpuGlobalECC(const cv::Mat&,const cv::Mat&,const cv::Mat&,int,cv::TermCriteria,double,cv::Mat&,double&,std::string& reason){reason="Vulkan backend not built";return false;}
 bool gpuLocalSupport(const cv::Mat&,const cv::Mat&,const LocalRegistration&,cv::Mat&,std::string& reason,const cv::Mat&) {
     reason="Vulkan backend not built"; return false;
@@ -39,6 +41,8 @@ bool gpuMergeAnchors(const std::vector<SamplingPlate>&,const cv::Mat&,const cv::
 #include "shaders/strong_selection_spv.h"
 #include "shaders/global_ecc_spv.h"
 #include "shaders/physical_check_spv.h"
+#include "shaders/regional_solver_spv.h"
+#include "shaders/observation_mapping_spv.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video.hpp>
 #include <array>
@@ -47,6 +51,9 @@ bool gpuMergeAnchors(const std::vector<SamplingPlate>&,const cv::Mat&,const cv::
 #include <cstring>
 #include <limits>
 #include <chrono>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 #include <android/log.h>
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -120,6 +127,10 @@ struct Context {
     std::array<VkPipeline,2> selectionStages{};
     VkShaderModule globalShader=VK_NULL_HANDLE;std::array<VkPipeline,7> globalStages{};
     bool globalAttempted=false;GpuCostProfile globalPolicy[6];
+    VkShaderModule solverShader=VK_NULL_HANDLE;std::array<VkPipeline,1> solverStages{};
+    bool solverAttempted=false;GpuCostProfile solverPolicy[6];
+    VkShaderModule mappingShader=VK_NULL_HANDLE;VkPipeline mappingPipeline=VK_NULL_HANDLE;
+    bool mappingAttempted=false;GpuCostProfile mappingPolicy[6];
     VkDescriptorSetLayout descriptorLayout=VK_NULL_HANDLE;
     VkPipelineLayout layout=VK_NULL_HANDLE;
     VkPipeline pipeline=VK_NULL_HANDLE;
@@ -301,6 +312,8 @@ struct Context {
             for(auto stage:physicalStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);X(vkDestroyShaderModule,physicalShader);
             for(auto stage:globalStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
             X(vkDestroyShaderModule,globalShader);
+            for(auto stage:solverStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);X(vkDestroyShaderModule,solverShader);
+            X(vkDestroyPipeline,mappingPipeline);X(vkDestroyShaderModule,mappingShader);
             for(auto stage:eccStages)if(stage && vkDestroyPipeline)vkDestroyPipeline(device,stage,nullptr);
             X(vkDestroyShaderModule,eccShader);X(vkDestroyPipelineLayout,layout);
             X(vkDestroyDescriptorSetLayout,descriptorLayout);X(vkDestroyShaderModule,shader);
@@ -361,7 +374,9 @@ struct Context {
         VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};before.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT;before.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&before,0,nullptr,0,nullptr);
         vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,selected);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,layout,0,1,&descriptor,0,nullptr);
-        if(selected==globalStages[0] || selected==globalStages[3]) {
+        if(selected==solverStages[0]) {
+            vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());vkCmdDispatch(command,1,1,1);
+        } else if(selected==globalStages[0] || selected==globalStages[3]) {
             VkMemoryBarrier dependency{VK_STRUCTURE_TYPE_MEMORY_BARRIER};dependency.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;dependency.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
             auto stage=[&](int number,uint32_t count){vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,globalStages[number]);vkCmdPushConstants(command,layout,VK_SHADER_STAGE_COMPUTE_BIT,0,32,shape.data());vkCmdDispatch(command,count,1,1);vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,1,&dependency,0,nullptr,0,nullptr);};
             if(selected==globalStages[0]){stage(0,groups);stage(1,groups);stage(2,groups);}
@@ -438,6 +453,105 @@ struct Context {
             if(!inFlight)for(auto& value:globalStages){if(value)vkDestroyPipeline(device,value,nullptr);value=VK_NULL_HANDLE;}
             failure="global startup conformance unavailable";return false;
         }
+        return true;
+    }
+    bool ensureSolver() {
+        if(solverAttempted)return solverStages[0]!=VK_NULL_HANDLE;
+        solverAttempted=true;
+        VkShaderModuleCreateInfo sm{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};sm.codeSize=regional_solver_spv_size;sm.pCode=regional_solver_spv;
+        if(vkCreateShaderModule(device,&sm,nullptr,&solverShader)!=VK_SUCCESS){failure="regional solver shader unavailable";return false;}
+        VkComputePipelineCreateInfo pc{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};pc.layout=layout;
+        pc.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};pc.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;pc.stage.module=solverShader;pc.stage.pName="main";
+        const VkSpecializationMapEntry entry{0,0,sizeof(int)};
+        for(int stage=0;stage<1;++stage) {
+            const VkSpecializationInfo info{1,&entry,sizeof(stage),&stage};pc.stage.pSpecializationInfo=&info;
+            if(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pc,nullptr,&solverStages[stage])!=VK_SUCCESS) {
+                for(auto& value:solverStages){if(value)vkDestroyPipeline(device,value,nullptr);value=VK_NULL_HANDLE;}
+                failure="regional solver pipeline unavailable";return false;
+            }
+        }
+        return true;
+    }
+    bool runSolver(const cv::Mat& initial,const std::vector<RegionalObservation>& observations,RegionalSolve& result,bool& boundary) {
+        const int n=int(initial.total()),count=int(observations.size()),obs=4*n,prefix=obs+36*count,edges=prefix+n+1;
+        std::vector<uint32_t> input(edges+16*count,0);auto writeFloat=[&](int at,float v){std::memcpy(&input[at],&v,4);};
+        for(int i=0;i<n;++i){const auto v=initial.at<cv::Vec3f>(i/initial.cols,i%initial.cols);for(int c=0;c<3;++c)writeFloat(4*i+c,v[c]);}
+        std::memcpy(input.data()+obs,observations.data(),observations.size()*sizeof(RegionalObservation));
+        for(int i=0;i<count;++i) {
+            const auto& o=observations[i];
+            for(int k=0;k<16;++k)if(o.weight[k]>0)++input[prefix+o.index[k]+1];
+        }
+        for(int i=1;i<=n;++i)input[prefix+i]+=input[prefix+i-1];
+        std::vector<uint32_t> cursor(input.begin()+prefix,input.begin()+prefix+n);
+        for(int i=0;i<count;++i)for(int k=0;k<16;++k)if(observations[i].weight[k]>0)input[edges+cursor[observations[i].index[k]]++]=uint32_t(16*i+k);
+        input.resize(edges+input[prefix+n]);
+        const int costs=8*n+4*count,state=costs+(count+127)/128;
+        const VkDeviceSize sizes[]{input.size()*sizeof(uint32_t),size_t(state+8)*sizeof(float),size_t(4*n+8)*sizeof(float)};
+        for(auto size:sizes)if(size>properties.limits.maxStorageBufferRange){failure="regional solver storage range";return false;}
+        if(uint32_t(std::max(n,count)+127)/128>properties.limits.maxComputeWorkGroupCount[0]){failure="regional solver dispatch range";return false;}
+        if(!workspace(sizes))return false;
+        std::memcpy(buffers[0].mapped,input.data(),sizes[0]);
+        if(!dispatch(solverStages[0],sizes,{n,count,obs,prefix,edges,0,costs,state},uint32_t((n+127)/128)))return false;
+        const auto* out=static_cast<const float*>(buffers[2].mapped);result.image.create(initial.size(),CV_32FC3);
+        for(int i=0;i<n;++i)for(int c=0;c<3;++c) {
+            const float v=out[4*i+c];if(!std::isfinite(v)||v<0||v>255){failure="regional solver nonfinite output";return false;}
+            result.image.at<cv::Vec3f>(i/initial.cols,i%initial.cols)[c]=v;
+        }
+        result.before=out[4*n];result.after=out[4*n+1];result.accepted=out[4*n+2]>0;boundary=out[4*n+3]>0;
+#ifdef HACHICAM_GPU_TEST_CONTROL
+        if(testFault("solver_numeric")){result.image.at<cv::Vec3f>(0,0)[0]+=.1f;boundary=false;}
+#endif
+        if(!std::isfinite(result.before)||!std::isfinite(result.after)){failure="regional solver nonfinite cost";return false;}
+        return true;
+    }
+    bool ensureMapping() {
+        if(mappingAttempted)return mappingPipeline!=VK_NULL_HANDLE;mappingAttempted=true;
+        VkShaderModuleCreateInfo sm{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};sm.codeSize=observation_mapping_spv_size;sm.pCode=observation_mapping_spv;
+        if(vkCreateShaderModule(device,&sm,nullptr,&mappingShader)!=VK_SUCCESS){failure="observation mapping shader unavailable";return false;}
+        VkComputePipelineCreateInfo pc{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};pc.layout=layout;
+        pc.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};pc.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;pc.stage.module=mappingShader;pc.stage.pName="main";
+        if(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&pc,nullptr,&mappingPipeline)!=VK_SUCCESS){failure="observation mapping pipeline unavailable";return false;}return true;
+    }
+    bool runMapping(const SamplingPlate& plate,const cv::Rect& source,const cv::Rect& patch,std::vector<MappedObservation>& result,int& completed) {
+        const auto& model=*plate.local;
+        const cv::Matx33d toSource(1,0,source.x,0,1,source.y,0,0,1),fromSource(1,0,-source.x,0,1,-source.y,0,0,1);
+        const cv::Matx33d toPatch(1,0,patch.x,0,1,patch.y,0,0,1),fromPatch(1,0,-patch.x,0,1,-patch.y,0,0,1);
+        const auto forward=plate.inverse.inv();cv::Matx33d matrices[2]{fromPatch*forward*toSource,fromSource*plate.inverse*toPatch};
+        std::vector<uint32_t> meta(40+model.field.total()*4,0),masks(source.area()+patch.area());
+        auto write=[&](int at,float v){std::memcpy(&meta[at],&v,4);};
+        for(int j=0;j<2;++j) {
+            auto& h=matrices[j];if(!std::isfinite(h(2,2))||std::abs(h(2,2))<1e-9){failure="unsupported mapping transform";return false;}h*=1./h(2,2);
+            if(std::abs(h(0,0))>2||std::abs(h(0,1))>2||std::abs(h(1,0))>2||std::abs(h(1,1))>2||std::abs(h(0,2))>512||std::abs(h(1,2))>512){failure="unsupported mapping conditioning";return false;}
+            const auto bounds=j==0?source.size():patch.size();
+            for(double y:{-16.,double(bounds.height+16)})for(double x:{-16.,double(bounds.width+16)}) {
+                const double d=h(2,0)*x+h(2,1)*y+1.;if(d<.75||d>1.25){failure="unsupported mapping perspective";return false;}
+            }
+            for(int k=0;k<9;++k){if(!std::isfinite(h.val[k])||std::abs(h.val[k])>100000){failure="invalid mapping transform";return false;}write(j*9+k,float(h.val[k]));}
+        }
+        const int parameters[]{source.width,source.height,patch.width,patch.height,model.field.cols,model.field.rows,model.spacing,patch.x,patch.y,source.area(),0,source.x,source.y,plate.size.width,plate.size.height};
+        for(int i=0;i<15;++i)meta[18+i]=uint32_t(parameters[i]);
+        for(int y=0;y<model.field.rows;++y)for(int x=0;x<model.field.cols;++x) {
+            const int at=40+4*(y*model.field.cols+x);const auto n=model.field.at<cv::Vec3f>(y,x);
+            for(int c=0;c<3;++c)write(at+c,n[c]);meta[at+3]=model.detail.at<uchar>(y,x);
+        }
+        for(int y=0;y<source.height;++y)for(int x=0;x<source.width;++x) {const auto c=plate.image->at<cv::Vec3b>(source.y+y,source.x+x);masks[y*source.width+x]=std::max({c[0],c[1],c[2]})<247;}
+        for(int y=0;y<patch.height;++y)for(int x=0;x<patch.width;++x)masks[source.area()+y*patch.width+x]=model.gate.at<uchar>(patch.y+y,patch.x+x);
+        const VkDeviceSize sizes[]{masks.size()*4,meta.size()*4,size_t(source.area())*9*4};
+        for(auto size:sizes)if(size>properties.limits.maxStorageBufferRange){failure="mapping storage limit";return false;}
+        if(!workspace(sizes))return false;std::memcpy(buffers[0].mapped,masks.data(),sizes[0]);std::memcpy(buffers[1].mapped,meta.data(),sizes[1]);
+        if(!dispatch(mappingPipeline,sizes,{},uint32_t((source.area()+127)/128)))return false;
+        const auto* output=static_cast<const uint32_t*>(buffers[2].mapped);result.assign(source.area(),{});completed=0;
+        for(int i=0;i<source.area();++i) {
+            const auto status=output[9*i+8];
+            if(status==2){++completed;result[i]=mapRegionalObservationCpu(plate,forward,patch,source.x+i%source.width,source.y+i/source.width);continue;}
+            if(status>2){failure="invalid mapping status";return false;}if(!status)continue;
+            result[i].valid=true;
+            for(int k=0;k<4;++k) {float x,y;std::memcpy(&x,&output[9*i+2*k],4);std::memcpy(&y,&output[9*i+2*k+1],4);
+                if(!std::isfinite(x)||!std::isfinite(y)||x<-.25f||y<-.25f||x>=patch.width-.75f||y>=patch.height-.75f){failure="mapping nonfinite or invalid coordinate";return false;}result[i].local[k]={x,y};}
+        }
+#ifdef HACHICAM_GPU_TEST_CONTROL
+        if(testFault("mapping_numeric"))for(auto& point:result)if(point.valid){point.local[0].x+=.002;break;}
+#endif
         return true;
     }
 #include "global_ecc_host.inl"
@@ -762,6 +876,119 @@ Context* sharedContext() {
     static Context* value=[]() noexcept {try{return new Context();}catch(...){return static_cast<Context*>(nullptr);}}();
     return value;
 }
+}
+bool gpuObservationMapping(const SamplingPlate& plate,const cv::Rect& source,const cv::Rect& patch,
+    std::vector<MappedObservation>& output,bool& usedGpu,int& completed,std::string& reason) {
+    usedGpu=false;completed=0;
+    bool mappingOnlyTest=false;
+#ifdef HACHICAM_GPU_TEST_CONTROL
+    mappingOnlyTest=std::getenv("HACHICAM_GPU_TEST_MAPPING_ONLY")!=nullptr;
+    if(std::getenv("HACHICAM_FORCE_CPU")&&!mappingOnlyTest){reason="forced CPU mapping";return false;}
+#endif
+    if(!plate.local||!plate.image||plate.image->type()!=CV_8UC3||plate.image->size()!=plate.size||plate.local->patchSupport||
+       plate.size.area()>16000000||plate.size.width>8192||plate.size.height>8192||!validField(*plate.local)||
+       plate.local->detail.type()!=CV_8U||plate.local->detail.size()!=plate.local->field.size()||
+       plate.local->gate.type()!=CV_8U||plate.local->gate.size()!=plate.size||source.empty()||patch.empty()||source.width>128||source.height>128||patch.width>80||patch.height>80||
+       (source&cv::Rect({},plate.size))!=source||(patch&cv::Rect({},plate.size))!=patch){reason="unsupported observation mapping";return false;}
+    auto* c=sharedContext();if(!c){reason="mapping GPU context unavailable";return false;}
+    std::lock_guard<std::mutex> lock(c->guard);const auto started=std::chrono::steady_clock::now();int workers=1;
+#ifdef _OPENMP
+    workers=omp_in_parallel()?omp_get_num_threads():1;
+#endif
+    const int key=(source.area()<=4096?0:source.area()<=8192?1:2)+(workers>1?3:0);auto& policy=c->mappingPolicy[key];
+    if(!c->healthy){reason=c->failure;return false;}
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+    if(!mappingOnlyTest&&!policy.eligible()){reason=policy.describe("mapping",key);return false;}
+#endif
+    if(!c->ensureMapping()){reason=c->failure;return false;}
+    try {
+        std::vector<MappedObservation> actual;int cpuCompleted=0;
+        if(!c->runMapping(plate,source,patch,actual,cpuCompleted)) {
+            reason=c->failure;
+            if(c->healthy&&(reason.find("mapping nonfinite")!=std::string::npos||reason=="invalid mapping status")) {
+                const auto cpuStart=std::chrono::steady_clock::now();output=mapRegionalCpu(plate,source,patch);
+                const double cpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpuStart).count();
+                policy.record(false,0,0,cpuMs,0,cpuMs,reason);completed=source.area();reason=policy.describe("mapping-CPU-reuse",key);return true;
+            }
+            return false;
+        }
+        const double cold=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+        if(!mappingOnlyTest&&policy.needsProbe()) {
+            const auto cpuStart=std::chrono::steady_clock::now();auto cpu=mapRegionalCpu(plate,source,patch);
+            const double cpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpuStart).count();
+            auto agrees=[&](const std::vector<MappedObservation>& r){if(r.size()!=cpu.size())return false;for(size_t i=0;i<r.size();++i){if(r[i].valid!=cpu[i].valid)return false;if(r[i].valid)for(int k=0;k<4;++k)if(cv::norm(r[i].local[k]-cpu[i].local[k])>.0005)return false;}return true;};
+            std::vector<MappedObservation> warm;int warmCompleted=0;const auto warmStart=std::chrono::steady_clock::now();
+            const bool warmOk=c->runMapping(plate,source,patch,warm,warmCompleted);
+            const double warmMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-warmStart).count();
+            const double baseline=cpuMs/std::max(1,workers);
+            policy.record(warmOk&&agrees(actual)&&agrees(warm),cold,warmMs,cpuMs,GpuCostProfile::reusedCost(cold,warmMs),baseline,"workers="+std::to_string(workers)+" completed="+std::to_string(warmCompleted)+" candidates="+std::to_string(source.area()));
+            __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU observation mapping v1 %s",policy.describe("mapping-calibration",key).c_str());
+            if(policy.state!=GpuCostProfile::Gpu){output=std::move(cpu);completed=source.area();reason=policy.describe("mapping-CPU-reuse",key);return true;}
+            actual=std::move(warm);cpuCompleted=warmCompleted;
+        }
+#endif
+        output=std::move(actual);usedGpu=true;completed=cpuCompleted;reason=policy.describe("mapping-GPU",key);return true;
+    }catch(const std::exception&){reason="observation mapping host failure";return false;}
+}
+bool gpuRegionalSolve(const cv::Mat& initial,const std::vector<RegionalObservation>& observations,
+    RegionalSolve& output,bool& usedGpu,std::string& reason) {
+    usedGpu=false;
+#ifdef HACHICAM_GPU_TEST_CONTROL
+    if(std::getenv("HACHICAM_FORCE_CPU")){reason="forced CPU solver";return false;}
+#endif
+    if(initial.empty()||initial.dims!=2||!initial.isContinuous()||initial.type()!=CV_32FC3||initial.cols>160||initial.rows>160||
+       observations.empty()||observations.size()>50000||!cv::checkRange(initial,true,nullptr,0,255.0001)) {reason="unsupported regional solver workload";return false;}
+    auto* c=sharedContext();if(!c){reason="regional GPU context unavailable";return false;}
+    std::lock_guard<std::mutex> lock(c->guard);const auto started=std::chrono::steady_clock::now();
+    int workers=1;
+#ifdef _OPENMP
+    workers=omp_in_parallel()?omp_get_num_threads():1;
+#endif
+    const int key=(observations.size()<=8000?0:observations.size()<=32000?1:2)+(workers>1?3:0);
+    auto& policy=c->solverPolicy[key];
+    if(!c->healthy){reason=c->failure;return false;}
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+    if(!policy.eligible()){reason=policy.describe("solver",key);return false;}
+#endif
+    for(const auto& o:observations) {
+        double sum=0;
+        for(int k=0;k<16;++k){if(o.index[k]<0||size_t(o.index[k])>=initial.total()||!std::isfinite(o.weight[k])||o.weight[k]<0||o.weight[k]>1){reason="invalid regional observation";return false;}sum+=o.weight[k];}
+        if(std::abs(sum-1)>1e-5||!std::isfinite(o.color[0])||!std::isfinite(o.color[1])||!std::isfinite(o.color[2])){reason="invalid regional observation weights/color";return false;}
+    }
+    if(!c->ensureSolver()){reason=c->failure;return false;}
+    try {
+        RegionalSolve actual;bool boundary=false;
+        if(!c->runSolver(initial,observations,actual,boundary)) {
+            reason=c->failure;
+            if(c->healthy && reason.find("nonfinite")!=std::string::npos) {
+                const auto cpuStart=std::chrono::steady_clock::now();output=solveRegionalCpu(initial,observations);
+                const double cpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpuStart).count();
+                policy.record(false,0,0,cpuMs,0,cpuMs,reason);reason=policy.describe("solver-CPU-reuse",key);return true;
+            }
+            return false;
+        }
+        const double cold=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+#if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
+        if(policy.needsProbe()) {
+            const auto cpuStart=std::chrono::steady_clock::now();auto cpu=solveRegionalCpu(initial,observations);
+            const double cpuMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-cpuStart).count();
+            auto agrees=[&](const RegionalSolve& r){return r.accepted==cpu.accepted&&cv::norm(r.image,cpu.image,cv::NORM_INF)<=.005&&std::abs(r.before-cpu.before)<=.0002*std::max(1.,cpu.before)&&std::abs(r.after-cpu.after)<=.0002*std::max(1.,cpu.after);};
+            RegionalSolve warm;bool warmBoundary=false;const auto warmStart=std::chrono::steady_clock::now();
+            const bool warmOk=c->runSolver(initial,observations,warm,warmBoundary);
+            const double warmMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-warmStart).count();
+            const bool exact=warmOk&&((boundary||warmBoundary)||(agrees(actual)&&agrees(warm)));
+            const double baseline=cpuMs/std::max(1,workers);
+            const double gpuEstimate=(boundary||warmBoundary)?baseline*2:GpuCostProfile::reusedCost(cold,warmMs);
+            policy.record(exact,cold,warmMs,cpuMs,gpuEstimate,baseline,"workers="+std::to_string(workers)+" observations="+std::to_string(observations.size()));
+            __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU regional solver v1 key=%d %s",key,policy.describe("solver-calibration",key).c_str());
+            if(policy.state!=GpuCostProfile::Gpu){output=std::move(cpu);reason=policy.describe("solver-CPU-reuse",key);return true;}
+            actual=std::move(warm);boundary=warmBoundary;
+        }
+#endif
+        if(boundary){output=solveRegionalCpu(initial,observations);reason="regional solver boundary CPU completion";return true;}
+        output=std::move(actual);usedGpu=true;reason=policy.describe("solver-GPU",key);return true;
+    }catch(const std::exception&){reason="regional solver host failure";return false;}
 }
 bool gpuGlobalECC(const cv::Mat& reference,const cv::Mat& source,const cv::Mat& initial,
     int model,cv::TermCriteria criteria,double sourceScale,cv::Mat& output,double& correlation,std::string& reason) {

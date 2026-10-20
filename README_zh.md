@@ -1,7 +1,7 @@
 > [!NOTE]
 > 本项目的作者完全通过 Vibe Coding 构建了本项目，且并不完全清楚这个 Agent 到底偷偷写了些什么代码。 ¯\\\_(ツ)\_/¯
 
-> 当前契约、实现及限制见 [规格索引](specs/README.md)、[TODO](TODO.md) 和 [rc16 GPU 扩展报告](specs/reports/RC16_GPU_COMPUTE_EXPANSION_2026-10-16.zh-CN.md)。测试版构建入口：`scripts/build-test.ps1`。
+> 当前契约、实现及限制见 [规格索引](specs/README.md)、[TODO](TODO.md) 和 [rc24 区域 GPU 报告](specs/reports/RC24_REGIONAL_GPU_MAPPING_AND_SOLVER_2026-10-20.zh-CN.md)。测试版构建入口：`scripts/build-test.ps1`。
 
 <div align="center">
 
@@ -29,7 +29,7 @@
 
 - CameraX/Camera2Interop JPEG 拍摄、可用后摄视角/变焦、点击 AF/AE 与正向输出。相机请求依能力执行，不能保证 OEM 的实际处理。
 - 默认 Full HDR/多帧拍摄，请求最多四张基准和三张短曝光。只有通过局部验证的观测才参与降噪、实验区域重建与高光恢复；尺寸与真实细节分开，不保证原生 50 MP。
-- 测试版接入 Vulkan 支持图/ECC 提案实验，先核对数值和成本，有界资源并回退 CPU。release 保持 CPU，全 GPU 合成及手机加速尚未验收。
+- 测试版接入 Vulkan 支持图/ECC 及区域观察映射/求解实验，先核对数值和完整成本，有界资源并回退 CPU。release 保持 CPU，全 GPU 合成及手机加速尚未验收。
 - 文档轮廓跟踪、手动四角/直线吸附、平面透视及比例校正。识别仍是启发式算法。
 - 原图、魔法色彩、连续色调类纸三种滤镜，B&W/灰阶已替换。纸白、色彩和弱笔画仍需实机对照。
 - 不可变原图、按编辑代次提交派生图、导出读取租约和有界页面检查点。重启恢复已保存页面；中断拍摄保留完整原图或明确失败，不自动重跑丢失的连拍/未提交编辑。

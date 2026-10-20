@@ -1,7 +1,7 @@
 > [!NOTE]
 > The owner of this repo built this entirely via vibe coding, and isn't quite sure what this Agent actually does. ¯\\\_(ツ)\_/¯
 
-> Current contracts and implementation limits: [specifications](specs/README.md), [TODO](TODO.md) and [rc16 GPU compute report](specs/reports/RC16_GPU_COMPUTE_EXPANSION_2026-10-16.zh-CN.md). Build the test APK with `scripts/build-test.ps1`.
+> Current contracts and implementation limits: [specifications](specs/README.md), [TODO](TODO.md) and [rc24 regional GPU report](specs/reports/RC24_REGIONAL_GPU_MAPPING_AND_SOLVER_2026-10-20.zh-CN.md). Build the test APK with `scripts/build-test.ps1`.
 
 <div align="center">
 
@@ -29,7 +29,7 @@
 
 - CameraX/Camera2Interop JPEG capture, supported back views/zoom, tap AF/AE and upright output. Camera requests are capability dependent, not guaranteed OEM behavior.
 - Full HDR/multi-frame capture enabled by default: requests up to four base and three shorter frames. Only locally supported observations contribute to denoising, experimental regional reconstruction or highlight recovery. Output size and recovered detail are separate; native 50 MP is not guaranteed.
-- Debug-only experimental Vulkan support maps/ECC proposals with numerical and cost calibration, bounded resources and CPU fallback. Release stays CPU. Full GPU fusion and phone speedup are not yet accepted.
+- Debug-only experimental Vulkan support/ECC and regional observation mapping/solver with numerical and full-cost calibration, bounded resources and CPU fallback. Release stays CPU. Full GPU fusion and phone speedup are not yet accepted.
 - Tracked document outlines, manual four-corner correction, line snapping and planar perspective/aspect correction. Detection remains heuristic.
 - Three filters: Original, Magic Color and continuous-tone Paper. B&W/Grayscale have been replaced; paper/color/weak-stroke quality still needs device comparisons.
 - Immutable masters, generation-checked derivative commits, export read leases and bounded committed-page checkpoints. Restart restores saved pages; interrupted captures fail explicitly or retain a complete master. Pending bursts and unsaved edits are not replayed.

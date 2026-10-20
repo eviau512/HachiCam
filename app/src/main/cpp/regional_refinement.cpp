@@ -1,68 +1,30 @@
 #include "regional_reconstruction.h"
+#include "gpu_compute.h"
+#include <set>
+#include <chrono>
+#include <cstdio>
 #include <limits>
 #include <opencv2/imgproc.hpp>
 
 namespace fusion {
 namespace {
-struct Observation {
-    int index[16];
-    float weight[16];
-    cv::Vec3f color;
-};
 cv::Point2d project(const cv::Matx33d &h, double x, double y) {
     const auto p = h * cv::Vec3d(x, y, 1);
     if (!std::isfinite(p[2]) || std::abs(p[2]) < 1e-9)
         return {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
     return {p[0] / p[2], p[1] / p[2]};
 }
-bool referencePoint(const SamplingPlate &plate, const cv::Matx33d &forward, double x, double y,
-                    cv::Point2d &r) {
-    const auto initial = project(forward, x, y);
-    if (!std::isfinite(initial.x) || !std::isfinite(initial.y))
-        return false;
-    r = initial;
-    for (int iteration = 0; iteration < 3; ++iteration) {
-        cv::Point2d delta;
-        float confidence;
-        if (plate.local && !plate.local->offset(r.x, r.y, delta, confidence))
-            return false;
-        r = initial - delta;
-        if (!std::isfinite(r.x) || !std::isfinite(r.y))
-            return false;
-    }
-    if (plate.local && !plate.local->field.empty()) {
-        cv::Point2d p;
-        float confidence;
-        if (!detailMapping(plate, r.x, r.y, p, confidence) || cv::norm(p - cv::Point2d(x, y)) > .15)
-            return false;
-        if (!plate.local->gate.at<uchar>(std::clamp(int(std::round(r.y)), 0, plate.size.height - 1),
-                                         std::clamp(int(std::round(r.x)), 0, plate.size.width - 1)))
-            return false;
-    }
-    return std::isfinite(r.x) && std::isfinite(r.y);
-}
-double cost(const cv::Mat &estimate, const std::vector<Observation> &observations) {
-    const auto *p = estimate.ptr<cv::Vec3f>();
-    double error = 0;
-    for (const auto &o : observations) {
-        cv::Vec3f value(0, 0, 0);
-        for (int k = 0; k < 16; ++k)
-            value += p[o.index[k]] * o.weight[k];
-        for (int c = 0; c < 3; ++c) {
-            const double d = std::clamp(double(o.color[c] - value[c]), -14., 14.);
-            error += d * d;
-        }
-    }
-    return error / std::max(size_t(1), observations.size() * 3);
-}
 bool fitPatch(const std::vector<SamplingPlate> &plates, unsigned mask, const cv::Rect &patch,
-              cv::Mat &estimate, double &before, double &after) {
+              cv::Mat &estimate, double &before, double &after, bool& usedGpu, std::string& solverReason,
+              double& observationMs,double& solverMs,int& gpuMapJobs,int& cpuMapJobs,int& mapCompletions) {
+    const auto started=std::chrono::steady_clock::now();
+    auto elapsed=[&]{return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();};
     cv::resize((*plates[0].image)(patch), estimate, {patch.width * 2, patch.height * 2}, 0, 0,
                cv::INTER_CUBIC);
     estimate.convertTo(estimate, CV_32FC3);
-    const cv::Mat initial = estimate.clone();
-    std::vector<Observation> observations;
-    int observedSources = 0;
+    std::vector<RegionalObservation> observations;
+    observations.reserve(std::min(size_t(50000),size_t(patch.area())*plates.size()*2));
+    int observedSources = 0;std::string mappingNote;
     for (size_t ai = 0; ai < plates.size(); ++ai)
         if (mask & (1u << ai)) {
             const auto &plate = plates[ai];
@@ -99,93 +61,59 @@ bool fitPatch(const std::vector<SamplingPlate> &plates, unsigned mask, const cv:
                            plate.size.height - 1);
             if (right - left >= 128 || bottom - top >= 128)
                 continue;
+            const cv::Rect sourceRoi(left,top,right-left+1,bottom-top+1);
+            std::vector<MappedObservation> mapped;bool usedMapping=false;int completed=0;std::string mappingReason;
+            if(!gpuObservationMapping(plate,sourceRoi,patch,mapped,usedMapping,completed,mappingReason))mapped.clear();
+            if(usedMapping){++gpuMapJobs;mapCompletions+=completed;}else ++cpuMapJobs;
+            if(mappingNote.empty()&&plate.local&&!plate.local->field.empty())mappingNote=mappingReason;
             const auto startCount = observations.size();
             for (int sy = top; sy <= bottom; ++sy)
                 for (int sx = left; sx <= right; ++sx) {
                     const auto pixel = plate.image->at<cv::Vec3b>(sy, sx);
                     if (std::max({pixel[0], pixel[1], pixel[2]}) >= 247)
                         continue;
-                    Observation o{};
+                    RegionalObservation o{};
                     o.color = cv::Vec3f(pixel[0], pixel[1], pixel[2]);
-                    bool valid = true;
-                    int k = 0;
-                    for (double dy : {-.25, .25})
-                        for (double dx : {-.25, .25}) {
-                            cv::Point2d r;
-                            if (!referencePoint(plate, forward, sx + dx, sy + dy, r)) {
-                                valid = false;
-                                break;
-                            }
-                            const double x = 2 * (r.x - patch.x) + .5, y = 2 * (r.y - patch.y) + .5;
-                            if (x < 0 || y < 0 || x >= estimate.cols - 1 || y >= estimate.rows - 1) {
-                                valid = false;
-                                break;
-                            }
-                            const int ix = int(x), iy = int(y);
-                            const float fx = x - ix, fy = y - iy;
-                            for (int yy = 0; yy < 2; ++yy)
-                                for (int xx = 0; xx < 2; ++xx) {
-                                    o.index[k] = (iy + yy) * estimate.cols + ix + xx;
-                                    o.weight[k++] = .25f * (xx ? fx : 1 - fx) * (yy ? fy : 1 - fy);
-                                }
+                    const auto mapping=mapped.empty()?mapRegionalObservationCpu(plate,forward,patch,sx,sy,true):mapped[(sy-top)*sourceRoi.width+sx-left];
+                    if(!mapping.valid)continue;
+                    int k=0;
+                    for(const auto& r:mapping.local) {
+                        const double x=2*r.x+.5,y=2*r.y+.5;
+                        const int ix=int(x),iy=int(y);const float fx=x-ix,fy=y-iy;
+                        for(int yy=0;yy<2;++yy)for(int xx=0;xx<2;++xx) {
+                            o.index[k]=(iy+yy)*estimate.cols+ix+xx;
+                            o.weight[k++]=.25f*(xx?fx:1-fx)*(yy?fy:1-fy);
                         }
-                    if (valid && k == 16) {
+                    }
+                    if (k == 16) {
                         observations.push_back(o);
-                        if (observations.size() > 50000)
-                            return false;
+                        if (observations.size() > 50000){observationMs=elapsed();return false;}
                     }
                 }
             if (observations.size() - startCount >= 256)
                 ++observedSources;
         }
+    observationMs=elapsed();
     if (observedSources < 3)
         return false;
-    before = after = cost(estimate, observations);
-    if (before <= 1)
-        return false;
-    for (int iteration = 0; iteration < 8; ++iteration) {
-        cv::Mat gradient = cv::Mat::zeros(estimate.size(), CV_32FC3),
-                norm = cv::Mat::zeros(estimate.size(), CV_32F);
-        const auto *values = estimate.ptr<cv::Vec3f>();
-        auto *grad = gradient.ptr<cv::Vec3f>();
-        auto *denom = norm.ptr<float>();
-        for (const auto &o : observations) {
-            cv::Vec3f prediction(0, 0, 0);
-            for (int k = 0; k < 16; ++k)
-                prediction += values[o.index[k]] * o.weight[k];
-            cv::Vec3f residual;
-            for (int c = 0; c < 3; ++c)
-                residual[c] = std::clamp(o.color[c] - prediction[c], -14.f, 14.f);
-            for (int k = 0; k < 16; ++k) {
-                grad[o.index[k]] += residual * o.weight[k];
-                denom[o.index[k]] += o.weight[k];
-            }
-        }
-        cv::Mat next = estimate.clone();
-        auto *corrected = next.ptr<cv::Vec3f>();
-        const auto *start = initial.ptr<cv::Vec3f>();
-        for (size_t i = 0; i < next.total(); ++i)
-            if (denom[i] > 1e-5f)
-                for (int c = 0; c < 3; ++c)
-                    corrected[i][c] =
-                        std::clamp(values[i][c] + .8f * grad[i][c] / denom[i],
-                                   std::max(0.f, start[i][c] - 24), std::min(255.f, start[i][c] + 24));
-        const double error = cost(next, observations);
-        if (error >= after)
-            break;
-        estimate = std::move(next);
-        after = error;
-    }
-    return after <= before * .95;
+    RegionalSolve solved;
+    if(!gpuRegionalSolve(estimate,observations,solved,usedGpu,solverReason))
+        solved=solveRegionalCpu(estimate,observations);
+    solverMs=elapsed()-observationMs;
+    if(!mappingNote.empty())solverReason=mappingNote+"; "+solverReason;
+    before=solved.before;after=solved.after;estimate=std::move(solved.image);
+    return solved.accepted;
 }
 } // namespace
 RefinementResult refineRegions(const std::vector<SamplingPlate> &plates, const RegionalPlan &plan,
                                cv::Mat &output, const cv::Mat &preserveNative) {
     RefinementResult result;
+    const auto started=std::chrono::steady_clock::now();
     long long pixels = 0;
-    int fitted = 0;
-    double initialError = 0, finalError = 0;
-#pragma omp parallel for schedule(dynamic) reduction(+ : pixels, fitted, initialError, finalError)
+    int fitted = 0,gpuSolvers=0,cpuSolvers=0,gpuMapJobs=0,cpuMapJobs=0,mapCompletions=0;
+    std::vector<std::string> solverNotes(plan.candidates.total());
+    double initialError = 0, finalError = 0, observationWorkerMs=0,solverWorkerMs=0;
+#pragma omp parallel for schedule(dynamic) reduction(+ : pixels, fitted, initialError, finalError, gpuSolvers, cpuSolvers, observationWorkerMs, solverWorkerMs, gpuMapJobs, cpuMapJobs, mapCompletions)
     for (int ty = 0; ty < plan.candidates.rows; ++ty)
         for (int tx = 0; tx < plan.candidates.cols; ++tx) {
             const unsigned mask = plan.candidates.at<uchar>(ty, tx);
@@ -199,8 +127,11 @@ RefinementResult refineRegions(const std::vector<SamplingPlate> &plates, const R
             cv::Mat estimate, gray, contrast;
             double before = 0, after = 0, minimumContrast = 0;
             try {
-                if (!fitPatch(plates, mask, patch, estimate, before, after))
-                    continue;
+                bool usedGpu=false;std::string reason;double observationMs=0,solverMs=0;
+                const bool accepted=fitPatch(plates,mask,patch,estimate,before,after,usedGpu,reason,observationMs,solverMs,gpuMapJobs,cpuMapJobs,mapCompletions);
+                observationWorkerMs+=observationMs;solverWorkerMs+=solverMs;
+                if(!reason.empty()) {solverNotes[ty*plan.candidates.cols+tx]=reason;if(usedGpu)++gpuSolvers;else ++cpuSolvers;}
+                if(!accepted)continue;
                 cv::cvtColor((*plates[0].image)(patch), gray, cv::COLOR_BGR2GRAY);
                 minimumContrast = std::max(12., 6 * estimateNoiseSigma(gray));
                 cv::morphologyEx(gray, contrast, cv::MORPH_GRADIENT,
@@ -254,6 +185,11 @@ RefinementResult refineRegions(const std::vector<SamplingPlate> &plates, const R
                     ++pixels;
                 }
         }
+    char timing[384];std::snprintf(timing,sizeof(timing),"regional-solver-v1 gpuPatches=%d cpuPatches=%d gpuMapJobs=%d cpuMapJobs=%d mapCpuCompletions=%d wallMs=%.3f sumWorkerObservationMs=%.3f sumWorkerSolverMs=%.3f",gpuSolvers,cpuSolvers,gpuMapJobs,cpuMapJobs,mapCompletions,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count(),observationWorkerMs,solverWorkerMs);
+    recordFusionDiagnostic(timing);
+    std::set<std::string> notes;
+    for(const auto& note:solverNotes)if(!note.empty()&&notes.size()<8)notes.insert(note);
+    for(const auto& note:notes)recordFusionDiagnostic("regional-solver "+note);
     result.pixels = pixels;
     result.fittedTiles = fitted;
     result.initialError = initialError / std::max(1, fitted);
