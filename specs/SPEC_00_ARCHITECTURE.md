@@ -1,6 +1,6 @@
 # Specification 00: System Architecture and Technology Stack
 
-> Status: Authoritative. Revised 2026-10-15.
+> Status: Authoritative. Revised 2026-10-20.
 > Language: English. Chinese reports are explanatory and do not override this document.
 
 ## 1. Scope and status vocabulary
@@ -48,11 +48,11 @@ remaining requirements are recorded separately.
 | UI | Kotlin, Jetpack Compose, Material 3; camera, crop, review and export screens | UI availability is not proof that every historical design is implemented |
 | Camera | CameraX with Camera2Interop; JPEG capture and preview analysis | Vendor processing and manual control vary by camera |
 | Native vision | C++17 and OpenCV; contour detection, line snapping, perspective correction and three active filters | Heuristic image processing, not semantic document recognition |
-| Burst processing | CPU pipeline with experimental debug Vulkan support maps / ECC proposals, sampling reconstruction and short exposure recovery | JPEG inputs; no RAW, GPU denoise/HDR/reconstruction or phone performance acceptance |
+| Burst processing | CPU pipeline with calibrated experimental debug Vulkan stages specified in SPEC_02, sampling reconstruction and short exposure recovery | JPEG inputs; no RAW capture/fusion or full GPU pipeline/phone performance acceptance |
 | Page state | Repository with PROCESSING, READY/FAILED and bounded asynchronous committed metadata checkpoints | Completed-page recovery implemented in rc13; pending captures/edits are not replayed |
 | Image storage | Immutable private masters, unique derivative commits, read leases and current/previous checkpoint pins | JPEG bounds/completion checked on restart; process-death device tests still pending |
 | Export | Android PDF container with raster scanned pages and image export | No OCR or vectorized text layer |
-| Vulkan / curved geometry | Two connected debug compute kernels plus older unconnected HDR/curved primitives | Each connected workload self-tests/calibrates or uses CPU; older shader presence is not a connected feature |
+| Vulkan / curved geometry | Connected bounded debug compute stages specified in SPEC_02 plus older unconnected HDR/curved primitives | Each connected workload self-tests/calibrates or uses CPU; older shader presence is not a connected feature |
 
 Repository build files are authoritative for dependency versions and ABI selection.
 The current architecture uses Android minSdk 29 / targetSdk 35, CameraX 1.4.1 and
@@ -391,6 +391,29 @@ definition; page READY alone does not certify a completed diagnostic archive.
 Show waiting/preparing state, allow navigation cancellation, and report timeout
 or missing archive explicitly. Failed jobs resolve the wait; newly arriving jobs
 remain visible in the worker count rather than being mislabeled complete.
+
+### rc25 compact test artifact (specified before implementation, 2026-10-20)
+
+The rc25-2132 universal APK contains roughly 60 MiB of stored DEX code; native
+libraries are already compressed and the 4K Banner is an intentional original
+asset. A slow authorized Taildrop link makes transfer volume a concrete issue.
+Permit the explicit `scanner.compressTestDex=true` test-build property to select
+AGP's legacy DEX ZIP compression, enabled by the test-build helper. Property
+absence preserves the normal AGP default for ordinary/release builds. This is
+packaging compression, not R8 shrinking, obfuscation or image compression.
+Retain all three ABIs, original app ID/label/debug certificate, native algorithm
+sources and Banner payload. Record the actual size reduction; require every DEX
+entry compressed, ZIP CRC/signature/alignment and build/unit checks. New build
+identity is expected; smaller bytes do not establish faster capture or startup.
+Android installation/startup acceptance is separate; platform extraction/DEX
+optimization may change install-time work. Do not claim identical runtime startup.
+See the official [DEX packaging API](https://developer.android.com/reference/tools/gradle-api/8.3/null/com/android/build/api/dsl/DexPackaging).
+
+Keep the old immutable artifact and failed/cancelled attempt receipt. Only after
+the smaller universal package passes checks may an unfinished superseded send be
+stopped and the distinct newly stamped package sent. Do not label an interrupted
+transfer successful, infer recipient installation, drop ABIs or replace the
+user-selected image asset to reduce transfer size.
 
 Artifact integrity and delivery are separate from build identity. Before sending,
 record the immutable APK filename, byte size and SHA-256, verify ZIP entry CRCs,

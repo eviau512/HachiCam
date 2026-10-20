@@ -21,7 +21,7 @@ $env:JAVA_HOME = $JdkPath
 $env:ANDROID_HOME = $SdkPath
 Push-Location $projectPath
 try {
-    & .\gradlew.bat :app:testHachimiDebugUnitTest :app:testHachimiReleaseUnitTest :app:assembleHachimiDebug "-Pscanner.cmakeVersion=$cmakeVersion" --console=plain
+    & .\gradlew.bat :app:testHachimiDebugUnitTest :app:testHachimiReleaseUnitTest :app:assembleHachimiDebug "-Pscanner.cmakeVersion=$cmakeVersion" '-Pscanner.compressTestDex=true' --console=plain
     if ($LASTEXITCODE -ne 0) { throw "Build failed ($LASTEXITCODE)" }
     Get-ChildItem 'app\build\outputs\apk\hachimi\debug\*universal*.apk'
 } finally { Pop-Location }

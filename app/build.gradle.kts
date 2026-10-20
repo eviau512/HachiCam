@@ -77,6 +77,10 @@ android {
     }
 
     packaging {
+        dex {
+            useLegacyPackaging = providers.gradleProperty("scanner.compressTestDex")
+                .map { it.toBooleanStrict() }.orNull
+        }
         jniLibs {
             useLegacyPackaging = true
         }
