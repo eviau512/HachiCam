@@ -394,6 +394,9 @@ remain visible in the worker count rather than being mislabeled complete.
 
 ### rc25 compact test artifact (specified before implementation, 2026-10-20)
 
+Implemented and clean-build/signature/ZIP checked with `scanner.compressTestDex=true`;
+physical installation/startup and transport acknowledgment remain pending.
+
 The rc25-2132 universal APK contains roughly 60 MiB of stored DEX code; native
 libraries are already compressed and the 4K Banner is an intentional original
 asset. A slow authorized Taildrop link makes transfer volume a concrete issue.

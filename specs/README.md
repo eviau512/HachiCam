@@ -20,7 +20,7 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Latest implementation: [rc25 residual local ECC](reports/RC25_RESIDUAL_LOCAL_ECC_2026-10-20.zh-CN.md) (final replay/build/delivery in progress).
+Latest implementation: [rc25 residual local ECC](reports/RC25_RESIDUAL_LOCAL_ECC_2026-10-20.zh-CN.md) (rc25-2157 universal verified; prior offline/502 failures, delivery retry queued and not acknowledged; phone acceptance pending).
 Previous delivered build: [rc24 regional GPU mapping and solver](reports/RC24_REGIONAL_GPU_MAPPING_AND_SOLVER_2026-10-20.zh-CN.md) (rc24-2004 universal sent to Hyper-obs; phone acceptance pending).
 Previous delivery: [rc23 continuous HDR support and bounded registration](reports/RC23_CONTINUOUS_HDR_AND_BOUNDED_REGISTRATION_2026-10-20.zh-CN.md) (full lamp recovery and phone performance acceptance pending).
 Previous delivery: [rc22 GPU physical verification and rejection diagnostics](reports/RC22_GPU_PHYSICAL_VALIDATION_2026-10-18.zh-CN.md).
