@@ -30,11 +30,89 @@ independent/identical phases, excessive source border loss, colored/faint ink,
 blank paper and an internal table. Outputs are in `.tools/native-quality-tests.log`.
 The launcher suppresses Windows modal loader/error dialogs and captures failures.
 
+## Experimental GPU primitives (rc14)
+
+Run `scripts/test-gpu-native.ps1` on a host with a hardware Vulkan compute device.
+It builds the actual packed-byte support/ECC shaders against the production
+sources, compares gates and known shifts, injects loader/software/pipeline/
+allocation/bind/map/submit/completion failure policies, then runs the full image
+regression. Missing hardware is an explicit failure of GPU execution, not a
+CPU pass reported as GPU. Timeout injection completes real work first and then
+simulates the unresolved policy state; it tests bounded quarantine without
+deliberately hanging a driver. Real Android driver failure/thermal tests remain pending.
+
+The rc14 ECC solver uses six cached specialized pipelines, resident byte-input
+Gaussian/gradient/mask preparation and two tiled reduction dispatches per bounded
+iteration. Actual GPU tests compare all five prepared float planes exactly with
+CPU, check known shifts and 16 mixed non-square patches with partial chunks, and
+reject flat, insufficient-mask and overflowing inputs. Numerical proposal limits
+remain 0.05 source pixel and 0.002 correlation. Production workload calibration
+can still select CPU; executing the test shader does not prove a phone speedup.
+
+The quality suite also checks native-byte highlight demand coordinates, all
+potential conflict/edge nodes and exhaustive admission for small supported target
+regions. These checks protect the demand-bounded scheduling optimization without
+changing the recovery thresholds or claiming new lamp recovery.
+
+rc15 updates highlight demand to the revised >=247 channel-clipping contract.
+The math regression checks adversarial single-channel JPEG response and exact
+preservation of unclipped channels; the full pipeline retains clipped colored
+text/rings and normal/streaming rejection cases. Cached/uncached node preparation
+is compared with identical registration fields/gates. Medium-correlation GPU
+scheduling failed frozen conformance and is not activated.
+
+`scripts/build-compute-shaders.ps1` rebuilds the checked-in SPIR-V and C++ headers
+using the installed NDK's glslc, targeting Vulkan 1.0. Android debug integration
+adds startup and real-workload CPU/timing calibration. Test force/failure hooks
+are host-test-only macros and are absent from the shipped APK. Release remains CPU.
+
 The current host dependency is MSYS2 OpenCV 5.0.0-5, isolated under
 `.tools/opencv-host/ucrt64`. `opencv_compat.h` includes declarations split into the
 OpenCV 5 geometry module. **Android still builds/ships OpenCV 4.10.0**; a host pass
 is not an Android runtime, camera, memory or device-quality pass. No host test
 runtime is packaged in the APK. Compiler/Python/OpenCV paths are overridable.
+
+The rc6 suite also compiles `stream_fusion.cpp` and `noise_pipeline_test.cpp`.
+It compares known clean truth with independent noisy color frames, including
+subpixel motion, faint marks, noise-only/identical cases, blurred noisy text and
+sparse verified coverage below 20%. A 4912 x 3684 native fixture checks sequential
+fusion and analysis-to-native mapping after reference changes. Test loaders
+provide owned in-memory frames; Android's file/JPEG loading and camera mode
+availability still require device verification.
+
+The rc7 suite also compiles `highlight_pipeline_test.cpp` against both production
+normal/streaming pipelines. It checks real pixel recovery and regained text
+contrast, single-channel clipping, ordinary midtone preservation, translated
+short exposures, sparse support below the former 5% cutoff, and rejection of
+ignored exposure, occlusion and all-clipped/flat input. Grayscale match validity
+excludes any clipped reference color channel. These known-truth fixtures do not
+model every vendor JPEG response, flicker or rolling shutter.
+
+The rc23 suite checks continuous highlight overlap, unchanged displacement
+conflict rejection, geometric support-union equivalence, bounded CPU support and
+a conservative detail-energy upper bound against independently sampled subpixel
+translations. Channel recovery enters continuously at clipping; observed
+channels remain protected. Full CPU/GPU image suites retain ring-hole recovery,
+white-field/text, blur/occlusion/noise and streaming checks. Frozen full versus
+bounded preparation replays remain private local evidence; host timing and
+OpenCV 5 parity do not certify Android performance or complete lamp contours.
+
+The rc24 suite runs actual GPU quarter-sample mapping in patch-relative
+coordinates, including projective transforms, clipped sources, boundary/gate,
+missing-detail and conflict cases. It checks resident CSR solving, correction
+bounds and original reconstruction truth. Production calibration injects a
+numeric disagreement independently into both new stages and verifies exact CPU
+reuse, permanent class rejection and unrelated-stage operation. Mapping-only
+isolation and fault controls are host-test-only and must be absent from APKs.
+
+The rc25 suite checks actual residual tiled ECC translation, non-square/masked
+inputs, flat rejection and research resident COUNT-bound updates against OpenCV.
+Production residual calibration is independent of strong selection and injects
+a numeric disagreement into the selected tiled route, verifying exact
+CPU transform/double correlation/mask-failure reuse and permanent class isolation.
+Existing strong fitting remains available. Full image, noise, HDR, occlusion and
+streaming regressions remain required; frozen real-image replays and Android
+performance are separate evidence, not certified by these synthetic cases.
 
 Verified official package checksums used for this workspace:
 

@@ -20,8 +20,8 @@ try {
     $args = @('-std=c++17', '-O2', '-fopenmp', '-Wno-deprecated-declarations',
         '-include', 'tests/native/host/opencv_compat.h', '-I', $include,
         '-I', 'app/src/main/cpp', '-I', 'tests/native/host',
-        'tests/native/quality_pipeline_test.cpp', 'tests/native/document_boundary_test.cpp', 'app/src/main/cpp/local_registration.cpp',
-        'app/src/main/cpp/fusion_pipeline.cpp', 'app/src/main/cpp/burst_fusion.cpp',
+        'tests/native/quality_pipeline_test.cpp', 'tests/native/regional_reconstruction_test.cpp', 'tests/native/document_boundary_test.cpp', 'tests/native/noise_pipeline_test.cpp', 'tests/native/highlight_pipeline_test.cpp', 'app/src/main/cpp/local_registration.cpp', 'app/src/main/cpp/gpu_local_support.cpp',
+        'app/src/main/cpp/fusion_pipeline.cpp', 'app/src/main/cpp/stream_fusion.cpp', 'app/src/main/cpp/regional_reconstruction.cpp', 'app/src/main/cpp/regional_refinement.cpp', 'app/src/main/cpp/burst_fusion.cpp',
         'app/src/main/cpp/perspective_corrector.cpp', 'app/src/main/cpp/edge_detector.cpp',
         'app/src/main/cpp/document_boundary.cpp',
         '-L', (Join-Path $OpenCvRoot 'lib'), '-lopencv_video', '-lopencv_photo') + $libs +

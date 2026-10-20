@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="page_recovery_warning">页面记录保存或恢复失败。照片文件会保留，最新编辑可能无法在重启后保留。</string>
     <string name="app_name">HachiCam</string>
     <string name="camera_title">扫描</string>
     <string name="crop_title">文档裁剪与调正</string>
@@ -78,7 +79,13 @@
     <string name="full_hdr_warning_desc">最多拍摄 7 帧 JPEG。HDR 需要设备支持手动曝光，细节重建需要有效的亚像素位移。处理耗时和输出尺寸因设备及场景而异。\n\n是否启用？</string>
     <string name="confirm_enable">确认开启</string>
     <string name="export_logs_title">导出诊断日志</string>
-    <string name="export_logs_summary">打包 App 运行日志与硬件环境信息以供排障</string>
+    <string name="export_capture_diagnostics_title">导出拍摄诊断</string>
+    <string name="export_capture_diagnostics_summary">包含最近最多四组完成拍摄的原始连拍照片、成片与日志</string>
+    <string name="export_logs_summary">导出应用版本与安全诊断信息以供排障</string>
+    <string name="diagnostics_waiting">正在等待照片处理完成…</string>
+    <string name="diagnostics_preparing">正在准备诊断包…</string>
+    <string name="diagnostics_wait_timeout">照片仍在处理中，请稍后再次导出。</string>
+    <string name="diagnostics_latest_missing">最新一次尚无完整照片诊断，包内照片来自较早完成的拍摄。</string>
     <string name="share_logs_title">分享诊断日志</string>
     <string name="batch_ratio">批量比例</string>
     <string name="select_all">全选</string>
@@ -101,4 +108,30 @@
     <string name="boundary_partial">边缘不完整 · 拍后调整</string>
     <string name="boundary_found">已找到边缘</string>
     <string name="boundary_missing">未找到清晰边缘 · 可手动裁切</string>
+    <string name="multi_frame_title">Full HDR</string>
+    <string name="multi_frame_summary">默认开启，合成可用帧以降低噪点并恢复高光；关闭后拍摄单张照片。</string>
+    <string name="high_pixel_title">原生高像素连拍</string>
+    <string name="high_pixel_summary">实验功能。使用相机支持的更高原生分辨率，需要更多时间和内存。</string>
+    <string name="high_pixel_warning_title">开启实验高像素模式？</string>
+    <string name="high_pixel_warning_desc">在所选摄像头支持时，以更高原生分辨率拍摄多张照片。处理时间更长，同一时间只处理一个拍摄任务。内存不足可能阻止拍摄，相机配置不支持时会回到常规模式。实际细节与降噪效果因场景而异。</string>
+    <string name="high_pixel_memory">空闲内存不足以进行高像素连拍，请切换常规模式或稍后重试。</string>
+    <string name="high_pixel_unavailable">当前相机配置不支持高像素拍摄，已使用常规 Full HDR。</string>
+    <string name="high_pixel_active">实验 · 原生高像素</string>
+    <string name="camera_main">主摄</string>
+    <string name="capture_native_mp">原生高像素 · %1$.1f MP</string>
+    <string name="capture_normal_mp">常规拍摄 · %1$.1f MP</string>
+    <string name="native_high_inactive">原生高像素未启用</string>
+    <string name="last_output_mp">上次拍摄输出 · %1$.1f MP</string>
+    <string name="camera_wide_view">广角 %1$.1f×</string>
+    <string name="camera_tele_view">远摄 %1$.1f×</string>
+    <string name="camera_zoom">变焦</string>
+    <string name="hdr_preview_hint">SDR 取景 · 拍摄后进行 HDR 合成</string>
+    <string name="hdr_no_recovery">照片已保存，但本次未恢复高光。可点击亮部测光后重拍。</string>
+    <string name="camera_rear_number">后置 %1$d</string>
+    <string name="camera_change_failed">摄像头或倍率切换失败，请重试。</string>
+    <string name="fusion_single_frame">仅一张基础曝光参与，照片已保存；本次未进行多帧降噪。</string>
+    <string name="edit_failed">编辑未能保存，已保留上一版照片。</string>
+    <string name="export_failed_preserved">导出未完成，扫描照片已保留，请重试。</string>
+    <string name="export_cleanup_failed">导出未完成，目标文件夹中可能仍有部分未完成文件。</string>
+    <string name="export_memory_shortage">当前内存不足，请减少每次导出的页数后重试。</string>
 </resources>

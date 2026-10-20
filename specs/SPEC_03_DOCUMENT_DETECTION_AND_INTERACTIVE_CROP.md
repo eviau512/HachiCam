@@ -106,11 +106,14 @@ Integer pixel centers are 0 through width-1 and 0 through height-1. A UI may use
 continuous image-edge bounds 0 through width and 0 through height only with an
 explicit conversion; never mix these conventions implicitly.
 
-**Current gap:** not every JNI/manual-edit path performs these validity checks.
-Do not label the validation requirement as implemented.
+**Implemented in rc10 for final planar edits:** managed preflight and native
+rectification reject invalid geometry/type/shape before warp allocation. Optional
+lookup inputs have bounded type/search checks and JNI exception guards. Automatic
+detection confidence and all physical manual/snap cases remain unverified.
 
-Manual edits take precedence over late automatic suggestions. Full-resolution
-border refinement is a future candidate and may not overwrite committed manual
+Manual edits take precedence over late automatic suggestions.
+rc10 rejects stale crop edge/line/contour completions by page/draft generation.
+Full-resolution border refinement is a future candidate and may not overwrite committed manual
 geometry without an explicit user action.
 
 Users must be able to correct, reset and confirm a crop. Dragging must not swap

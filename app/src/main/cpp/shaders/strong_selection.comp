@@ -1,0 +1,49 @@
+#version 450
+layout(local_size_x=128) in;
+layout(constant_id=0) const int kernelStage=0;
+layout(std430,binding=0) readonly buffer Bytes {uint bytes[];};
+layout(std430,binding=1) readonly buffer Planes {float hp[];};
+layout(std430,binding=2) buffer Work {vec4 work[];};
+layout(push_constant) uniform Shape {int width;int height;int planeWords;int jobs;int chunks;int unused0;int unused1;int unused2;} p;
+shared vec4 first[128];shared vec4 second[128];shared vec3 centre;
+float pixel(ivec2 span,int plane,int i){return float((bytes[span.x+plane*span.y+(i>>2)]>>(8*(i&3)))&255u);}
+bool mask(ivec4 r,ivec2 span,int x,int y) {
+    if(x<10||y<10||x>=r.z-10||y>=r.w-10)return false;
+    int i=y*r.z+x;float a=pixel(span,0,i),b=pixel(span,1,i);
+    return a>8.&&a<247.&&b>8.&&b<247.&&pixel(span,2,i)>0.;
+}
+void reduceValues(){
+    barrier();
+    for(uint step=64u;step>0u;step>>=1u){if(gl_LocalInvocationID.x<step){first[gl_LocalInvocationID.x]+=first[gl_LocalInvocationID.x+step];second[gl_LocalInvocationID.x]+=second[gl_LocalInvocationID.x+step];}barrier();}
+}
+void main() {
+    uint id=kernelStage==0 ? gl_WorkGroupID.y : gl_WorkGroupID.x,lane=gl_LocalInvocationID.x;
+    if(id>=uint(p.jobs))return;
+    ivec4 r=ivec4(work[id*2u]);int offset=int(work[id*2u+1u].x),count=r.z*r.w;
+    ivec2 byteLayout=ivec2(work[id*2u+1u].yz);
+    uint partialBase=uint(p.jobs)*4u+id*uint(p.chunks)*2u;
+    precise vec3 sums=vec3(0.);
+    if(kernelStage==0) {
+        uint start=gl_WorkGroupID.x*1024u,end=min(uint(count),start+1024u);
+        for(uint k=start+lane;k<end;k+=128u)if(mask(r,byteLayout,int(k)%r.z,int(k)/r.z))sums+=vec3(hp[offset+int(k)],hp[offset+count+int(k)],1.);
+    } else if(lane<uint(p.chunks)) {vec4 v=work[partialBase+lane*2u];sums=vec3(v.xy*v.z,v.z);}
+    first[lane]=vec4(sums,0.);second[lane]=vec4(0.);reduceValues();
+    if(lane==0u)centre=vec3(first[0].z>0. ? first[0].xy/first[0].z : vec2(0.),first[0].z);
+    barrier();
+    precise vec3 moments=vec3(0.);
+    if(kernelStage==0) {
+        uint start=gl_WorkGroupID.x*1024u,end=min(uint(count),start+1024u);
+        for(uint k=start+lane;k<end;k+=128u)if(mask(r,byteLayout,int(k)%r.z,int(k)/r.z)) {
+            precise vec2 d=vec2(hp[offset+int(k)],hp[offset+count+int(k)])-centre.xy;
+            moments+=vec3(d.x*d.x,d.y*d.y,d.x*d.y);
+        }
+    } else if(lane<uint(p.chunks)) {
+        vec4 v=work[partialBase+lane*2u];precise vec2 d=v.xy-centre.xy;
+        moments=work[partialBase+lane*2u+1u].xyz+v.z*vec3(d.x*d.x,d.y*d.y,d.x*d.y);
+    }
+    first[lane]=vec4(moments,0.);second[lane]=vec4(0.);reduceValues();
+    if(lane==0u) {
+        uint target=kernelStage==0 ? partialBase+gl_WorkGroupID.x*2u : uint(p.jobs)*2u+id*2u;
+        work[target]=vec4(centre,0.);work[target+1u]=first[0];
+    }
+}

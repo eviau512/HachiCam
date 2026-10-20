@@ -92,4 +92,12 @@ class CropTrackerTest {
         assertNull(t.update(quad(), 580, "a", false))
         assertFalse(t.update(quad(), 710, "a", false)!!.partial)
     }
+    @Test fun cameraOrZoomResetCannotReusePreviousAcquisition() {
+        val t = CropTracker(); acquire(t)
+        t.reset()
+        assertNull(t.update(null, 280, "a"))
+        assertNull(t.update(quad(), 300, "a"))
+        assertNull(t.update(quad(), 420, "a"))
+        assertNotNull(t.update(quad(), 560, "a"))
+    }
 }

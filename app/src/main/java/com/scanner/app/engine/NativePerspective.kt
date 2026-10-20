@@ -12,6 +12,7 @@ class NativePerspective {
 
     fun correctPerspective(srcMat: Mat, corners: DocumentQuad, targetAspectRatio: Float = 0f): Mat {
         val resultMatAddr = nativeCorrectPerspective(srcMat.nativeObjAddr, corners.toFloatArray(), targetAspectRatio)
+        check(resultMatAddr != 0L) { "Perspective returned no image" }
         return Mat(resultMatAddr)
     }
 
@@ -22,6 +23,7 @@ class NativePerspective {
             ImageFilter.PAPER -> 2
         }
         val resultMatAddr = nativeProcessDocument(srcMat.nativeObjAddr, corners.toFloatArray(), filterId, targetAspectRatio)
+        check(resultMatAddr != 0L) { "Document rendering returned no image" }
         return Mat(resultMatAddr)
     }
 
@@ -32,6 +34,7 @@ class NativePerspective {
             ImageFilter.PAPER -> 2
         }
         val resultMatAddr = nativeApplyFilter(srcMat.nativeObjAddr, filterId)
+        check(resultMatAddr != 0L) { "Filter returned no image" }
         return Mat(resultMatAddr)
     }
 

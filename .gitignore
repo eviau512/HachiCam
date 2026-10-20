@@ -10,6 +10,10 @@
 # Java class files
 *.class
 
+# Python research runtime caches
+__pycache__/
+*.py[cod]
+
 # Generated files
 bin/
 gen/
@@ -90,4 +94,16 @@ march7th_app_icon.png
 paimon_app_icon.png
 mihomo_icon.png
 logo_handoff/
+
+# Artwork deliverables only; provenance notes and working files stay local.
+/artwork/**/*
+!/artwork/**/
+!/artwork/**/*.png
+!/artwork/**/*.webp
+!/artwork/**/*.jpg
+!/artwork/**/*.jpeg
+/artwork/**/references/
+/artwork/**/native/
+/artwork/**/previews/
+/artwork/**/processing/
 

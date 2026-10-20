@@ -1,0 +1,62 @@
+#version 450
+layout(local_size_x=128) in;
+layout(std430,binding=0) readonly buffer Images { uint pixels[]; };
+layout(std430,binding=1) readonly buffer Metadata { uint metadata[]; };
+layout(std430,binding=2) writeonly buffer Result { uint result[]; };
+layout(push_constant) uniform Shape { int width;int height;int x;int y;int plates;int unused0;int unused1;int unused2; } p;
+float f(int i){return uintBitsToFloat(metadata[i]);}
+vec3 node(int start,int i){return vec3(f(start+4*i),f(start+4*i+1),f(start+4*i+2));}
+vec3 color(int start,int width,int x,int y){uint v=pixels[start+y*width+x];return vec3(v&255u,(v>>8)&255u,(v>>16)&255u);}
+void main() {
+    int at=int(gl_GlobalInvocationID.x);
+    if(at>=p.width*p.height)return;
+    int x=at%p.width,y=at/p.width;
+    precise vec3 sum=vec3(0.);
+    precise float weights=0.;uint contributors=0u;bool ambiguous=false;
+    for(int plate=0;plate<p.plates;plate++) {
+        int m=plate*24,gate=int(metadata[m+9]);
+        if(gate>=0 && ((metadata[gate+(at>>2)]>>(8*(at&3)))&255u)==0u)continue;
+        int nx=int(metadata[m+6]),ny=int(metadata[m+7]);
+        precise vec3 delta=vec3(0.,0.,1.);
+        if(nx>0) {
+            int start=int(metadata[m+5]);
+            precise vec2 g=clamp(vec2(p.x+x,p.y+y)/float(metadata[m+8]),vec2(0.),vec2(nx-1,ny-1));
+            ivec2 g0=ivec2(g),g1=min(g0+ivec2(1),ivec2(nx-1,ny-1));
+            precise vec2 a=g-vec2(g0);
+            precise float w[4]=float[4]((1.-a.x)*(1.-a.y),a.x*(1.-a.y),(1.-a.x)*a.y,a.x*a.y);
+            vec3 n[4]=vec3[4](node(start,g0.y*nx+g0.x),node(start,g0.y*nx+g1.x),node(start,g1.y*nx+g0.x),node(start,g1.y*nx+g1.x));
+            delta=vec3(0.);bool supported=true;
+            for(int i=0;i<4;i++) {
+                if(abs(w[i]-.001)<1e-6)ambiguous=true;
+                if(w[i]<=.001)continue;
+                if(n[i].z<=0.){supported=false;break;}
+                for(int j=0;j<i;j++)if(w[j]>.001) {
+                    float distance=length(n[i].xy-n[j].xy);
+                    if(abs(distance-1.5)<.001)ambiguous=true;
+                    if(distance>1.5)supported=false;
+                }
+                delta+=n[i]*w[i];
+            }
+            if(!supported || delta.z<=0.)continue;
+        }
+        precise vec2 q=vec2(x,y)+delta.xy;
+        precise float denominator=f(m+18)*q.x+f(m+19)*q.y+1.;
+        precise vec2 v=vec2(f(m+12)*q.x+f(m+13)*q.y+f(m+14),f(m+15)*q.x+f(m+16)*q.y+f(m+17))/denominator;
+        int width=int(metadata[m+1]),height=int(metadata[m+2]);
+        if(any(isnan(v))||any(isinf(v))||denominator<.75||denominator>1.25){ambiguous=true;continue;}
+        if(min(min(abs(v.x),abs(v.x-float(width-1))),min(abs(v.y),abs(v.y-float(height-1))))<.003)ambiguous=true;
+        if(v.x<0.||v.y<0.||v.x>float(width-1)||v.y>float(height-1)){ambiguous=true;continue;}
+        ivec2 i=ivec2(v),n=min(i+ivec2(1),ivec2(width-1,height-1));
+        precise vec2 a=v-vec2(i);
+        int start=int(metadata[m]);
+        precise vec3 c=(1.-a.y)*((1.-a.x)*color(start,width,i.x,i.y)+a.x*color(start,width,n.x,i.y))+
+            a.y*((1.-a.x)*color(start,width,i.x,n.y)+a.x*color(start,width,n.x,n.y));
+        sum+=c*delta.z;weights+=delta.z;contributors++;
+    }
+    precise vec3 value=weights>1e-5 ? sum/weights : vec3(0.);
+    if(weights<=1e-5)ambiguous=true;
+    // CPU completes rounding neighborhoods; it also preserves exact HDR demand.
+    if(any(lessThan(abs(fract(value)-vec3(.5)),vec3(.06))))ambiguous=true;
+    uvec3 b=uvec3(clamp(roundEven(value),vec3(0.),vec3(255.)));
+    result[at]=b.x|(b.y<<8)|(b.z<<16)|(contributors<<24)|(ambiguous ? 0x80000000u : 0u);
+}

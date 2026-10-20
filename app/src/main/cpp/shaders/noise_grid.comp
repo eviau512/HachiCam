@@ -1,0 +1,34 @@
+#version 450
+layout(local_size_x=128) in;
+layout(std430,binding=0) readonly buffer Pixels { uint pixels[]; };
+layout(std430,binding=1) readonly buffer Active { uint enabled[]; };
+layout(std430,binding=2) writeonly buffer Medians { uint medians[]; };
+layout(push_constant) uniform Shape { int width;int height;int nx;int ny;int spacing;int unused0;int unused1;int unused2; } p;
+shared uint histogram[511];
+shared uint samples;
+uint at(int x,int y) {int i=y*p.width+x;return (pixels[i>>2]>>(8*(i&3)))&255u;}
+void main() {
+    uint node=gl_WorkGroupID.x,lane=gl_LocalInvocationID.x;
+    if(node>=uint(p.nx*p.ny)||enabled[node]==0u)return;
+    int cx=min(int(node)%p.nx*p.spacing,p.width-1),cy=min(int(node)/p.nx*p.spacing,p.height-1);
+    int x0=max(0,cx-160),y0=max(0,cy-160),w=min(p.width,cx+161)-x0,h=min(p.height,cy+161)-y0;
+    for(int s=0;s<3;s++) {
+        for(uint k=lane;k<511u;k+=128u)histogram[k]=0u;
+        if(lane==0u)samples=0u;
+        barrier();
+        int separation=1<<s,nx=(w-separation+3)/4,ny=(h-separation+3)/4;
+        for(uint k=lane;k<uint(nx*ny);k+=128u) {
+            int x=x0+int(k)%nx*4,y=y0+int(k)/nx*4;
+            int a=int(at(x,y)),b=int(at(x+separation,y)),c=int(at(x,y+separation)),d=int(at(x+separation,y+separation));
+            if(min(min(a,b),min(c,d))<4||max(max(a,b),max(c,d))>251)continue;
+            atomicAdd(histogram[abs(a-b-c+d)],1u);atomicAdd(samples,1u);
+        }
+        barrier();
+        if(lane==0u) {
+            uint median=0u,total=0u;
+            if(samples>=16u)for(uint k=0u;k<511u;k++) {total+=histogram[k];if(total>samples/2u){median=k;break;}}
+            medians[node*3u+uint(s)]=median;
+        }
+        barrier();
+    }
+}

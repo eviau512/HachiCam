@@ -1,0 +1,53 @@
+#version 450
+layout(local_size_x=128) in;
+layout(std430,binding=0) readonly buffer Masks {uint mask[];};
+layout(std430,binding=1) readonly buffer Metadata {uint meta[];};
+layout(std430,binding=2) writeonly buffer Output {uint result[];};
+float f(int i){return uintBitsToFloat(meta[i]);}
+vec2 project(int start,vec2 q){precise float d=f(start+6)*q.x+f(start+7)*q.y+f(start+8);return vec2(f(start)*q.x+f(start+1)*q.y+f(start+2),f(start+3)*q.x+f(start+4)*q.y+f(start+5))/d;}
+bool offset(vec2 r,bool detail,out vec3 delta,inout bool ambiguous){
+    int nx=int(meta[22]),ny=int(meta[23]),spacing=int(meta[24]);
+    precise vec2 g=clamp(vec2(int(meta[25])/spacing,int(meta[26])/spacing)+(vec2(int(meta[25])%spacing,int(meta[26])%spacing)+r)/float(spacing),vec2(0.),vec2(nx-1,ny-1));
+    ivec2 a=ivec2(g),b=min(a+1,ivec2(nx-1,ny-1));precise vec2 t=g-vec2(a);
+    precise float w[4]=float[4]((1.-t.x)*(1.-t.y),t.x*(1.-t.y),(1.-t.x)*t.y,t.x*t.y);
+    int ids[4]=int[4](a.y*nx+a.x,a.y*nx+b.x,b.y*nx+a.x,b.y*nx+b.x);
+    vec3 n[4];for(int i=0;i<4;i++)n[i]=vec3(f(40+4*ids[i]),f(41+4*ids[i]),f(42+4*ids[i]));
+    delta=vec3(0.);
+    for(int i=0;i<4;i++){
+        if(abs(w[i]-.001)<.00001)ambiguous=true;
+        if(w[i]<=.001)continue;
+        if(n[i].z<=0. || (detail && meta[43+4*ids[i]]==0u))return false;
+        for(int j=0;j<i;j++)if(w[j]>.001){float d=length(n[i].xy-n[j].xy);if(abs(d-1.5)<.001)ambiguous=true;if(d>1.5)return false;}
+        delta+=n[i]*w[i];
+    }
+    return delta.z>0.;
+}
+void main(){
+    int at=int(gl_GlobalInvocationID.x),width=int(meta[18]),height=int(meta[19]);if(at>=width*height)return;
+    result[9*at+8]=0u;if(mask[at]==0u)return;
+    bool ambiguous=false;vec2 base=vec2(at%width,at/width);
+    for(int k=0;k<4;k++){
+        vec2 s=base+vec2((k%2)==0?-.25:.25,k<2?-.25:.25);
+        vec2 initial=project(0,s),r=initial;vec3 delta;
+        if(any(isnan(initial))||any(isinf(initial))){result[9*at+8]=2u;return;}
+        for(int i=0;i<3;i++){
+            if(!offset(r,false,delta,ambiguous)){result[9*at+8]=ambiguous?2u:0u;return;}r=initial-delta.xy;
+        }
+        vec2 p=2.*r+.5,limit=2.*vec2(meta[20],meta[21])-1.;
+        if(any(lessThan(abs(p),vec2(.002)))||any(lessThan(abs(p-limit),vec2(.002))))ambiguous=true;
+        if(any(lessThan(p,vec2(0.)))||any(greaterThanEqual(p,limit))){result[9*at+8]=ambiguous?2u:0u;return;}
+        if(!offset(r,true,delta,ambiguous)){result[9*at+8]=ambiguous?2u:0u;return;}
+        vec2 check=project(9,r+delta.xy),lo=-vec2(meta[29],meta[30]),hi=vec2(meta[31],meta[32])-1.+lo;
+        if(any(isnan(check))||any(isinf(check))){result[9*at+8]=2u;return;}
+        if(any(lessThan(abs(check-lo),vec2(.002)))||any(lessThan(abs(check-hi),vec2(.002))))ambiguous=true;
+        if(any(lessThan(check,lo))||any(greaterThan(check,hi))){result[9*at+8]=ambiguous?2u:0u;return;}
+        float error=length(check-s);if(abs(error-.15)<.001)ambiguous=true;
+        if(error>.15){result[9*at+8]=ambiguous?2u:0u;return;}
+        vec2 rounded=floor(r+.5);vec2 fraction=fract(r+.5);
+        if(any(lessThan(fraction,vec2(.002)))||any(greaterThan(fraction,vec2(.998))))ambiguous=true;
+        ivec2 gate=clamp(ivec2(rounded),ivec2(0),ivec2(meta[20],meta[21])-1);
+        if(mask[int(meta[27])+gate.y*int(meta[20])+gate.x]==0u){result[9*at+8]=ambiguous?2u:0u;return;}
+        result[9*at+2*k]=floatBitsToUint(r.x);result[9*at+2*k+1]=floatBitsToUint(r.y);
+    }
+    result[9*at+8]=ambiguous?2u:1u;
+}

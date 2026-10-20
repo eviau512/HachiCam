@@ -1,20 +1,86 @@
 # Specification 01: Camera Subsystem and Capture Pipeline
 
-> Status: Authoritative. Revised 2026-10-12.
+> Status: Authoritative. Revised 2026-10-14.
 > Language: English.
 
 ## 1. Modes and achieved outcome
 
-**Implemented:** Normal requests one JPEG; experimental HDR requests up to four
+**Implemented in rc6, device quality pending:** Full HDR/multi-frame capture is enabled by default and requests up to four
 base frames, two shorter target frames and one deeper target frame. Frame loss,
 unsupported manual exposure, invalid metadata or failed alignment may reduce
-the usable set. Neither seven valid frames nor a fixed 50 MP result is guaranteed.
+the usable set. An explicit single-frame override remains available. Native
+high-resolution burst is a separate opt-in experimental profile, subject to
+exposed JPEG sizes, exclusive admission and memory checks in the linked noise
+revision. Neither seven valid frames nor a fixed 50 MP result is guaranteed.
 
 The current pipeline is CameraX plus Camera2Interop and CPU JPEG processing.
 It is not a direct Camera2 captureBurst, a RAW pipeline, or a commercial camera
 algorithm. SPEC_02 owns reconstruction and achieved-output quality.
 
+### RAW feasibility diagnostics (rc13 contract, specified before implementation)
+
+Test-only capability snapshots list RAW_SENSOR, RAW10 and RAW12 ordinary,
+high-resolution and API-31 maximum-resolution sizes, RAW capability and maximum
+RAW output count. Missing data stays unknown. This only evaluates available
+formats; it neither binds RAW streams nor proves any RAW+preview/burst session
+combination works. Release does not acquire or retain this capability snapshot.
+RAW capture/color/noise/fusion changes require separate supported session and
+paired quality/resource acceptance; published JPEG dimensions cannot authorize
+native 50 MP RAW capture. Existing source MP semantics remain unchanged.
+
 ## 2. Capability-driven camera controls
+
+The [night/screen revision](research/NIGHT_HDR_REVISION_2026-10-14.md) requires
+bounded shutter AF and burst-long focus preservation when supported by fresh
+stationary focused metadata. Auto-cancel must not expire within the burst;
+cancellation-safe cleanup restores controls. Unknown focus stays unknown.
+Use the first captured JPEG's exactly matched result to select the held distance;
+preview metadata around the AF acknowledgment cannot substitute for that frame.
+Deep brackets may prefer lower ISO and supported 100% post-RAW boost within a
+16.667 ms shutter cap, preserving the full exposure product rather than the old
+gain allocation. Validate actual metadata; ordinary tiers retain their plan.
+
+The [rc8 detail/resolution contract](research/DETAIL_RESOLUTION_REVISION_2026-10-13.md)
+requires retaining capture variants within each grouped view. Experimental native
+high-resolution selection may use a compatible same-view endpoint with a larger
+ordinary/high-resolution JPEG budget. Do not confuse the API 31 maximum-resolution
+stream map with ordinary CameraX sizes: a separate supported sensor-pixel-mode
+session is required and is currently unimplemented. Test diagnostics must list
+all three maps and actual selected endpoint; logs retain achieved dimensions/MP.
+The rc9 viewfinder removes these technical captions per the user's request;
+settings explains experimental limits. This supersedes rc8 caption placement.
+Keep the latest capability snapshot and current-burst metadata available to log
+export independently of logcat retention. Newer burst IDs supersede older work;
+do not mix their records. This snapshot contains metadata, not retained photos.
+
+Match capture-result sensor timestamp to JPEG timestamp with bounded storage.
+When available, manual planning uses sensor ISO/time and preserves the observed
+supported post-RAW sensitivity boost, plus AWB lock across tiers. Do not infer
+these controls from JPEG brightness. Use consistent sensor or EXIF evidence for
+burst exposure comparisons; missing AF/lens/boost evidence remains unknown.
+
+The [rc7 camera/HDR correction](research/CAMERA_HDR_REVISION_2026-10-13.md)
+supersedes rc6 raw camera-ID enumeration: an ID is an endpoint, not a lens.
+Keep the default back endpoint and only expose additional compatible JPEG/YUV
+endpoints with a distinct metadata-derived field of view (12% experimental
+grouping tolerance). Prefer the default within its group; omit unclassifiable
+alternatives. Never infer hardware count from IDs or hardcode a phone model.
+Separate lens/view selection from supported logical/digital zoom controls.
+Record endpoint characteristics and grouping in test builds only.
+
+The live preview is a single-exposure SDR stream; Full HDR describes post-capture
+processing. The user's rc12 revision removes the manual EV button/menu. Reset
+supported compensation to zero on rebind, acknowledging failure, and retain
+achieved compensation in test diagnostics. Automatic metering at the selected
+target replaces the manual aid; zero compensation does not mean constant exposure.
+
+The [2026-10-13 revision](research/NOISE_REVISION_2026-10-13.md) additionally
+requires supported back-camera selection and logical zoom controls, with
+capture-time switching disabled and state reset on rebind. Capability queries
+belong to the selected camera. Actual capture dimensions must be reported;
+the normal source budget remains 16 MP; the experimental native profile permits
+at most 56 MP with streaming decode/patch validation. Advertised sensor resolution and
+logical zoom do not certify a native high-resolution mode or a physical switch.
 
 **Implemented / hardware dependent:** prefer supported FAST noise reduction,
 retain camera-default sharpening and tonemapping, request optical stabilization
@@ -38,6 +104,122 @@ requested settings from achieved frame metadata.
 **Implemented:** a valid preview tap maps through the preview metering point
 factory to AF and AE, with a three-second automatic cancel. The visible tap ring
 acknowledges the request; it is not proof of successful focus.
+
+**Historical rc10 shutter selection:** reuse the stored PreviewView metering point only
+when its monotonic age is 0..3000 ms in the active session; otherwise use centre
+AF-only, bounded as specified above. Session reset clears the stored point.
+The 13:25 screen user confirmed tapping the screen, but its diagnostics lack tap
+age/coordinates and shutter-target selection. Neither focus acknowledgment nor
+held distance proves that the intended tap was reused. Recording selected
+tap/centre, age and session identity in test-only per-capture diagnostics remains
+implemented by rc11 below, with device acceptance pending. This does not establish
+that the earlier sample's target was overwritten.
+
+**rc11 revised target lifetime, specified before implementation and now implemented:** retain a valid
+user preview metering target independently of the 3-second preview AF/AE
+auto-cancel and 1.5-second ring. At shutter, refocus at that target until a new
+valid tap, session reset, zoom change, preview layout-size change or applied
+orientation change invalidates its geometry; then use centre. This is a position
+in the current view, not semantic object tracking. A failed tap AF does not
+silently select another subject. Snapshot/record target type, normalized point,
+monotonic age, capture/session identity and actual acknowledgment separately.
+Fixed-focus/missing AF support remains unknown, with manual capture available.
+Capture snapshots its control/info under the session identity; an obsolete
+session cannot refocus or clean up the subsequently bound camera. Actual device
+target selection and optical sharpness still need verification.
+
+### rc12 target metering continuity (specified before implementation; implemented, device checks pending)
+
+The paired 19:50 rc11 slide sample reused the tap (age 1338 ms), held focus and
+recorded EV compensation zero, yet its base JPEG already has weak screen detail.
+Code and the installed CameraX 1.4.1 control confirm that a new AF-only action
+replaces AE regions with an empty set. Locking AE afterward can freeze a different
+metering result. Previous diagnostics do not establish the exact preview-to-base
+exposure increase; this is a confirmed control discontinuity, not a measured EV jump.
+
+At shutter retain both AF and AE at the same stored metering point (or centre when
+invalid), with auto-cancel disabled through acquisition. Fixed-focus cameras may
+still meter AE; unsupported modes remain unknown rather than blocking manual
+capture. Separate action acknowledgment from optical AF success. Keep the existing
+1500 ms action bound, then wait at most 750 ms for two new, timestamp-distinct
+results after the action acknowledgment, in the same active session. Both must be
+observed within 500 ms, AE CONVERGED with no pre-existing AE lock, and have positive
+finite exposure products within 0.15 stops, with consistent boost availability.
+For cameras with AE regions, require nonempty identical actual request-region
+signatures on both observations. Lack of region support cannot certify metering
+at a tap and uses the unknown fallback. These freshness/stability values are experimental.
+
+Request burst AE lock only when that measured target exposure settled and the
+device advertises lock support. Otherwise keep target AE active without claiming
+a successful lock, record bounded fallback, and permit capture. Options futures
+still require acknowledgment; result AE state/lock is evidence of execution.
+Record before-action, settled/timeout, lock request and actual first JPEG AE state,
+compensation, region count/signature and ISO/time/boost under the capture identity.
+Never use repeating preview evidence as JPEG exposure evidence; exact timestamp
+matching and first-JPEG focus hold remain mandatory. Session invalidation/cancel
+must restore owned controls without operating a new camera.
+
+This fixes control continuity, not emissive-screen tone response, flicker, optical
+bloom, target tracking or all-source clipping. Verify the same device with a small
+bright slide on a dark surround; compare preview, first base and final result.
+
+### Dark clipped foreground headroom (2026-10-18; experimental contract)
+
+Implemented experimentally in rc19; pure-policy/archive checks pass. Device
+control/decoder, readability, flicker and complete latency acceptance are pending.
+
+The three rc18 dark-screen bursts have clipped, joined white strokes already in
+their base JPEGs. Lower-exposure observations retain more stroke gaps, but local
+HDR support is zero. A settled AE result is not a certificate of usable text.
+Do not sharpen or upscale a clipped anchor to claim recovery of missing strokes.
+
+In Full HDR only, the first timestamp-matched base JPEG may also serve as a
+bounded exposure probe. This profile requires manual sensor capability, known
+boost with unity available, and a confirmed held focus or a fixed-focus camera.
+Use a decoder-reduced image with longest side <=1024 and <=1,048,576 pixels;
+never decode a high-resolution full bitmap for this check. The initial profile
+requires >=4096 samples, >=60% luma below 48, >=0.3% neutral-white pixels with
+all RGB channels >=240, 0.6%..15% luma >=210, sensor time >=20 ms, and effective
+ISO including boost >=3200. These are experimental scene statistics, not screen
+recognition, a calibrated clipping detector or a universal exposure rule.
+
+Attempt at most one replacement: target -2.5 stops from that actual sensor
+product, request unity boost, allocate time no longer than the original or
+33.333333 ms, and solve sensitivity within the device ranges. Reject plans
+outside 0.15 stops of target. Freeze the same held focus and AWB, explicitly
+disable AE and AE lock, and await option acknowledgment. Adopt the replacement
+only with a distinct matched sensor timestamp, unchanged orientation/dimensions,
+AE OFF/unlocked, unity actual boost, matching time/ISO within 5%, exposure within
+0.25 stops, and stationary AF OFF with distance within 0.02 diopters of the held
+focus (or fixed focus). Its reduced
+JPEG must reduce neutral-white clipping by >=25% and retain at least half of
+the probe's bright-pixel fraction as luma >=80. This is a bounded consistency
+check, not proof of readability or absence of screen flicker.
+
+On adoption, exclude the automatic probe from fusion and acquire four base
+anchors at the new manual setting; all brackets are planned from the replacement's
+actual exposure. For this profile, also solve the -2.5-stop shorter tier at unity
+boost using the existing <=16.666667 ms clean-bracket allocator. Keep the usual
+deep-short tier. The bounded cost is one extra JPEG and two small probe decodes;
+include it in acquisition and complete shutter-to-ready timing. No repeat search
+or fifth fusion anchor is allowed. Without adoption, restore original owned base
+options before continuing the original four-anchor path; never mix probe and
+replacement brightness as equal-exposure anchors. After a failed replacement,
+explicitly restore the probe's sensor time/ISO/boost with manual AE OFF (rather
+than locking AE immediately after manual exposure); require that boost to be
+advertised before attempting this profile. Verify later manual anchor results
+against the frozen baseline and discard mismatches. Missing evidence, unchanged
+clipping, failed controls or incompatible geometry use the original path.
+
+Test diagnostics preserve an adopted automatic probe as `metering-probe.jpg`
+inside the same `captures/<captureId>/` group, outside the `frames` fusion list.
+Record profile/version, statistics, requested/observed exposure and adoption or
+fallback reason under that capture identity. Count probe bytes in the existing
+compressed burst budget; release them for non-diagnostic builds. Keep current
+control/session cleanup, source preservation, white balance and manual shutter
+availability. No EV UI, screen-wide whitening or unconditional 50 MP output is
+introduced. Physical-device headroom, readability, flicker and latency acceptance
+remain pending until a new capture verifies them.
 
 **Required / not implemented as an integrated readiness profile:** separately
 evaluate usable document boundary, focus/sharpness, motion/blur risk, clipping
@@ -207,17 +389,23 @@ SPEC_00 build policy.
 4. Keep PROCESSING pages out of final crop/export. Mark READY only after a valid
    final or explicitly indicated fallback reference is saved. A failed fallback
    save yields FAILED.
+   The refactor installs the unique source JPEG and publishes READY under the
+   repository ownership lock, only while that capture still exists as PROCESSING.
+   Deleting a pending page invalidates installation; a committed READY source is
+   never replaced by a later fallback. Temporary encoding is outside that lock.
 5. Save completed captures under app private scans storage. Source frame data
    remains RAM-resident while pending. Continuing after screen navigation only
    holds while the process lives.
 
-**Required / not implemented:** direct/native pending buffers, a measured byte
+**Implemented in rc10, experimental:** a shared heavy-image permit, queued JPEG
+reservations and output-aware admission/degradation estimates. **Required / not
+implemented:** direct/native pending buffers, a measured byte
 budget and spill policy, durable pending manifests, page metadata persistence
 and restart recovery. The historical 96 MB and seven-day values are unvalidated
 design proposals. Three admitted jobs do not prove bounded memory across all
 review/crop tasks, and onStop alone cannot guarantee survival of process death.
 
-**Required / partly implemented:** cancellation-safe resource release,
+**Implemented in rc10; device failure cases pending:** cancellation-safe resource release,
 transactional source/derivative writes, active-file-aware cleanup, and last-valid
 image preservation. Export or session closure must not implicitly delete source
 photos. Storage UI must distinguish kept scans from disposable temporaries.
@@ -233,7 +421,17 @@ observed exposure and accepted frame counts. Apply CAP-01 through CAP-03,
 GEO-01 and LIFE-01 through LIFE-03 in
 [SPEC_06](./SPEC_06_IMAGE_QUALITY_AND_ACCEPTANCE.md).
 
+**Implemented in rc10 (control-state ownership):** record control
+request acknowledgment and actual captured settings separately. If base/focus
+option application or final restore times out/fails, do not equate the elapsed
+timeout with a known restored camera. Record the failure under its capture/session
+identity and restore/rebind or explicitly degrade before normal reuse. The
+base/focus callers inspect acknowledgment results and cleanup records clear/cancel
+results before queue submission. Restore failure blocks normal capture until a
+generation-matched rebind; actual metadata still determines fusion eligibility.
+Acknowledgment alone does not prove the OEM executed the requested settings.
+
 Device acceptance must include unsupported manual control, ignored settings,
 missing EXIF, partial burst loss, all orientations, mirrored imports, zoom/crop,
 flicker lighting, navigation during processing, saturated queues and save
-failure. This specification-only revision does not rerun device or APK tests.
+failure. rc10 build/helper checks do not substitute for this device acceptance.

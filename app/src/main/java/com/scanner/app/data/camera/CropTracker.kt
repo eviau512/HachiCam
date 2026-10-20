@@ -16,6 +16,10 @@ class CropTracker {
     private var pendingPartial = false
     private var geometry: String? = null
 
+    @Synchronized fun reset() {
+        selected = null; pending = null; pendingCount = 0; geometry = null; status = "reset"
+    }
+
     @Synchronized
     fun update(points: List<UnitPoint>?, nowMs: Long, geometryKey: String, partial: Boolean = false): Selection? {
         if (geometry != geometryKey) {

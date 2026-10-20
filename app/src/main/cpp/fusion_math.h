@@ -30,25 +30,41 @@ inline float sampleWeight(double dx, double dy) {
            std::max(0.0, 1.0 - std::abs(dy) / 0.5);
 }
 
-inline bool phasesCover2D(const std::vector<std::array<double, 2>>& phases) {
-    for (size_t i = 0; i < phases.size(); ++i)
-        for (size_t j = i + 1; j < phases.size(); ++j)
+inline bool phasesCover2D(const std::array<double,2>* phases,size_t count) {
+    for (size_t i = 0; i < count; ++i)
+        for (size_t j = i + 1; j < count; ++j)
             if (std::abs(phases[i][0] * phases[j][1] - phases[i][1] * phases[j][0]) >= .04)
                 return true;
     return false;
 }
+inline bool phasesCover2D(const std::vector<std::array<double,2>>& phases) {
+    return phasesCover2D(phases.data(),phases.size());
+}
 
-inline Color recoverHighlight(const Color& base, const Color& shorter, float gain) {
+inline bool compatibleHighlight(const Color& base,const Color& shorter,float gain) {
+    for(int c=0;c<3;++c)
+        if(base[c]<247 && std::abs(encoded(std::min(1.f,linear(shorter[c])*gain))-base[c])>24)return false;
+    return true;
+}
+
+inline float highlightCompatibilityWeight(const Color& base,const Color& shorter,float gain) {
+    float residual=0;
+    for(int c=0;c<3;++c)if(base[c]<247)
+        residual=std::max(residual,std::abs(encoded(std::min(1.f,linear(shorter[c])*gain))-base[c]));
+    const float t=std::clamp((24.f-residual)/8.f,0.f,1.f);return t*t*(3.f-2.f*t);
+}
+
+inline Color recoverHighlight(const Color& base, const Color& shorter, float gain, bool observedDark = false) {
     const float peak = *std::max_element(base.begin(), base.end());
     const float shortPeak = *std::max_element(shorter.begin(), shorter.end());
-    if (peak <= 230.0f || shortPeak < 3.0f || shortPeak >= 246.0f || gain <= 1.1f)
+    if (peak < 247.0f || (!observedDark && shortPeak < 3.0f) || shortPeak >= 246.0f || gain <= 1.1f)
         return base;
     Color radiance;
     for (int c = 0; c < 3; ++c) radiance[c] = linear(shorter[c]) * gain;
     const float maxRadiance = *std::max_element(radiance.begin(), radiance.end());
     // Continuous shoulder with unit slope at the knee, asymptotic ceiling < 255.
     constexpr float knee = 0.60f, ceiling = 0.92f;
-    if (maxRadiance < knee) return base;
+    if (maxRadiance < knee && !observedDark) return base;
     const float excess = std::max(0.0f, maxRadiance - knee);
     const float target = maxRadiance <= knee ? maxRadiance :
         knee + (ceiling - knee) * excess / (excess + ceiling - knee);
@@ -57,7 +73,11 @@ inline Color recoverHighlight(const Color& base, const Color& shorter, float gai
     const float weight = u * u * (3.0f - 2.0f * u);
     Color out;
     for (int c = 0; c < 3; ++c)
-        out[c] = base[c] * (1.0f - weight) + encoded(radiance[c] * scale) * weight;
+    {
+        const float t=std::clamp((base[c]-247.f)/6.f,0.f,1.f);
+        const float channelWeight=weight*t*t*(3.f-2.f*t);
+        out[c]=base[c]*(1.f-channelWeight)+encoded(radiance[c]*scale)*channelWeight;
+    }
     return out;
 }
 } // namespace fusion

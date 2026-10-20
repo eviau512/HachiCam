@@ -7,6 +7,7 @@ import org.junit.Test
 class BuildPrivacyTest {
     @Test fun sensitiveDiagnosticsAreOnlyEnabledInTestBuilds() {
         assertEquals(BuildConfig.DEBUG, BuildConfig.SENSITIVE_DIAGNOSTICS)
+        assertEquals(BuildConfig.DEBUG, com.scanner.app.data.util.ComputeLoadMonitor.enabled)
         assertEquals(BuildConfig.DEBUG, BuildConfig.APPLICATION_ID.endsWith(".test"))
     }
 }

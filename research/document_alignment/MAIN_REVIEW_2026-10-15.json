@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-15",
+  "production_source": "5e15ffb",
+  "application_modified": false,
+  "heldout_reproduction": {
+    "block_lk": {
+      "positive_accepted": 53,
+      "positive_total": 61,
+      "accepted_error_median": 0.010120459606452364,
+      "accepted_error_p95": 0.032714568140558446,
+      "negative_accepted": 0,
+      "negative_total": 6,
+      "patch_time_median_ms": 38.78579998854548,
+      "patch_time_p95_ms": 48.188239987939596
+    },
+    "ecc_fit_only": {
+      "positive_accepted": 61,
+      "positive_total": 61,
+      "accepted_error_median": 0.025382741032554914,
+      "accepted_error_p95": 0.1624636514551371,
+      "negative_accepted": 3,
+      "negative_total": 6,
+      "patch_time_median_ms": 2.2849999950267375,
+      "patch_time_p95_ms": 6.872699997620657
+    },
+    "guarded_ecc": {
+      "positive_accepted": 55,
+      "positive_total": 61,
+      "accepted_error_median": 0.02474943765252342,
+      "accepted_error_p95": 0.13983071398660754,
+      "negative_accepted": 0,
+      "negative_total": 6,
+      "patch_time_median_ms": 12.311100028455257,
+      "patch_time_p95_ms": 20.703629992203787
+    }
+  },
+  "matched_321": {
+    "shared_production": {
+      "proposed": 15,
+      "post_detail_gate": 15,
+      "total": 27,
+      "median_ms": null,
+      "p95_ms": null,
+      "rejections": {
+        "native_rejected": 12
+      }
+    },
+    "guarded_production_ecc": {
+      "proposed": 12,
+      "post_detail_gate": 12,
+      "total": 27,
+      "median_ms": 15.820400032680482,
+      "p95_ms": 37.23394999396987,
+      "rejections": {
+        "ambiguous_peak": 3,
+        "native_rejected": 12
+      }
+    },
+    "block_lk": {
+      "proposed": 18,
+      "post_detail_gate": 15,
+      "total": 27,
+      "median_ms": 158.50740001769736,
+      "p95_ms": 529.1069699975196,
+      "rejections": {
+        "ambiguous_peak": 8,
+        "forward_reverse": 1
+      }
+    }
+  },
+  "shared_mask_mean_fraction": 0.7982032592592593,
+  "original_production_detail": 21,
+  "overlap": {
+    "baseline_and_lk": 12,
+    "baseline_only": 3,
+    "lk_only": 3,
+    "disagreement_median": 0.07930802517113858,
+    "disagreement_max": 0.15860233926103112
+  },
+  "limits": [
+    "Same real capture already used in exploratory study; not held-out real evidence",
+    "No independent real flow truth; offset disagreement is not error",
+    "Native post-assessment repeats local physical guards; no interpolated full field or renderer",
+    "Shared mask erodes clipped samples; differs from original unmasked production",
+    "Python OpenCV 4.10 vs C++ 5.0; timings are not comparable Android costs",
+    "No end-to-end resolved-stroke or Android time/memory acceptance"
+  ],
+  "decision": "Implementation route viable; real improvement feasibility insufficient for direct product integration"
+}

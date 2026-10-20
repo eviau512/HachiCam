@@ -37,8 +37,8 @@ android {
         applicationId = "moe.hachimi.cam"
         minSdk = 29
         targetSdk = 35
-        versionCode = 29
-        versionName = "0.1.2-rc5"
+        versionCode = 49
+        versionName = "0.1.2-rc25"
 
         buildConfigField("String", "GIT_HASH", "\"$gitCommit\"")
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
@@ -77,6 +77,10 @@ android {
     }
 
     packaging {
+        dex {
+            useLegacyPackaging = providers.gradleProperty("scanner.compressTestDex")
+                .map { it.toBooleanStrict() }.orNull
+        }
         jniLibs {
             useLegacyPackaging = true
         }
@@ -105,6 +109,9 @@ android {
             applicationIdSuffix = ".test"
             resValue("string", "build_app_name", "HachiCamTest")
             buildConfigField("boolean", "SENSITIVE_DIAGNOSTICS", "true")
+            externalNativeBuild {
+                cmake { arguments += "-DHACHICAM_GPU_EXPERIMENTAL=ON" }
+            }
         }
         release {
             resValue("string", "build_app_name", "HachiCam")

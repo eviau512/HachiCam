@@ -1,12 +1,17 @@
 #include "local_registration.h"
+#include "local_support.h"
 #include "burst_fusion.h"
 #include "perspective_corrector.h"
 #include "edge_detector.h"
+void runRegionalTests();
 #include <iostream>
 #include <stdexcept>
+#include <limits>
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void runBoundaryTests();
+void runNoiseTests();
+void runHighlightTests();
 static cv::Mat textChart() {
     cv::Mat image(1024, 1024, CV_8UC3, cv::Scalar(235, 235, 235));
     for (int y = 32; y < image.rows - 20; y += 37)
@@ -25,14 +30,86 @@ static double error(const cv::Mat& a, const cv::Mat& b, const cv::Mat& mask) {
     difference.convertTo(difference, CV_32F); difference = difference.mul(difference);
     return cv::mean(difference, mask)[0];
 }
+static void runHighlightDemandTests() {
+    cv::Mat native(41,63,CV_8UC3,cv::Scalar::all(246));
+    native.at<cv::Vec3b>(4,5)={247,20,20};
+    const auto demand=fusion::highlightDemand(native,{17,23,63,41},{777,533});
+    check(cv::countNonZero(demand)==1 && demand.at<uchar>(27,22),"HDR demand uses actual rounded byte channels and crop coordinates");
+    cv::Mat requested=cv::Mat::zeros(533,777,CV_8U);
+    for(auto p:{cv::Point(0,0),cv::Point(128,128),cv::Point(256,256),cv::Point(776,532)})
+        cv::circle(requested,p,9,cv::Scalar(255),cv::FILLED);
+    fusion::LocalRegistration full;full.domain=requested.size();full.patchSupport=true;
+    const auto selected=fusion::highlightFitNodes(requested,full.spacing);
+    full.field.create(selected.size(),CV_32FC3);
+    for(int y=0;y<full.field.rows;++y)for(int x=0;x<full.field.cols;++x)
+        full.field.at<cv::Vec3f>(y,x)={float(x%3)*.9f,float(y%3)*.8f,.95f};
+    auto pruned=full;pruned.field=full.field.clone();
+    for(int y=0;y<selected.rows;++y)for(int x=0;x<selected.cols;++x)
+        if(!selected.at<uchar>(y,x))pruned.field.at<cv::Vec3f>(y,x)={0,0,0};
+    int compared=0;
+    for(int y=0;y<requested.rows;++y)for(int x=0;x<requested.cols;++x)if(requested.at<uchar>(y,x)) {
+        cv::Point2d a,b;float ca=0,cb=0;
+        const bool old=full.offset(x,y,a,ca),now=pruned.offset(x,y,b,cb);
+        check(old==now,"Pruning must preserve conflicting neighbor rejection, including clamped edge nodes");
+        if(old)check(cv::norm(a-b)<1e-12 && ca==cb,"Pruning must preserve selected demanded offsets");
+        ++compared;
+    }
+    check(compared>300,"Demand footprint regression needs meaningful border and conflict coverage");
+    const auto chart=textChart();cv::Mat gray;cv::cvtColor(chart,gray,cv::COLOR_BGR2GRAY);
+    const auto exhaustive=fusion::registerLocal(gray,gray,true);
+    cv::Mat small=cv::Mat::zeros(gray.size(),CV_8U);small(cv::Rect(250,250,10,10)).setTo(255);
+    const auto fallback=fusion::registerLocal(gray,gray,true,false,cv::Mat(),nullptr,small);
+    check(cv::norm(exhaustive.field,fallback.field,cv::NORM_INF)==0 &&
+        cv::norm(exhaustive.gate,fallback.gate,cv::NORM_INF)==0,"Small supported demand must retain exhaustive plate admission");
+    const auto none=fusion::registerLocal(gray,gray,true,false,cv::Mat(),nullptr,cv::Mat::zeros(gray.size(),CV_8U));
+    check(cv::countNonZero(none.gate)==0,"Empty highlight demand cannot perform or invent recovery");
+    fusion::LocalRegistration overlap;overlap.patchSupport=true;overlap.domain={777,533};
+    overlap.field=cv::Mat::zeros(4,5,CV_32FC3);overlap.field.at<cv::Vec3f>(1,1)={0,0,1};overlap.field.at<cv::Vec3f>(1,2)={1,0,1};
+    cv::Point2d left,right;float c,coverage;
+    check(overlap.offset(384-.001,256,left,c,&coverage)&&coverage==1 && overlap.offset(384+.001,256,right,c),"Overlap must retain full observed coverage");
+    check(cv::norm(left-right)<.001 && std::abs(left.x-.5)<.001,"Displacement must be continuous across the old nearest-node switch");
+    overlap.field.at<cv::Vec3f>(1,2)={1.5001f,0,1};
+    check(!overlap.offset(384,256,left,c),"Continuous overlap cannot bridge a displacement conflict");
+    overlap.field.at<cv::Vec3f>(1,2)={0,0,0};
+    check(overlap.offset(396,256,left,c,&coverage)&&coverage==0 && !overlap.offset(396.001,256,left,c),"Coverage must vanish inside the measured boundary without extending support");
+    const auto bounds=fusion::supportRegion(overlap,overlap.domain);
+    cv::Mat a(overlap.domain,CV_8U,cv::Scalar(128)),b=a.clone();b(cv::Rect(0,0,111,333)).setTo(199);
+    cv::Mat valid(overlap.domain,CV_8U,cv::Scalar(255));valid(cv::Rect(125,125,50,50)).setTo(0);
+    for(int y=0;y<a.rows;++y)for(int x=0;x<a.cols;++x)if(!bounds.contains(cv::Point(x,y)))
+        check(fusion::supportPixel(a,b,overlap,x,y,true,valid)==0,"Bounded gate must not omit any supported pixel");
+    auto geometry=fusion::geometricSupport(overlap,bounds);
+    for(int y=bounds.y;y<bounds.br().y;++y)for(int x=bounds.x;x<bounds.br().x;++x) {
+        cv::Point2d d;float conf;
+        check(bool(geometry.at<uchar>(y-bounds.y,x-bounds.x))==overlap.offset(x,y,d,conf),"Geometric coverage must equal the validated footprint union");
+    }
+    cv::RNG random(927411);cv::Mat signal(97,113,CV_32F),other(signal.size(),CV_32F),pixels(signal.size(),CV_8U,cv::Scalar(128));
+    random.fill(signal,cv::RNG::NORMAL,0,8);random.fill(other,cv::RNG::NORMAL,0,8);
+    const cv::Rect patch({},signal.size());
+    for(float scale:{0.f,.05f,.3f,.5f,.68f,1.f,2.f})for(float noise:{0.f,5.f,30.f}) {
+        cv::Mat candidate=other*scale;
+        if(!fusion::cannotRetainDetail(pixels,signal,candidate,{},patch,{noise,noise}))continue;
+        for(float dx:{-7.99f,-.25f,0.f,.125f,7.99f})for(float dy:{-0.5f,0.f,.5f}) {
+            if(std::hypot(dx,dy)>8)continue;
+            const auto measured=fusion::cpuPhysicalCheck(pixels,signal,candidate,{}, {patch,{dx,dy},{noise,noise}});
+            check(measured[1]<.68,"Energy-bound rejection discarded an admissible subpixel observation");
+        }
+    }
+    std::cout<<"HDR demand/continuous overlap/geometric union and conservative detail bound PASS\n";
+}
 int runTests() {
     std::cout << std::unitbuf;
     cv::setNumThreads(2);
+    runHighlightDemandTests();
     auto chart = textChart();
     cv::Mat blurred; cv::GaussianBlur(chart, blurred, cv::Size(0, 0), 1.8);
     check(fusion::referenceQuality(chart) > fusion::referenceQuality(blurred) * 2, "Sharp reference must outrank blurred arrival");
     cv::Mat ref; cv::cvtColor(chart, ref, cv::COLOR_BGR2GRAY);
     auto upper = shifted(ref, .65, -.40), lower = shifted(ref, -2.30, .80);
+    const auto cachedReference=fusion::prepareReference(ref);
+    const auto cachedModel=fusion::registerLocal(ref,upper,false,false,cv::Mat(),&cachedReference);
+    const auto uncachedModel=fusion::registerLocal(ref,upper);
+    check(cv::norm(cachedModel.field,uncachedModel.field,cv::NORM_INF)==0 &&
+        cv::norm(cachedModel.gate,uncachedModel.gate,cv::NORM_INF)==0,"Shared node preparation preserves cached/uncached registration");
     lower.rowRange(512, 1024).copyTo(upper.rowRange(512, 1024));
     cv::rectangle(upper, cv::Rect(700, 100, 100, 100), cv::Scalar(60), cv::FILLED);
     auto local = fusion::registerLocal(ref, upper);
@@ -61,6 +138,18 @@ int runTests() {
     check(blurredInkSupport < .10, "Blurred text cannot contribute; blank-region noise support is allowed");
 
     BurstFusionEngine engine;
+    {
+        cv::Mat projective;const cv::Mat h=(cv::Mat_<double>(3,3)<<1,.003,4,.002,1,-3,.00001,-.000015,1);
+        cv::warpPerspective(chart,projective,h,chart.size(),cv::INTER_LINEAR,cv::BORDER_REFLECT_101);
+        cv::Mat first,firstH,chosen,chosenH;
+        check(engine.alignFrameECC(projective,chart,first,firstH),"Fixture needs a plausible first Euclidean candidate");
+        check(engine.alignBaseFrame(projective,chart,chosen,chosenH),"Projective text needs a selected registration");
+        const cv::Rect interior(64,64,896,896);
+        const double before=cv::norm(first(interior),chart(interior),cv::NORM_L2SQR)/interior.area();
+        const double after=cv::norm(chosen(interior),chart(interior),cv::NORM_L2SQR)/interior.area();
+        std::cout<<"projective candidate residual="<<before<<" -> "<<after<<'\n';
+        check(after<before*.55,"Candidate comparison must beat first-success text alignment");
+    }
     BurstFusionEngine::Report report;
     const auto result = engine.fuseBurstFrames({blurred, chart, shifted(chart, .65, .10), shifted(chart, .10, .65)},
         false, false, true, {0,0,0,0}, {100,100,100,100}, &report);
@@ -104,8 +193,25 @@ int runTests() {
     for (int x=180;x<480;x+=50) cv::line(blank,{x,180},{x,460},cv::Scalar(20,20,20),2);
     document = EdgeDetector().detectDocument(blank);
     check(document.found && cv::contourArea(document.corners) > 230000, "Inner table cannot replace the plausible page boundary");
+    // Production geometry rejects invalid evidence before allocation and leaves source intact.
+    cv::Mat geometrySource(2048,2048,CV_8UC3,cv::Scalar(90,100,110));
+    std::vector<cv::Point2f> validCorners{{0,0},{2047,0},{2047,2047},{0,2047}};
+    auto rejectsGeometry=[&](std::vector<cv::Point2f> points,float ratio) {
+        try { filters.correctPerspective(geometrySource,points,ratio); return false; }
+        catch(const std::invalid_argument&) { return true; }
+    };
+    auto crossed=validCorners;std::swap(crossed[1],crossed[2]);
+    check(rejectsGeometry(crossed,0),"Crossed crop rejected before warp");
+    auto nonfinite=validCorners;nonfinite[1].x=std::numeric_limits<float>::quiet_NaN();
+    check(rejectsGeometry(nonfinite,0),"Nonfinite crop rejected before warp");
+    check(rejectsGeometry(validCorners,20),"Expanded perspective output obeys pixel budget");
+    check(rejectsGeometry(validCorners,std::numeric_limits<float>::infinity()),"Nonfinite aspect rejected");
+    check(geometrySource.at<cv::Vec3b>(0,0)==cv::Vec3b(90,100,110),"Invalid edits preserve source pixels");
+    runRegionalTests();
     runBoundaryTests();
-    std::cout << "PASS: local alignment, parallax, occlusion, blur, reference ranking, fusion, crop, paper and document boundary\n";
+    runNoiseTests();
+    runHighlightTests();
+    std::cout << "PASS: local alignment, parallax, occlusion, blur, noise, highlights, reference ranking, fusion, crop, paper and document boundary\n";
     return 0;
 }
 int main() { try { return runTests(); } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << "\n"; return 1; } }

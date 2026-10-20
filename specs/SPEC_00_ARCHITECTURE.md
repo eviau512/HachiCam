@@ -1,6 +1,6 @@
 # Specification 00: System Architecture and Technology Stack
 
-> Status: Authoritative. Revised 2026-10-12.
+> Status: Authoritative. Revised 2026-10-20.
 > Language: English. Chinese reports are explanatory and do not override this document.
 
 ## 1. Scope and status vocabulary
@@ -18,8 +18,9 @@ archived designs cannot override them.
 - **Research candidate** is outside the current product contract.
 
 Every change follows problem analysis, specification analysis, specification and
-acceptance revision, then implementation and verification. The present revision
-delivers specifications and reports; it does not implement the new requirements.
+acceptance revision, then implementation and verification. The rc10 follow-up
+implements the ownership/refactor contracts below; device acceptance and the
+remaining requirements are recorded separately.
 
 ## 2. Architectural principles
 
@@ -46,12 +47,12 @@ delivers specifications and reports; it does not implement the new requirements.
 | --- | --- | --- |
 | UI | Kotlin, Jetpack Compose, Material 3; camera, crop, review and export screens | UI availability is not proof that every historical design is implemented |
 | Camera | CameraX with Camera2Interop; JPEG capture and preview analysis | Vendor processing and manual control vary by camera |
-| Native vision | C++17 and OpenCV; contour detection, line snapping, perspective correction and four filters | Heuristic image processing, not semantic document recognition |
-| Burst processing | CPU alignment, experimental sampling reconstruction and short exposure highlight recovery | JPEG inputs; no active RAW or Vulkan fusion path |
-| Page state | In-memory repository with PROCESSING, READY and FAILED | Durable page metadata and process death recovery are not implemented |
-| Image storage | App private scans directory for completed images | Source and derivative edit transactions need stronger guarantees |
+| Native vision | C++17 and OpenCV; contour detection, line snapping, perspective correction and three active filters | Heuristic image processing, not semantic document recognition |
+| Burst processing | CPU pipeline with calibrated experimental debug Vulkan stages specified in SPEC_02, sampling reconstruction and short exposure recovery | JPEG inputs; no RAW capture/fusion or full GPU pipeline/phone performance acceptance |
+| Page state | Repository with PROCESSING, READY/FAILED and bounded asynchronous committed metadata checkpoints | Completed-page recovery implemented in rc13; pending captures/edits are not replayed |
+| Image storage | Immutable private masters, unique derivative commits, read leases and current/previous checkpoint pins | JPEG bounds/completion checked on restart; process-death device tests still pending |
 | Export | Android PDF container with raster scanned pages and image export | No OCR or vectorized text layer |
-| Vulkan / curved geometry | Existing experimental primitives | Presence of code or shader files does not constitute a connected product feature |
+| Vulkan / curved geometry | Connected bounded debug compute stages specified in SPEC_02 plus older unconnected HDR/curved primitives | Each connected workload self-tests/calibrates or uses CPU; older shader presence is not a connected feature |
 
 Repository build files are authoritative for dependency versions and ABI selection.
 The current architecture uses Android minSdk 29 / targetSdk 35, CameraX 1.4.1 and
@@ -65,22 +66,195 @@ orientation, dimensions, valid crop region, color interpretation, pixel type,
 source identity, and output dimensions. SPEC_01 owns decoding and camera mapping;
 SPEC_03 owns crop coordinates; SPEC_04 owns rendering and filter semantics.
 
-A future render request shall identify the page, source revision, crop, output
-rotation, aspect policy, filter and parameter version, output scale and request
+A render request identifies the page, immutable source path, crop, output
+rotation, aspect policy, filter and request
 generation. A result may publish only if those identities still match current
 state. A deleted page must not be recreated by a late result.
+Algorithm/parameter-versioned caches and external source checksum verification
+remain future work; the private master path is the current source revision identity.
 
 Heavy work must run off the UI thread with bounded concurrent decoding and native
 allocations. Cancellation and errors must release image buffers and native
 resources. A replacement file must be successfully encoded and committed before
-its page pointer is changed. Detailed render concurrency and edit transaction
-guarantees remain **required / not fully implemented**.
+its page pointer is changed. **Implemented in rc10:** shared heavy-image admission,
+generation-checked unique file commits, last-valid preservation and read leases.
 
-Durable metadata, pending manifests, restart recovery and memory spill storage
-remain **required / not implemented**. Screen independent burst processing while
-the process lives must not be described as recovery after process death.
+The pre-refactor 2026-10-14 audit found shared derivative names, stale whole-page
+publication and crop rotation overwriting the source. rc10 replaces those paths
+with one repository ledger and source-based renderer; the historical audit is
+evidence of the previous state, not a description of current behavior.
+
+**Implemented; physical-device verification pending:** one page-edit ownership/commit contract across
+crop, review and batch work. Capture an immutable request containing page/source
+identity, source revision, complete recipe and request generation. Render into a
+unique temporary file; recheck identity, deletion and generation before atomic
+publication. Coordinate readers with committed immutable result revisions.
+Obsolete work may finish computation but cannot replace files or page metadata.
+Preserve the last valid source/result on all failure and cancellation paths.
+Blocking OpenCV completion is not automatically canceled by coroutine `cancel()`.
+
+### Refactor contract, 2026-10-14 (specified before implementation; rc10 implemented)
+
+The shared repository owns committed pages and pending complete edit intents.
+Each request receives a process-monotonic generation; successive changes compose
+against the pending intent, not a stale committed page copy. Failure of the latest
+request restores the last committed recipe; older requests remain obsolete.
+Delete/re-add cannot reuse a request generation. File rename and page publication
+occur under the same ownership lock, after checking generation/source identity.
+Derivative filenames are unique; obsolete temporary output is deleted.
+Only repository retirement may delete a published source/result. Worker cleanup
+may delete its unpublished temporary inputs, never bypass an active read lease.
+No-op status updates preserve pending edit generations; failed queue submission
+must resolve its PROCESSING page as failed rather than leaving an unconsumed job.
+
+Source/result read leases protect files used by rendering or export. Retired
+derivatives and deleted pages are removed only after their last reader closes.
+Exports pin the complete committed starting snapshot; later edits/deletion may
+not truncate that snapshot. Snapshot use is explicit and not a durable transaction
+across process death. Capture publication still checks deleted-page identity.
+
+One process-wide heavy-image permit covers fusion/save, final editing and export
+decoding; preview analysis uses bounded images. Allocation planning includes
+queued compressed inputs and the larger possible reconstructed output. Initial
+byte estimates/safety margins remain experimental and require device RSS tests.
+Control and diagnostic state belongs to capture/session identity, not a ViewModel
+latest-value shortcut. The implementation and executed checks are recorded in the
+[rc10 report](reports/RC10_ARCHITECTURE_REFACTOR_2026-10-14.zh-CN.md).
+
+Initial experimental admission profile for this refactor: use at most two-thirds
+of current available system memory, capped at 2048 MiB for 64-bit and 768 MiB for
+32-bit processes. Reserve 96 MiB for each admitted compressed burst; account for
+retained gray/edge buffers. Fusion working estimates are source pixels times
+(3*decoded frame count +20+24 for possible 2x, or +6 for 1x), plus 128 MiB;
+streaming uses 20*source pixels +128 MiB. Editing preflights the rectifier shape
+and uses 8*source pixels +12*predicted output pixels +128 MiB,
+edge analysis 12*source pixels +128 MiB. PDF estimates include 8*total page pixels
+plus 4*largest page pixels +128 MiB; JPEG export is streamed.
+Recheck under the shared heavy permit before decoding. Ordinary capture may
+degrade from 2x eligibility to native-size fusion, then native-size streaming;
+if all plans fail, use the declared reference/failure outcome. These are
+conservative heuristics, not measured upper bounds or RSS certification.
+
+The first GPU-support implementation adds a separately identified 64 MiB
+process-lifetime GPU pool allowance to the 128 MiB base overhead of every heavy
+operation estimate (192 MiB total). This applies even on CPU fallback or editing,
+because cached/quarantined GPU work may survive its originating job. Each GPU
+allocation is independently capped within that allowance; it is not permission
+to exceed the per-job/shared admission budget.
+
+All product JNI image operations must validate input shape/type/dimensions and
+translate native exceptions into explicit managed failures with released buffers.
+Gray/edge lookup requires one-channel 8-bit input; touch/line coordinates and
+search limits must be finite, with search limits bounded by the image dimension.
+Burst tiers are 0..2; exposure products are finite and nonnegative (zero denotes
+unknown metadata). Structural-line source dimensions are finite and nonnegative,
+with zero retaining the preview-size default and effective area at most 56 MP.
+**Implemented in rc10:** all eleven image-operation JNI entry points have managed
+exception guards; perspective/filter geometry and image limits are checked before
+warping, with bitmap locks and temporary Mat ownership released on failure.
+The guards do not validate arbitrary native addresses or prevent process-level
+faults. Android JNI failure injection and broad device coverage remain pending.
+
+Durable committed metadata and completed-page recovery are implemented below in
+rc13; automatic pending-job replay remains **required / not implemented**.
+Temporary encoded-frame spill for streaming processing exists, but is not a
+durable queue and cannot resume a burst after process death.
+
+### rc13 completed-page recovery (contract revised before implementation; implemented, device checks pending)
+
+Persist a bounded versioned/checksummed index of committed page identities,
+private scan filenames, order and committed crop/filter/rotation/aspect recipes.
+Limit it to 512 pages / 2 MiB; validate finite bounded geometry and paths inside
+the private scans directory. Write unique temporary metadata, sync it, retain a
+previous valid checkpoint and rename atomically; truncated/invalid current data
+may recover the previous validated checkpoint. Do not enumerate orphan images
+as pages or delete unknown files. Initial restore reads metadata and JPEG bounds,
+never a full-resolution image or device identifiers.
+
+Metadata IO after initialization uses one background writer with a conflated
+bounded pending snapshot. Pin every snapshot's referenced paths and keep the
+current and previous durable checkpoints' pins until each is replaced. An edit/delete
+must not remove an image still referenced by that checkpoint. Failed persistence
+keeps that checkpoint, emits a visible warning and leaves the current session
+usable; it does not claim the newest recipe survived a crash.
+Expose a monotonic latest-requested/completed/committed checkpoint identity;
+tests and diagnostic export may wait at most five seconds for the current
+checkpoint, distinguishing a failed write from completed durable data.
+
+Restore completed readable masters and valid derivatives; if a derivative is
+missing/invalid, show the master with ORIGINAL/zero-rotation/default aspect and
+retain source-space crop geometry. Interrupted PROCESSING with a complete readable
+master becomes READY with the committed recipe; without one it becomes FAILED,
+never permanently busy. This recovers pages, not pending frame arrays or automatic
+job replay. No exactly-once capture-resumption claim is granted. Unsaved edit
+intents do not replace the last committed recipe.
 
 ## 5. Quality, resources and acceptance
+
+### rc20/rc21 sampled CPU/GPU load diagnostics (2026-10-18 contract)
+
+Test builds must record a capture-owned `compute-load.json` alongside the final
+image/manifest, with versioned units, monotonic sample offsets and processing
+stage. This complements wall-time/backend counters; it is not a replacement for
+complete latency or proof of shader occupancy. Release provides a no-op collector
+with no root process, `/proc`/GPU-node reads or retained load trace.
+
+Use one process-wide background sampler shared by at most three active capture
+sessions, including acquisition/queue/processing/save. rc21 targets 50 ms
+(20 Hz, superseding rc20's 500 ms), at most 6000 samples per capture and
+<=2 MiB compact trace, preserving approximately five minutes of nominal coverage.
+The fixed helper uses the same target interval and a bounded 6000-read lifetime;
+its output is bounded independently. Record actual interval,
+read latency/freshness, dropped/invalid samples and sampling scope. Stop bounded
+helpers when the last session finishes/fails/cancels; export must not launch a
+retrospective sampler or wait for a helper to exit. Queued/concurrent capture
+records may observe the same process/device load and must not claim exclusive
+attribution to that image. Snapshot immutable results under capture identity.
+
+Application CPU uses the observed process CPU-time delta over monotonic wall
+time. Report one-core-equivalent percent (may exceed 100), and separately the
+percent of available logical-processor capacity only when that count is stable.
+Retain the observed available logical-processor count with each sample so the
+capacity denominator is inspectable, including idle or count-change intervals.
+Device CPU uses nonnegative deltas of the first eight `/proc/stat` aggregate
+fields, excluding guest/guest_nice double counting and treating idle+iowait as
+non-busy. Invalid/reset/zero intervals are unknown, never fabricated idle.
+Retain cumulative process CPU milliseconds and each interval's nonnegative
+delta. rc21 permits intervals of at least 25 ms, so real 50 ms samples are not
+discarded by rc20's conservative 100 ms gate. Shorter startup intervals, resets
+and invalid counters remain unknown. Millisecond values do not promise
+millisecond accuracy: short-window CPU percentages may be quantized; raw deltas
+and actual intervals permit later 250 ms or longer weighted aggregation without
+inventing resolution. Device CPU retains its own distinct-counter interval.
+
+For supported Qualcomm KGSL, retain the device-reported `gpubusy` busy/total
+pair and compute its ratio directly; these are recent driver-window values,
+not cumulative counters to difference and not necessarily the sampler interval.
+Label it device-wide (camera/display/other processes included), not HachiCam GPU
+share or execution-unit occupancy. Record the explicit provider and current GPU
+clock in Hz when readable, plus Android thermal severity if available. Do not
+infer load from clock, Vulkan call duration or executed block counts. Zero
+denominator, denied/absent/malformed node, stale snapshot and unsupported driver
+remain null with a reason. No clock/governor/permission-node writes are allowed.
+At 50 ms read cadence, driver windows may repeat or have a longer update period;
+do not claim every sample is a fresh 50 ms GPU measurement. Limit device-counter
+snapshot freshness to 250 ms. Cache thermal severity for a target 500 ms rather
+than making a thermal service call on every 50 ms tick, and label that cadence.
+
+Read bounded fixed allowlisted nodes using one long-lived shell helper while
+sampling. Use `su` only when the existing test-only root probe already reports
+availability; otherwise keep process CPU and any directly readable device data.
+Never request root anew per sample or block UI/processing on shell IO. Bound
+helper output/lifetime and quarantine stale helpers; continuously sampling
+permission failures must not fork a new helper every 500 ms. Account for helper
+overhead and distinguish sampled driver load from missing coverage.
+
+Validate synthetic counters (multicore >100, reset, zero/malformed, guest fields,
+driver windows), bounds, concurrent identity/stop/failure, read freshness and
+release exclusion. Also test 50 ms CPU samples, startup/reset raw counters,
+distinct device intervals, five-minute retention/export capacity, and the helper
+cadence/stop protocol. Physical-device availability, sampling cost and GPU utilization
+remain pending until a newly exported capture contains valid observations.
 
 The quality matrix in [SPEC_06](./SPEC_06_IMAGE_QUALITY_AND_ACCEPTANCE.md) governs
 cross pipeline acceptance. It separates hard correctness invariants from measured
@@ -95,8 +269,56 @@ available for a GPU feature that has not been integrated.
 
 Current burst admission reserves at most three total jobs, including capture,
 queued and executing jobs, with one global processing worker. This bound does not
-establish a measured byte budget for all crop and review work. Additional memory
-and thermal admission policies require implementation and measurement.
+establish a measured byte budget for all crop and review work. rc10 adds shared
+experimental estimates and reservations; thermal policy and measured RSS remain pending.
+
+The native-high profile is selected by **input** size. Ordinary <=16 MP input can
+still produce a roughly 50 MP reconstruction and simultaneous full-size rotation
+buffer; it does not receive native-high exclusive admission. **Implemented,
+experimental estimates:** a shared byte reservation covering compressed queued inputs,
+decoded inputs, alignment, possible reconstruction output, upright encoding,
+crop/review buffers and export readers. Reconcile allocations before scale=2;
+if resources are unavailable, retain valid native-size fusion and record resource
+degradation. A job-count limit or Java heap reading is not a native/RSS budget.
+Worker failure must leave an explicit unavailable/failed state rather than an
+open admission path with no consumer. Do not promise recovery from process death
+or an unrecoverable allocation failure.
+
+**Partly implemented in rc13, debug only:** future GPU work is a compute-backend
+migration under SPEC_02 section 7.1, not a second capture/page pipeline. Preserve
+the single admitted worker, capture identity, immutable source, request generation,
+read leases, unique output commit and READY-after-save semantics. Reserve host,
+device, staging and scratch allocations together before submission; mobile shared
+physical memory does not make separate live buffers free. CPU estimates above do
+include the additional bounded GPU pool allowance above. GPU completion, cancellation and fallback
+must retain ownership until in-flight work has stopped; failed or obsolete GPU
+outputs cannot commit. The current CPU pipeline is the fallback implementation
+used by the two connected kernels when unsupported, unhealthy or unqualified.
+The rest of the migration remains unimplemented; phone latency/thermal acceptance
+has not been established by the host tests.
+
+The demand-bounded HDR follow-up in SPEC_02 finishes the ordinary native byte
+merge before short registration. Its native output and one CV_8U reference-sized
+demand mask overlap reference/local preparation. Reserve these explicit lifetimes
+before work; reuse the final native buffer rather than allocating a second color
+merge. Demand is temporary, never a retained per-plate float map, and is released
+with reference preparation before allocating the optional 2x output.
+Increase the ordinary-path estimate by four bytes per source pixel for this new
+overlap (three native color bytes and one demand byte); streaming is unchanged.
+
+The rc15 registration preparation cache adds bounded scalar noise/moment records
+per active local node, not retained full-size masks or new image planes. It is
+per call and discarded before reconstruction; reference reuse still requires
+identity/size matching. The existing strong GPU cost profiles share the
+context, sixteen-patch limit and 64 MiB pool, without parallel device submissions.
+
+The rc6 experimental native-high-resolution profile is exclusive: no other
+capture/queued job may coexist from its admission through cleanup. It bounds
+encoded burst bytes and estimates available memory before capture/decoding.
+Native processing decodes reference plus one candidate and uses bounded patches,
+uint16 sums and byte contributor counts. SPEC_01/02 and the
+[noise revision](research/NOISE_REVISION_2026-10-13.md) own limits. This is not a
+measured thermal/RSS guarantee or durable recovery.
 
 ## 6. Build identity
 
@@ -109,12 +331,120 @@ and thermal admission policies require implementation and measurement.
 
 Use one build specific display-name resource without locale or flavor overrides
 for the application, launcher activity and settings accessibility heading.
+Runtime activity title and Recents task label must use that same resource.
+Set the task label through an API available at minSdk 29; newer Builder APIs
+must not be called under an older version guard.
 Updating the test build must preserve its package ID and signing identity.
+
+The rc9 [diagnostic contract](research/NIGHT_HDR_REVISION_2026-10-14.md) permits
+test-only private-cache retention of one completed burst (compressed inputs,
+final JPEG, its own manifest), at most 192 MiB. Atomic replacement/export and
+space checks must preserve the previous complete snapshot on failure. Test
+diagnostic export explicitly says original photos are included; release never
+retains or bundles those inputs. Export is initiated through the user's share
+chooser, with at most two cached bundles and no automatic network action.
+
+**Implemented in rc10:** distinguish latest-started, latest-completed and
+exported capture identities. Export must label the retained manifest captureId
+and matching per-job control/processing evidence; an active later capture may
+not overwrite the only metadata record for an earlier completed bundle. Snapshot
+log identity and input/result selection consistently, or explicitly identify
+unrelated surrounding log records. A shared image-cache lock alone does not make
+the separately collected live log belong to that image set. The bounded archive
+includes its own `diagnostics.txt`; live surrounding log context is labeled separately.
+
+The first performance follow-up raises the bounded per-capture journal to 64
+lines of at most 512 characters, retaining at most six capture identities and
+16384 context characters per identity. This accommodates timing alongside frame
+and control evidence. The archive still limits the UTF-8 paired context to
+128 KiB; an oversized context cannot replace the previous valid snapshot.
+
+**Required before diagnostic-retention implementation:** retain at most four
+completed test-only groups with a combined steady-state 192 MiB photo/metadata
+budget. Preserve each group's own final image, inputs, captureId and paired
+context. Evict the oldest retained group by byte/count limits; a failed new
+snapshot must preserve the latest complete one. Transient pending/replacement
+copies require separate free-space checks. Default final-image diagnostic export
+may include the four retained completed groups. **rc14 export layout revision:**
+write every selected group exactly once under `captures/<captureId>/`, latest
+and history alike; remove the legacy `capture/` alias. Deduplicate valid capture
+IDs with the newest committed snapshot winning, including old caches containing
+repeated IDs. Record layout version, ordered IDs and latest capture ID in the
+export footer; log guidance must point to these paths. Legacy cache directories
+remain readable without copying them into a second exported layout. The root live log is context,
+not older groups' matching log. Report retained IDs and per-export command,
+snapshot-lock and ZIP times; no input-only snapshot may be called a final result.
+Keep the release no-retention rule and source read leases while copying a READY
+image. No new automatic network sharing is introduced.
+
+The rc19 SPEC_01 headroom experiment may add one adopted `metering-probe.jpg`
+beside at most seven fusion inputs in that same completed group. This name is
+explicitly allowlisted; traversal, duplicate names, probe-only groups and eight
+fusion inputs remain invalid. The existing 96 MiB compressed-input and 192 MiB
+aggregate retained-group limits include the probe. It is never duplicated into
+the manifest's fusion `frames` list or a legacy exported directory. Release
+builds retain no probe image or associated sensitive camera metadata.
+
+The final-image export request may wait for the admitted burst worker to become
+idle, off the UI thread with a bounded wait. Include snapshot work in that idle
+definition; page READY alone does not certify a completed diagnostic archive.
+Show waiting/preparing state, allow navigation cancellation, and report timeout
+or missing archive explicitly. Failed jobs resolve the wait; newly arriving jobs
+remain visible in the worker count rather than being mislabeled complete.
+
+### rc25 compact test artifact (specified before implementation, 2026-10-20)
+
+Implemented and clean-build/signature/ZIP checked with `scanner.compressTestDex=true`;
+physical installation/startup and transport acknowledgment remain pending.
+
+The rc25-2132 universal APK contains roughly 60 MiB of stored DEX code; native
+libraries are already compressed and the 4K Banner is an intentional original
+asset. A slow authorized Taildrop link makes transfer volume a concrete issue.
+Permit the explicit `scanner.compressTestDex=true` test-build property to select
+AGP's legacy DEX ZIP compression, enabled by the test-build helper. Property
+absence preserves the normal AGP default for ordinary/release builds. This is
+packaging compression, not R8 shrinking, obfuscation or image compression.
+Retain all three ABIs, original app ID/label/debug certificate, native algorithm
+sources and Banner payload. Record the actual size reduction; require every DEX
+entry compressed, ZIP CRC/signature/alignment and build/unit checks. New build
+identity is expected; smaller bytes do not establish faster capture or startup.
+Android installation/startup acceptance is separate; platform extraction/DEX
+optimization may change install-time work. Do not claim identical runtime startup.
+See the official [DEX packaging API](https://developer.android.com/reference/tools/gradle-api/8.3/null/com/android/build/api/dsl/DexPackaging).
+
+Keep the old immutable artifact and failed/cancelled attempt receipt. Only after
+the smaller universal package passes checks may an unfinished superseded send be
+stopped and the distinct newly stamped package sent. Do not label an interrupted
+transfer successful, infer recipient installation, drop ABIs or replace the
+user-selected image asset to reduce transfer size.
+
+Artifact integrity and delivery are separate from build identity. Before sending,
+record the immutable APK filename, byte size and SHA-256, verify ZIP entry CRCs,
+APK signature and alignment. A successful sender response establishes transport
+acknowledgment only, not received-file integrity or installation. If the receiver
+reports corruption, retain that failure, use a distinct retry filename and verify
+the local source again. Received size/hash or successful installation must be
+recorded separately when available; neither may be inferred from sender status.
+
+Alignment evidence must distinguish APK ZIP entry alignment from native ELF
+compatibility. Check every bundled arm64-v8a/x86_64 library, including transitive
+prebuilts, for LOAD alignment >=16 KiB and compatible RELRO boundaries before
+claiming 16 KiB page-size support; ZIP alignment alone cannot certify it. A
+universal package means the listed ABIs are bundled, not every device/page-size
+configuration is verified. Record unqualified dependencies explicitly and retain
+4 KiB and 16 KiB runtime acceptance separately. See the
+[Android page-size guide](https://developer.android.com/guide/practices/page-sizes).
+**rc13 limitation:** bundled OpenCV 4.10 arm64-v8a/x86_64 LOAD segments remain
+4 KiB aligned although APK ZIP alignment and the project's 64-bit engine LOAD
+alignment pass 16 KiB checks. RELRO end-boundary checks also leave several
+64-bit libraries unqualified, including the arm64-v8a engine. Full 16 KiB
+device compatibility is not certified; linker/dependency migration or rebuild
+and numerical/device regression remain required.
 
 Acceptance: inspect the packaged universal test APK's resolved application and
 launcher labels, including localized entries, and merged release label resources.
-This revision preserves the existing build identity contract; it does not claim
-to have rebuilt or reinstalled the application.
+rc10 preserves this build identity; APK checks and delivery are recorded in the
+linked report, separately from recipient installation and image-quality acceptance.
 
 ## 7. Specification provenance
 

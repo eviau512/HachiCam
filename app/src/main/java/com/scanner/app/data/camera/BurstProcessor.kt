@@ -1,30 +1,67 @@
 package com.scanner.app.data.camera
 
 import android.util.Log
+import com.scanner.app.data.image.ImageWork
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
-/** One decoder/fusion worker for the whole app, independent of screen navigation. */
+/** One camera fusion worker; fatal termination closes admission and drains waiting jobs. */
 object BurstProcessor {
-    private val slots = Semaphore(3)
-    private val queue = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+    private val admission = BurstAdmission()
+    private val guard = Any()
+    private var healthy = true
+    private val _pendingJobs=MutableStateFlow(0)
+    val pendingJobs=_pendingJobs.asStateFlow()
+    private data class Work(val ticket: BurstAdmission.Ticket, val failure: (Throwable) -> Unit,
+        val dequeued: () -> Unit, val admitted: () -> Unit, val action: suspend () -> Unit)
+    private val queue = Channel<Work>(3)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
+    val isHealthy: Boolean get() = synchronized(guard) { healthy }
+    private fun release(ticket: BurstAdmission.Ticket) {
+        if (admission.release(ticket)) synchronized(guard) {
+            ImageWork.encodedReserved.addAndGet(-CapturePolicy.ENCODED_LIMIT)
+            _pendingJobs.value=(_pendingJobs.value-1).coerceAtLeast(0)
+        }
+    }
+    private fun failed(work: Work, error: Throwable) { runCatching { work.failure(error) }; release(work.ticket) }
     init {
         scope.launch {
-            for (work in queue) {
-                try { work() }
-                catch (error: Exception) { Log.e("HachiCam-Burst", "Worker failed", error) }
-                finally { slots.release() }
+            var termination: Throwable? = null
+            try {
+                for (work in queue) {
+                    try { work.dequeued(); ImageWork.run { work.admitted(); work.action() } }
+                    catch (error: Exception) { Log.e("HachiCam-Burst", "Worker operation failed", error); runCatching { work.failure(error) } }
+                    catch (fatal: Throwable) { runCatching { work.failure(fatal) }; throw fatal }
+                    finally { release(work.ticket) }
+                }
+            } catch (error: Throwable) { termination = error; Log.e("HachiCam-Burst", "Worker stopped; capture admission closed", error) }
+            finally {
+                synchronized(guard) { healthy = false; queue.close() }
+                while (true) {
+                    val waiting = queue.tryReceive().getOrNull() ?: break
+                    failed(waiting, termination ?: IllegalStateException("Image worker stopped"))
+                }
             }
         }
     }
-
-    fun reserve(): Boolean = slots.tryAcquire()
-    fun cancelReservation() = slots.release()
-    fun submit(work: suspend () -> Unit) { check(queue.trySend(work).isSuccess) }
+    fun reserve(exclusive: Boolean = false): BurstAdmission.Ticket? = synchronized(guard) {
+        if (!healthy) null else admission.reserve(exclusive)?.also {
+            ImageWork.encodedReserved.addAndGet(CapturePolicy.ENCODED_LIMIT)
+            _pendingJobs.value+=1
+        }
+    }
+    fun cancelReservation(ticket: BurstAdmission.Ticket) = release(ticket)
+    fun submit(ticket: BurstAdmission.Ticket, failure: (Throwable) -> Unit = {},
+        dequeued: () -> Unit = {}, admitted: () -> Unit = {}, work: suspend () -> Unit) = synchronized(guard) {
+        if (!healthy || !queue.trySend(Work(ticket, failure, dequeued, admitted, work)).isSuccess) {
+            val error = IllegalStateException("Image worker unavailable")
+            runCatching { failure(error) }
+            throw error
+        }
+    }
 }

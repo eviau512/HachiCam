@@ -1,4 +1,6 @@
 #include "burst_fusion.h"
+#include "local_registration.h"
+#include "gpu_compute.h"
 #include <opencv2/photo.hpp>
 #include <opencv2/video.hpp>
 #include <vector>
@@ -46,64 +48,90 @@ static bool displacementWithinLimit(const cv::Mat& H, int rows, int cols, const 
     return true;
 }
 
+namespace {
+thread_local bool globalEccAllowed=true;
+struct CpuGlobalScope {bool previous=globalEccAllowed;CpuGlobalScope(){globalEccAllowed=false;}~CpuGlobalScope(){globalEccAllowed=previous;}};
+double globalECC(const cv::Mat& reference,const cv::Mat& source,cv::Mat& transform,int model,cv::TermCriteria criteria,double scale){
+    cv::Mat result;double cc=-1;std::string reason;
+    if(globalEccAllowed && fusion::gpuGlobalECC(reference,source,transform,model,criteria,scale,result,cc,reason)){transform=result;return cc;}
+    return cv::findTransformECC(reference,source,transform,model,criteria);
+}
+struct GlobalScoreCache {
+    const uchar *source=nullptr,*reference=nullptr;
+    cv::Size sourceSize,referenceSize;
+    int sourceType=-1,referenceType=-1;
+    size_t sourceStep=0,referenceStep=0;
+    cv::Mat gs,gr,hpSrc,hpRef,ones,refOk,idOk,lastH;
+    double scale=1,zIdentity=0,luma=1,lastScore=0,lastRatio=1;
+    bool matches(const cv::Mat& src,const cv::Mat& ref) const {
+        return source==src.data && reference==ref.data && sourceSize==src.size() && referenceSize==ref.size() &&
+            sourceType==src.type() && referenceType==ref.type() && sourceStep==src.step && referenceStep==ref.step;
+    }
+};
+thread_local GlobalScoreCache* activeScores=nullptr;
+thread_local bool deferColorWarp=false;
+struct WarpScope {
+    bool previous=deferColorWarp;
+    WarpScope(){deferColorWarp=true;}
+    ~WarpScope(){deferColorWarp=previous;}
+};
+struct ScoreScope {
+    GlobalScoreCache cache;GlobalScoreCache* previous=activeScores;
+    ScoreScope(){activeScores=&cache;}
+    ~ScoreScope(){activeScores=previous;}
+};
+double scoreCorrelation(const cv::Mat& a,const cv::Mat& b,const cv::Mat& mask) {
+    if(cv::countNonZero(mask)<200)return -1.;
+    cv::Scalar ma,sa,mb,sb;cv::meanStdDev(a,ma,sa,mask);cv::meanStdDev(b,mb,sb,mask);
+    return (cv::mean(a.mul(b),mask)[0]-ma[0]*mb[0])/(sa[0]*sb[0]+1e-6);
+}
+void prepareScores(GlobalScoreCache& c,const cv::Mat& src,const cv::Mat& ref) {
+    c=GlobalScoreCache{};
+    c.source=src.data;c.reference=ref.data;c.sourceSize=src.size();c.referenceSize=ref.size();
+    c.sourceType=src.type();c.referenceType=ref.type();c.sourceStep=src.step;c.referenceStep=ref.step;
+    c.scale=std::max(ref.cols,ref.rows)>2048 ? 2048./std::max(ref.cols,ref.rows) : 1.;
+    if(src.channels()==3)cv::cvtColor(src,c.gs,cv::COLOR_BGR2GRAY);else c.gs=src;
+    if(ref.channels()==3)cv::cvtColor(ref,c.gr,cv::COLOR_BGR2GRAY);else c.gr=ref;
+    if(c.scale<1){cv::resize(c.gs,c.gs,{},c.scale,c.scale,cv::INTER_AREA);cv::resize(c.gr,c.gr,{},c.scale,c.scale,cv::INTER_AREA);}
+    auto band=[](const cv::Mat& gray){cv::Mat f,a,b;gray.convertTo(f,CV_32F);cv::GaussianBlur(f,a,{},1.2);cv::GaussianBlur(f,b,{},5.);return cv::Mat(a-b);};
+    c.hpSrc=band(c.gs);c.hpRef=band(c.gr);c.ones=cv::Mat(c.gs.size(),CV_8U,cv::Scalar(255));
+    c.refOk=(c.gr>=4)&(c.gr<=250);c.idOk=(c.gs>=4)&(c.gs<=250)&c.refOk;
+    c.zIdentity=scoreCorrelation(c.hpSrc,c.hpRef,c.idOk);
+    const double refMean=cv::mean(c.gr)[0];c.luma=refMean>.01 ? cv::mean(c.gs)[0]/refMean : 1.;
+}
+}
 static bool alignmentScores(const cv::Mat& src, const cv::Mat& ref, const cv::Mat& H,
                             double& zH, double& zI, double& lumaRatio) {
     try {
-        int maxDim = std::max(ref.cols, ref.rows);
-        double s = (maxDim > 2048) ? 2048.0 / maxDim : 1.0;
-        cv::Mat gs, gr;
-        if (src.channels() == 3) cv::cvtColor(src, gs, cv::COLOR_BGR2GRAY); else gs = src;
-        if (ref.channels() == 3) cv::cvtColor(ref, gr, cv::COLOR_BGR2GRAY); else gr = ref;
-        if (s < 1.0) {
-            cv::resize(gs, gs, cv::Size(), s, s, cv::INTER_AREA);
-            cv::resize(gr, gr, cv::Size(), s, s, cv::INTER_AREA);
-        }
+        GlobalScoreCache temporary;
+        auto& c=activeScores ? *activeScores : temporary;
+        if(!c.matches(src,ref))prepareScores(c,src,ref);
+        const double s=c.scale;
         cv::Mat Hd;
         H.convertTo(Hd, CV_64F);
+        if(!c.lastH.empty() && Hd.size()==c.lastH.size() && cv::norm(Hd,c.lastH,cv::NORM_INF)==0) {
+            zH=c.lastScore;zI=c.zIdentity;lumaRatio=c.lastRatio;return true;
+        }
         cv::Mat S = (cv::Mat_<double>(3, 3) << s, 0, 0, 0, s, 0, 0, 0, 1);
         cv::Mat Si = (cv::Mat_<double>(3, 3) << 1.0 / s, 0, 0, 0, 1.0 / s, 0, 0, 0, 1);
         cv::Mat Hs = S * Hd * Si;
 
-        auto highPass = [](const cv::Mat& g) {
-            cv::Mat f, a, b;
-            g.convertTo(f, CV_32F);
-            cv::GaussianBlur(f, a, cv::Size(0, 0), 1.2);
-            cv::GaussianBlur(f, b, cv::Size(0, 0), 5.0);
-            return cv::Mat(a - b);
-        };
-        cv::Mat hpRef = highPass(gr);
-        cv::Mat hpSrc = highPass(gs);
-
-        cv::Mat hpWarp, gsWarp, ones(gs.size(), CV_8U, cv::Scalar(255)), vmask;
-        cv::warpPerspective(hpSrc, hpWarp, Hs, gr.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
-        cv::warpPerspective(gs, gsWarp, Hs, gr.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
-        cv::warpPerspective(ones, vmask, Hs, gr.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
+        cv::Mat hpWarp,gsWarp,vmask;
+        cv::warpPerspective(c.hpSrc,hpWarp,Hs,c.gr.size(),cv::INTER_LINEAR,cv::BORDER_CONSTANT,cv::Scalar(0));
+        cv::warpPerspective(c.gs,gsWarp,Hs,c.gr.size(),cv::INTER_LINEAR,cv::BORDER_CONSTANT,cv::Scalar(0));
+        cv::warpPerspective(c.ones,vmask,Hs,c.gr.size(),cv::INTER_NEAREST,cv::BORDER_CONSTANT,cv::Scalar(0));
 
         // [SPEC_02 §2.5.3 v24] 全图估算曝光亮度比 (lumaRatio)，绝不可受局部掩模裁剪影响，
         // 彻底杜绝超短曝光帧 (Tier 3) 因掩模有效像素<1000 导致 mean 归零并误判为 sameExposure=1！
-        double mRefAll = cv::mean(gr)[0];
-        double mSrcAll = cv::mean(gs)[0];
-        lumaRatio = (mRefAll > 0.01) ? (mSrcAll / mRefAll) : 1.0;
-
-        auto zncc = [](const cv::Mat& a, const cv::Mat& b, const cv::Mat& mask) {
-            if (cv::countNonZero(mask) < 200) return -1.0;
-            cv::Scalar ma, sa, mb, sb;
-            cv::meanStdDev(a, ma, sa, mask);
-            cv::meanStdDev(b, mb, sb, mask);
-            double mab = cv::mean(a.mul(b), mask)[0];
-            return (mab - ma[0] * mb[0]) / (sa[0] * sb[0] + 1e-6);
-        };
-
-        cv::Mat refOk = (gr >= 4) & (gr <= 250);
-        cv::Mat warpOk = (gsWarp >= 4) & (gsWarp <= 250) & (vmask > 0) & refOk;
-        cv::Mat idOk = (gs >= 4) & (gs <= 250) & refOk;
-        zH = zncc(hpWarp, hpRef, warpOk);
-        zI = zncc(hpSrc, hpRef, idOk);
+        lumaRatio=c.luma;
+        cv::Mat warpOk=(gsWarp>=4)&(gsWarp<=250)&(vmask>0)&c.refOk;
+        zH=scoreCorrelation(hpWarp,c.hpRef,warpOk);zI=c.zIdentity;
         if (cv::countNonZero(warpOk) >= 200) {
-            double mRef = cv::mean(gr, warpOk)[0];
+            double mRef = cv::mean(c.gr, warpOk)[0];
             double mSrc = cv::mean(gsWarp, warpOk)[0];
             if (mRef > 1.0) lumaRatio = mSrc / mRef;
         }
+        c.lastH=Hd.clone();c.lastScore=zH;c.lastRatio=lumaRatio;
         return true;
     } catch (const std::exception& e) {
         LOGW("alignmentScores exception: %s", e.what());
@@ -122,6 +150,53 @@ static bool verifyAlignment(const cv::Mat& src, const cv::Mat& ref, const cv::Ma
     LOGI("verify[%s]: hp-zncc=%.3f identity=%.3f moved=%.1fpx lumaRatio=%.2f sameExposure=%d -> %s",
          tag, zH, zI, moved, ratio, sameExposure ? 1 : 0, ok ? "ACCEPT" : "REJECT");
     return ok;
+}
+
+static bool projectiveECC(const cv::Mat& src,const cv::Mat& ref,const cv::Mat& initial,cv::Mat& warped,cv::Mat& h) {
+    try {
+        cv::Mat gs,gr;cv::cvtColor(src,gs,cv::COLOR_BGR2GRAY);cv::cvtColor(ref,gr,cv::COLOR_BGR2GRAY);
+        const double ratio=std::min(1.,1280./std::max(ref.cols,ref.rows));
+        if(ratio<1){cv::resize(gs,gs,{},ratio,ratio,cv::INTER_AREA);cv::resize(gr,gr,{},ratio,ratio,cv::INTER_AREA);}
+        const double sx=double(gr.cols)/ref.cols,sy=double(gr.rows)/ref.rows;
+        const cv::Mat s=(cv::Mat_<double>(3,3)<<sx,0,.5*sx-.5,0,sy,.5*sy-.5,0,0,1);
+        cv::Mat inverse=initial.empty() ? cv::Mat::eye(3,3,CV_64F) : initial.inv();
+        cv::Mat w=s*inverse*s.inv();w.convertTo(w,CV_32F);
+        const double cc=globalECC(gr,gs,w,cv::MOTION_HOMOGRAPHY,
+            cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,40,1e-5),std::min(sx,sy));
+        if(!std::isfinite(cc)||cc<.60)return false;
+        w.convertTo(w,CV_64F);h=s.inv()*w.inv()*s;
+        if(!cv::checkRange(h)||std::abs(h.at<double>(2,2))<1e-9)return false;
+        h/=h.at<double>(2,2);
+        if(std::abs(cv::determinant(h))<1e-9||!displacementWithinLimit(h,ref.rows,ref.cols,"ProjectiveECC")||
+            !verifyAlignment(src,ref,h,"ProjectiveECC"))return false;
+        if(!deferColorWarp)cv::warpPerspective(src,warped,h,ref.size(),cv::INTER_LINEAR,cv::BORDER_CONSTANT);
+        return true;
+    } catch(const cv::Exception&) {return false;}
+}
+
+bool BurstFusionEngine::alignBaseFrame(const cv::Mat& src,const cv::Mat& ref,cv::Mat& outWarped,cv::Mat& outH) {
+    ScoreScope scoreScope;
+    double best=-2;const char* selected="none";
+    outWarped.release();outH.release();
+    {
+    WarpScope warpScope;
+    for(int method=0;method<4;++method) {
+        cv::Mat warped,h;
+        const bool accepted=method==0 ? alignFrameECC(src,ref,warped,h) :
+            method==1 ? projectiveECC(src,ref,outH,warped,h) :
+            method==2 ? alignFrameHomography(src,ref,warped,h) : alignGradientPhaseCorrelation(src,ref,warped,h);
+        if(!accepted)continue;
+        double score,identity,ratio;
+        if(!alignmentScores(src,ref,h,score,identity,ratio)||!std::isfinite(score))continue;
+        const char* name=method==0 ? "ECC" : method==1 ? "ProjectiveECC" : method==2 ? "ORB-Homography" : "Phase";
+        LOGI("Base candidate %s score=%.4f",name,score);
+        if(score>best+.02) {best=score;selected=name;outH=h;outWarped=warped;}
+        if(best>=.985)break;
+    }
+    }
+    LOGI("Base selected=%s score=%.4f",selected,best);
+    if(best>-2)cv::warpPerspective(src,outWarped,outH,ref.size(),cv::INTER_LINEAR,cv::BORDER_CONSTANT);
+    return best>-2;
 }
 
 // ============================================================================
@@ -217,7 +292,7 @@ bool BurstFusionEngine::alignFrameHomography(const cv::Mat& src, const cv::Mat& 
     }
 
     outH = H;
-    cv::warpPerspective(src, outWarped, H, ref.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+    if(!deferColorWarp)cv::warpPerspective(src, outWarped, H, ref.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
     return true;
 }
 
@@ -254,7 +329,7 @@ bool BurstFusionEngine::alignFrameECC(const cv::Mat& src, const cv::Mat& ref, cv
 
         cv::Mat warpMatrix = cv::Mat::eye(2, 3, CV_32F);
         cv::TermCriteria criteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 30, 0.005);
-        double cc = cv::findTransformECC(smallRef, smallSrc, warpMatrix, cv::MOTION_EUCLIDEAN, criteria);
+        double cc = globalECC(smallRef, smallSrc, warpMatrix, cv::MOTION_EUCLIDEAN, criteria,scale);
 
         // Coarse 480px alignment alone is insufficient for source-pixel phase
         // reconstruction. Refine the same transform on a larger luma pyramid.
@@ -264,8 +339,8 @@ bool BurstFusionEngine::alignFrameECC(const cv::Mat& src, const cv::Mat& ref, cv
             warpMatrix.at<float>(1, 2) *= refinedScale / scale;
             cv::resize(graySrc, smallSrc, cv::Size(), refinedScale, refinedScale, cv::INTER_AREA);
             cv::resize(grayRef, smallRef, cv::Size(), refinedScale, refinedScale, cv::INTER_AREA);
-            cc = cv::findTransformECC(smallRef, smallSrc, warpMatrix, cv::MOTION_EUCLIDEAN,
-                cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 40, 1e-5));
+            cc = globalECC(smallRef, smallSrc, warpMatrix, cv::MOTION_EUCLIDEAN,
+                cv::TermCriteria(cv::TermCriteria::COUNT + cv::TermCriteria::EPS, 40, 1e-5),refinedScale);
             scale = refinedScale;
         }
 
@@ -295,7 +370,7 @@ bool BurstFusionEngine::alignFrameECC(const cv::Mat& src, const cv::Mat& ref, cv
             if (displacementWithinLimit(H_src2ref, ref.rows, ref.cols, "alignFrameECC") &&
                 verifyAlignment(src, ref, H_src2ref, "ECC")) {
                 outH = H_src2ref;
-                cv::warpPerspective(src, outWarped, outH, ref.size(),
+                if(!deferColorWarp)cv::warpPerspective(src, outWarped, outH, ref.size(),
                                     cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
                 return true;
             }
@@ -416,7 +491,7 @@ bool BurstFusionEngine::alignGradientPhaseCorrelation(const cv::Mat& src, const 
         if (displacementWithinLimit(Hpc, ref.rows, ref.cols, "alignGradientPhaseCorrelation") &&
             verifyAlignment(src, ref, Hpc, "PhaseCorr")) {
             outH = Hpc;
-            cv::warpPerspective(src, outWarped, outH, ref.size(),
+            if(!deferColorWarp)cv::warpPerspective(src, outWarped, outH, ref.size(),
                                 cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
             return true;
         }
@@ -685,11 +760,24 @@ bool BurstFusionEngine::alignHighlightTemplate(const cv::Mat& srcShort, const cv
 // 5. 对数梯度相位相关 (低对比度平滑结构)
 // 6. 坏板熔断保护 (返回 false，防止未对齐曝光板进入 MergeMertens 造成双重重影)
 // ============================================================================
-bool BurstFusionEngine::alignHighlightFrame(const cv::Mat& srcShort, const cv::Mat& refBase, cv::Mat& outWarped, cv::Mat& outH) {
+bool BurstFusionEngine::alignHighlightFrame(const cv::Mat& srcShort, const cv::Mat& refBase, cv::Mat& outWarped, cv::Mat& outH, double exposureGain) {
+    CpuGlobalScope preserveHighlightGeometry;
+    ScoreScope scoreScope;
     if (srcShort.empty() || refBase.empty() || srcShort.size() != refBase.size()) {
         return false;
     }
 
+    // Fit matching brightness/saturation first; keep the original short pixels.
+    if (exposureGain > 1.25 && std::isfinite(exposureGain)) {
+        cv::Mat normalized=fusion::normalizeExposure(srcShort,std::min(256.,exposureGain)), ignored;
+        bool accepted;
+        { WarpScope warpScope;accepted=alignFrameECC(normalized,refBase,ignored,outH); }
+        if (accepted) {
+            cv::warpPerspective(srcShort,outWarped,outH,refBase.size(),cv::INTER_LINEAR,cv::BORDER_CONSTANT);
+            LOGI("alignHighlightFrame: normalized ECC accepted gain=%.3f",exposureGain);
+            return true;
+        }
+    }
     // 1. 优先尝试 CLAHE + ORB 单应性配准
     if (alignFrameHomography(srcShort, refBase, outWarped, outH)) {
         LOGI("alignHighlightFrame: successfully aligned via CLAHE ORB homography");

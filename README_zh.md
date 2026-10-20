@@ -1,7 +1,7 @@
 > [!NOTE]
 > 本项目的作者完全通过 Vibe Coding 构建了本项目，且并不完全清楚这个 Agent 到底偷偷写了些什么代码。 ¯\\\_(ツ)\_/¯
 
-> 当前实现、缺陷修复及未实装功能以 [2026-10-12 实现审计](specs/IMPLEMENTATION_AUDIT_2026-10-12.md) 为准。下方历史功能介绍中的固定 50MP、GPU/OEM 对等和矢量 PDF 描述不应视为已验收承诺。测试版构建入口：`scripts/build-test.ps1`。
+> 当前契约、实现及限制见 [规格索引](specs/README.md)、[TODO](TODO.md) 和 [rc25 剩余配准报告](specs/reports/RC25_RESIDUAL_LOCAL_ECC_2026-10-20.zh-CN.md)。测试版构建入口：`scripts/build-test.ps1`。
 
 <div align="center">
 
@@ -25,96 +25,39 @@
 
 ---
 
-## 🌟 核心功能
+## 当前功能
 
-### 1. 相机与计算摄影 (Camera & Computational Photography)
-* **硬件级 ISP 调优**：
-  - 通过 Camera2Interop 注入高画质捕获请求，启用传感器硬件级光学防抖（OIS）与精细色调映射。
-* **多帧超分辨率连拍 (50MP Super-Res，实验性)**：
-  - 针对手持拍摄时的生理微颤（$0.1 \sim 0.8\text{ px}$ 亚像素位移），通过 ORB 特征与 RANSAC 计算亚像素单应性矩阵，在 $2\times$ 物理画布上进行多相累加融合，重构超越单帧传感器采样的高频光学细节并抑制反光。
-* **横竖屏自适应与方向感知**：
-  - 取景界面与操作按钮支持全向动态旋转，拍摄时自动校正物理像素与 EXIF 朝向，便于横向拍摄长条形标牌与宽幅书籍。
+- CameraX/Camera2Interop JPEG 拍摄、可用后摄视角/变焦、点击 AF/AE 与正向输出。相机请求依能力执行，不能保证 OEM 的实际处理。
+- 默认 Full HDR/多帧拍摄，请求最多四张基准和三张短曝光。只有通过局部验证的观测才参与降噪、实验区域重建与高光恢复；尺寸与真实细节分开，不保证原生 50 MP。
+- 测试版接入 Vulkan 支持图/ECC 及区域观察映射/求解实验，先核对数值和完整成本，有界资源并回退 CPU。release 保持 CPU，全 GPU 合成及手机加速尚未验收。
+- 文档轮廓跟踪、手动四角/直线吸附、平面透视及比例校正。识别仍是启发式算法。
+- 原图、魔法色彩、连续色调类纸三种滤镜，B&W/灰阶已替换。纸白、色彩和弱笔画仍需实机对照。
+- 不可变原图、按编辑代次提交派生图、导出读取租约和有界页面检查点。重启恢复已保存页面；中断拍摄保留完整原图或明确失败，不自动重跑丢失的连拍/未提交编辑。
+- JPEG 与栅格页面 PDF 导出，没有 OCR/矢量文字层。HachiCamTest 可一次导出最近最多四组配对原始连拍、最终图和阶段计时；release 不探 root、不收集机型标识或原始诊断组。
 
-### 2. 边缘检测与几何校正 (Edge Detection & Perspective)
-* **文字显著度与长宽比放宽**：
-  - 引入 Sobel 梯度积分图，对候选多边形内部的高频笔画能量（Text Saliency）进行快速评估，在复杂背景下优先锁定写有文字的标牌，避免误选反光玻璃窗。
-  - 支持高达 $12:1$ 的长宽比识别，适配地铁站牌、条幅与收银小票。
-* **交互式四边形裁剪与 2.8x 放大镜**：
-  - 拖拽角点时唤起带十字准星的高清浮动放大镜，支持像素级精确定位。
-  - 提供 A4、A3、4:3、16:9、8:7 及自定义比例快速切换，并内置俯仰角透视缩短补偿。
+## 当前限制
 
-### 3. 图像增强滤镜 (Document Filters)
-* **Retinex 魔法色彩 (Magic Color)**：
-  - 在 CIE-Lab 色彩空间解耦 L 亮度通道，利用低频照度除法模型消除阴影与纸张折痕，结合动态白平衡还原纸白，完整保留彩色笔迹与公章。
-* **Sauvola 局部自适应二值化 (B&W Document)**：
-  - 基于双精度积分图快速计算局部动态阈值，在去除复印底灰的同时保护极细文字线条不断裂。
-* **平滑灰度 (Grayscale)**：
-  - 针对票据、证件复印件提供宽动态范围的对比度拉伸。
+灯具/屏幕 HDR、局部 JPEG 响应仍需改善。区域重建为实验功能，证据不足时保留原尺寸合成。测试版记录 RAW 可用性，但 RAW 捕获/合成、稠密配准、自动拍摄、书页展开及手指清理尚未完成。宿主回归不等于相机画质、手机等待/内存/热状态验收。
 
-### 4. 纯净隐私与导出 (Privacy & Export)
-* **100% 本地运算**：全链路 C++ NDK 与 OpenCV 算法在设备本地完成。
-* **零追踪、零权限**：无账户系统、无网络通信、无第三方分析统计 SDK。
-* **标准文档导出**：基于 Android 原生 `PdfDocument` 组装高清矢量 PDF，支持批量 JPEG 导出。
+## 编译与检查
 
----
+仓库固定 SDK 35、build-tools 36.0.0、NDK 30.0.16248370、Gradle 8.14。使用 JDK 17/21 与已安装 CMake；默认 3.22.1，可按当前环境指定 `-Pscanner.cmakeVersion=4.1.2`。
 
-## ⚠️ 已知不足与技术债务 (Known Issues & Tech Debt)
-
-客观而言，本项目由作者与 AI 结对进行快速原型探索，当前版本存在较为明显的工程短板，我们并不回避这些问题，并已列入后续重构计划：
-
-1. **磁盘文件 I/O 往返开销**：
-   - 目前连拍与多帧融合采用了“落盘 JPEG $\to$ C++ 解码 $\to$ 算法处理 $\to$ 重新编码”的保守机制，引入了不必要的磁盘读写延迟与有损重编损耗。未来计划重构成基于 `ImageProxy` / `HardwareBuffer` 的零拷贝内存共享管线。
-2. **大单体组件待解耦**：
-   - `CameraScreen` 与 `CameraViewModel` 承担了过多职责（传感器监听、CameraX 绑定、动效交互、捕获流水线），后续将逐步拆分为遵循单一职责原则的 UseCase 与 Controller。
-3. **缺少持久化数据库支撑**：
-   - 当前已扫描页面临时存储在内存 StateFlow 列表中，如未及时导出且遭遇系统杀后台（Process Death），存在批次丢失风险，需引入 Room SQLite 持久化支持。
-4. **JNI 原生指针与类型安全**：
-   - JNI 接口层存在较多裸指针地址（`jlong matAddr`）传递，有待补充更为规范的 RAII 资源安全封装。
-
-欢迎大家提出宝贵批评，也期待社区有经验的开发者提交 PR 共同改进。
-
----
-
-## 🛠️ 构建与运行 (Build & Run)
-
-### 环境要求
-* Android Studio Ladybug (2024.2.1) 或更高版本
-* Android SDK 35 (Android 15)
-* Android NDK 26+ / 30
-* JDK 17 或 JDK 21
-* CMake 3.22.1+
-
-### 命令行编译
-
-```bash
-# 克隆仓库
-git clone https://github.com/eviau512/Hachimi-Scan.git
-cd Hachimi-Scan
-
-# 构建 Release APK (HachiCam 定制版)
-./gradlew assembleHachimiRelease
-
-# 或构建标准版 Release APK
-./gradlew assembleStandardRelease
+```powershell
+.\scripts\build-test.ps1
+# 已配置签名密钥时构建 release：
+.\gradlew.bat :app:assembleHachimiRelease
 ```
 
-生成安装包位于 `app/build/outputs/apk/hachimi/release/`。
+测试包 `moe.hachimi.cam.test`，显示为 HachiCamTest；release 为 `moe.hachimi.cam`、HachiCam。Universal 测试包位于 `app/build/outputs/apk/hachimi/debug/`，包含 arm64-v8a、armeabi-v7a、x86_64。
 
----
+CPU 图像检查使用 `scripts/test-quality-native.ps1`；实际宿主 Vulkan 内核/故障策略使用 `scripts/test-gpu-native.ps1`，详见 [原生检查说明](tests/native/README.md)。Android 单元检查、安装包签名/身份检查与实机测试分别验收。
 
-## 📄 架构规格书 (Specifications)
+## 规格与工作流
 
-本项目核心算法均配有详细的设计与数学规范，存放在 [`specs/`](specs/) 目录下（采用 CC0 1.0 公共领域贡献）：
-* [`SPEC_00_ARCHITECTURE_AND_TECH_STACK.md`](specs/SPEC_00_ARCHITECTURE_AND_TECH_STACK.md)：系统整体分层架构、数据流与技术栈全景
-* [`SPEC_01_RETINEX_MAGIC_COLOR_ENGINE.md`](specs/SPEC_01_RETINEX_MAGIC_COLOR_ENGINE.md)：Retinex CIE-Lab 照度分解数学模型
-* [`SPEC_02_ADAPTIVE_BINARIZATION_ENGINE.md`](specs/SPEC_02_ADAPTIVE_BINARIZATION_ENGINE.md)：Sauvola 积分图局部自适应二值化
-* [`SPEC_04_BURST_FUSION_ENGINE.md`](specs/SPEC_04_BURST_FUSION_ENGINE.md)：多帧配准融合与 50MP 亚像素超分辨率
-* [`SPEC_15_METRO_SIGN_AND_TEXT_SALIENCY_DETECTION.md`](specs/SPEC_15_METRO_SIGN_AND_TEXT_SALIENCY_DETECTION.md)：大长宽比标牌识别与 Sobel 积分图笔画显著度打分
+[英文权威规格](specs/README.md) 包含 SPEC_00 到 SPEC_06；中文报告说明证据，不替代契约。每项修改按分析问题 → 分析 spec → 调整 spec → 实现与验证推进。[AGENTS.md](AGENTS.md) 也规定提交即 commit 与 push，并核对远端。
 
----
+## 许可证
 
-## 📄 开源许可证与声明
-
-* **源代码**：遵循 **[GNU General Public License v3 (GPLv3)](LICENSE)**。
-* **规范文档**：遵循 **[Creative Commons Zero v1.0 (CC0 1.0)](specs/LICENSE)**。
-* **美术资产**：应用内部分图标及表情元素衍生自中文社区同人文化二创，开发者不对相关形象主张专有版权；若有版权异议请随时联系下架或替换。
+- 源代码：[GNU GPLv3](LICENSE)。
+- 规格：[CC0 1.0](specs/LICENSE)。

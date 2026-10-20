@@ -1,17 +1,34 @@
 #include "perspective_corrector.h"
-#include <cmath>
-#include <algorithm>
 #include "paper_math.h"
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
 
-cv::Mat PerspectiveCorrector::correctPerspective(const cv::Mat& src, const std::vector<cv::Point2f>& srcCorners, float targetAspectRatio) {
-    if (src.empty() || srcCorners.size() != 4) {
-        return src;
+cv::Mat PerspectiveCorrector::correctPerspective(const cv::Mat &src,
+                                                 const std::vector<cv::Point2f> &srcCorners,
+                                                 float targetAspectRatio) {
+    if (src.empty() || srcCorners.size() != 4 || src.depth() != CV_8U ||
+        (src.channels() != 1 && src.channels() != 3 && src.channels() != 4) ||
+        int64_t(src.cols) * src.rows > 56000000)
+        throw std::invalid_argument("Invalid perspective source");
+    if (!std::isfinite(targetAspectRatio) ||
+        (targetAspectRatio != 0 && (targetAspectRatio < .05f || targetAspectRatio > 20.f)))
+        throw std::invalid_argument("Unsupported aspect ratio");
+    double area = 0;
+    for (size_t i = 0; i < 4; ++i) {
+        const auto a = srcCorners[i], b = srcCorners[(i + 1) % 4], c = srcCorners[(i + 2) % 4];
+        if (!std::isfinite(a.x) || !std::isfinite(a.y) || a.x < 0 || a.y < 0 || a.x > src.cols - 1 ||
+            a.y > src.rows - 1 || (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) <= 1e-3f)
+            throw std::invalid_argument("Invalid crop corners");
+        area += double(a.x) * b.y - double(a.y) * b.x;
     }
+    if (area < 8)
+        throw std::invalid_argument("Degenerate crop");
 
-    const cv::Point2f& tl = srcCorners[0];
-    const cv::Point2f& tr = srcCorners[1];
-    const cv::Point2f& br = srcCorners[2];
-    const cv::Point2f& bl = srcCorners[3];
+    const cv::Point2f &tl = srcCorners[0];
+    const cv::Point2f &tr = srcCorners[1];
+    const cv::Point2f &br = srcCorners[2];
+    const cv::Point2f &bl = srcCorners[3];
 
     double widthA = std::hypot(br.x - bl.x, br.y - bl.y);
     double widthB = std::hypot(tr.x - tl.x, tr.y - tl.y);
@@ -38,7 +55,8 @@ cv::Mat PerspectiveCorrector::correctPerspective(const cv::Mat& src, const std::
         }
     } else {
         // Free mode: Projective foreshortening vertical recovery estimation
-        // Document camera tilt causes perspective convergence of opposite sides and foreshortening along tilt axis.
+        // Document camera tilt causes perspective convergence of opposite sides and foreshortening along tilt
+        // axis.
         double ratioW = (maxW > 1.0) ? (minW / maxW) : 1.0;
         double ratioH = (maxH > 1.0) ? (minH / maxH) : 1.0;
 
@@ -53,12 +71,12 @@ cv::Mat PerspectiveCorrector::correctPerspective(const cv::Mat& src, const std::
         }
     }
 
+    if (maxWidth < 2 || maxHeight < 2 || int64_t(maxWidth) * maxHeight > 56000000)
+        throw std::invalid_argument("Perspective output exceeds pixel budget");
     std::vector<cv::Point2f> dstCorners = {
-        cv::Point2f(0.0f, 0.0f),
-        cv::Point2f(static_cast<float>(maxWidth - 1), 0.0f),
+        cv::Point2f(0.0f, 0.0f), cv::Point2f(static_cast<float>(maxWidth - 1), 0.0f),
         cv::Point2f(static_cast<float>(maxWidth - 1), static_cast<float>(maxHeight - 1)),
-        cv::Point2f(0.0f, static_cast<float>(maxHeight - 1))
-    };
+        cv::Point2f(0.0f, static_cast<float>(maxHeight - 1))};
 
     cv::Mat transformMatrix = cv::getPerspectiveTransform(srcCorners, dstCorners);
     cv::Mat warped;
@@ -68,23 +86,32 @@ cv::Mat PerspectiveCorrector::correctPerspective(const cv::Mat& src, const std::
 }
 
 namespace {
-cv::Mat paperRendering(const cv::Mat& input, bool gentle) {
-    if (input.empty()) return {};
+cv::Mat paperRendering(const cv::Mat &input, bool gentle) {
+    if (input.empty())
+        return {};
     CV_Assert(input.depth() == CV_8U);
     cv::Mat src;
-    if (input.channels() == 1) cv::cvtColor(input, src, cv::COLOR_GRAY2BGR);
-    else if (input.channels() == 4) cv::cvtColor(input, src, cv::COLOR_BGRA2BGR);
-    else { CV_Assert(input.channels() == 3); src = input; }
+    if (input.channels() == 1)
+        cv::cvtColor(input, src, cv::COLOR_GRAY2BGR);
+    else if (input.channels() == 4)
+        cv::cvtColor(input, src, cv::COLOR_BGRA2BGR);
+    else {
+        CV_Assert(input.channels() == 3);
+        src = input;
+    }
     const double scale = std::min(1.0, 512.0 / std::max(src.cols, src.rows));
     cv::Mat small, lab, luma, background;
-    cv::resize(src, small, cv::Size(std::max(1, int(std::round(src.cols * scale))),
-        std::max(1, int(std::round(src.rows * scale)))), 0, 0, cv::INTER_AREA);
+    cv::resize(src, small,
+               cv::Size(std::max(1, int(std::round(src.cols * scale))),
+                        std::max(1, int(std::round(src.rows * scale)))),
+               0, 0, cv::INTER_AREA);
     cv::cvtColor(small, lab, cv::COLOR_BGR2Lab);
     cv::extractChannel(lab, luma, 0);
     const int kernel = std::max(3, (std::max(small.cols, small.rows) / 25) | 1);
     cv::morphologyEx(luma, background, cv::MORPH_CLOSE,
-        cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernel, kernel)));
-    cv::GaussianBlur(background, background, cv::Size(0, 0), std::max(.6, kernel * .35), 0, cv::BORDER_REPLICATE);
+                     cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kernel, kernel)));
+    cv::GaussianBlur(background, background, cv::Size(0, 0), std::max(.6, kernel * .35), 0,
+                     cv::BORDER_REPLICATE);
     cv::Mat result(src.size(), CV_8UC3);
     // Tile conversion bounds scratch memory even for a 50 MP source. Sample the
     // small illumination field directly; no full-size float/integral images.
@@ -94,15 +121,19 @@ cv::Mat paperRendering(const cv::Mat& input, bool gentle) {
             cv::Mat tile, rendered;
             cv::cvtColor(src(roi), tile, cv::COLOR_BGR2Lab);
             for (int ty = 0; ty < tile.rows; ++ty) {
-                auto* row = tile.ptr<cv::Vec3b>(ty);
-                const double sy = std::clamp((y + ty + .5) * background.rows / src.rows - .5, 0.0, double(background.rows - 1));
+                auto *row = tile.ptr<cv::Vec3b>(ty);
+                const double sy = std::clamp((y + ty + .5) * background.rows / src.rows - .5, 0.0,
+                                             double(background.rows - 1));
                 const int y0 = int(sy), y1 = std::min(y0 + 1, background.rows - 1);
                 const float fy = sy - y0;
                 for (int tx = 0; tx < tile.cols; ++tx) {
-                    const double sx = std::clamp((x + tx + .5) * background.cols / src.cols - .5, 0.0, double(background.cols - 1));
+                    const double sx = std::clamp((x + tx + .5) * background.cols / src.cols - .5, 0.0,
+                                                 double(background.cols - 1));
                     const int x0 = int(sx), x1 = std::min(x0 + 1, background.cols - 1);
                     const float fx = sx - x0;
-                    const float bg = (1 - fy) * ((1 - fx) * background.at<uchar>(y0, x0) + fx * background.at<uchar>(y0, x1)) +
+                    const float bg =
+                        (1 - fy) *
+                            ((1 - fx) * background.at<uchar>(y0, x0) + fx * background.at<uchar>(y0, x1)) +
                         fy * ((1 - fx) * background.at<uchar>(y1, x0) + fx * background.at<uchar>(y1, x1));
                     const float chroma = std::hypot(float(row[tx][1]) - 128, float(row[tx][2]) - 128);
                     row[tx][0] = cv::saturate_cast<uchar>(paper::luminance(row[tx][0], bg, chroma, gentle));
@@ -114,22 +145,24 @@ cv::Mat paperRendering(const cv::Mat& input, bool gentle) {
     }
     return result;
 }
-}
+} // namespace
 
-cv::Mat PerspectiveCorrector::enhanceMagicColor(const cv::Mat& src) { return paperRendering(src, false); }
-cv::Mat PerspectiveCorrector::enhancePaper(const cv::Mat& src) { return paperRendering(src, true); }
+cv::Mat PerspectiveCorrector::enhanceMagicColor(const cv::Mat &src) { return paperRendering(src, false); }
+cv::Mat PerspectiveCorrector::enhancePaper(const cv::Mat &src) { return paperRendering(src, true); }
 
-cv::Mat PerspectiveCorrector::processDocument(const cv::Mat& src, const std::vector<cv::Point2f>& srcCorners, FilterType filter, float targetAspectRatio) {
+cv::Mat PerspectiveCorrector::processDocument(const cv::Mat &src, const std::vector<cv::Point2f> &srcCorners,
+                                              FilterType filter, float targetAspectRatio) {
     cv::Mat warped = correctPerspective(src, srcCorners, targetAspectRatio);
-    if (warped.empty()) return src;
+    if (warped.empty())
+        return src;
 
     switch (filter) {
-        case FilterType::MAGIC_COLOR:
-            return enhanceMagicColor(warped);
-        case FilterType::PAPER:
-            return enhancePaper(warped);
-        case FilterType::ORIGINAL:
-        default:
-            return warped;
+    case FilterType::MAGIC_COLOR:
+        return enhanceMagicColor(warped);
+    case FilterType::PAPER:
+        return enhancePaper(warped);
+    case FilterType::ORIGINAL:
+    default:
+        return warped;
     }
 }
