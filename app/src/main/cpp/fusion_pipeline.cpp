@@ -335,42 +335,37 @@ cv::Mat BurstFusionEngine::fuseBurstFrames(const std::vector<cv::Mat> &frames, b
             if (!preserve.empty() && (*std::max_element(base.begin(), base.end()) >= 247 ||
                                       std::max({original[0], original[1], original[2]}) >= 247))
                 preserve.at<uchar>(y, x) = 255;
-            if (*std::max_element(base.begin(), base.end()) >= 247)
-                for (size_t hi = 0; hi < highlights.size(); ++hi) {
-                    const auto &plate = highlights[hi];
-                    if (!plate.local.gate.at<uchar>(gy, gx))
-                        continue;
-                    cv::Point2d delta;
-                    float confidence;
-                    if (!plate.local.offset(rx, ry, delta, confidence))
-                        continue;
-                    const auto point = project(plate.inverse, rx + delta.x, ry + delta.y);
-                    fusion::Color color;
-                    if (!sample(plate.image, point.x, point.y, color))
-                        continue;
-                    const float peak = *std::max_element(color.begin(), color.end());
-                    const bool observedDark =
-                        *std::max_element(base.begin(), base.end()) >= 247 &&
-                        plate.highlightNeighborhood.at<uchar>(
-                            std::clamp(int(std::round(point.y)), 0, plate.image.rows - 1),
-                            std::clamp(int(std::round(point.x)), 0, plate.image.cols - 1));
-                    if (peak >= 246 ||
-                        (!observedDark && (peak < 3 || fusion::linear(peak) * plate.gain < .60f)) ||
-                        !fusion::compatibleHighlight(base, color, plate.gain))
-                        continue;
-                    const auto recovered = fusion::recoverHighlight(base, color, plate.gain, observedDark);
-                    float change = 0;
-                    for (int c = 0; c < 3; ++c)
-                        change = std::max(change, std::abs(base[c] - recovered[c]));
-                    if (change < .5f)
-                        continue;
-                    base = recovered;
-                    ++recoveredPixels;
-                    if (!preserve.empty())
-                        preserve.at<uchar>(y, x) = 255;
-                    usedHighlightMask |= 1u << hi;
-                    break;
+            if (*std::max_element(base.begin(),base.end())>=247) {
+                fusion::Color targetSum{};double weights=0,coverageSum=0;unsigned contributors=0;
+                for(size_t hi=0;hi<highlights.size();++hi) {
+                    const auto& plate=highlights[hi];if(!plate.local.gate.at<uchar>(gy,gx))continue;
+                    cv::Point2d delta;float confidence,coverage;
+                    if(!plate.local.offset(rx,ry,delta,confidence,&coverage)||coverage<=0)continue;
+                    const auto point=project(plate.inverse,rx+delta.x,ry+delta.y);
+                    fusion::Color color;if(!sample(plate.image,point.x,point.y,color))continue;
+                    const float peak=*std::max_element(color.begin(),color.end());
+                    const bool observedDark=plate.highlightNeighborhood.at<uchar>(
+                        std::clamp(int(std::round(point.y)),0,plate.image.rows-1),
+                        std::clamp(int(std::round(point.x)),0,plate.image.cols-1));
+                    if(peak>=246 || (!observedDark && (peak<3 || fusion::linear(peak)*plate.gain<.60f)) )continue;
+                    const float responseConfidence=fusion::highlightCompatibilityWeight(base,color,plate.gain);
+                    if(responseConfidence<=0)continue;
+                    const auto target=fusion::recoverHighlight(base,color,plate.gain,observedDark);
+                    const double t=std::clamp((246.-peak)/16.,0.,1.),quality=t*t*(3.-2.*t);
+                    const double w=coverage*confidence*quality*responseConfidence/std::sqrt(plate.gain);
+                    if(w<=1e-12)continue;
+                    for(int c=0;c<3;++c)targetSum[c]+=float(target[c]*w);
+                    weights+=w;coverageSum+=coverage*quality*responseConfidence;contributors|=1u<<hi;
                 }
+                if(weights>1e-12) {
+                    const double strength=std::min(1.,coverageSum);float change=0;
+                    for(int c=0;c<3;++c) {
+                        const float value=float(base[c]+(targetSum[c]/weights-base[c])*strength);
+                        change=std::max(change,std::abs(value-base[c]));base[c]=value;
+                    }
+                    if(change>=.5f){++recoveredPixels;usedHighlightMask|=contributors;if(!preserve.empty())preserve.at<uchar>(y,x)=255;}
+                }
+            }
             for (int c = 0; c < 3; ++c)
                 pixel[c] = cv::saturate_cast<uchar>(base[c]);
             if(std::max({pixel[0],pixel[1],pixel[2]})>=250)++postClippedPixels;

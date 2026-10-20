@@ -141,26 +141,36 @@ bool LocalRegistration::hasDetail(double x, double y) const {
            ((1-fx)*fy<=.001f || detail.at<uchar>(y1,x0)) &&
            (fx*fy<=.001f || detail.at<uchar>(y1,x1));
 }
-bool LocalRegistration::offset(double x, double y, cv::Point2d& delta, float& confidence) const {
-    if (field.empty()) { delta = {0, 0}; confidence = 1; return true; }
+bool LocalRegistration::offset(double x, double y, cv::Point2d& delta, float& confidence, float* recoveryCoverage) const {
+    if(recoveryCoverage)*recoveryCoverage=0;
+    if (field.empty()) { delta = {0, 0}; confidence = 1;if(recoveryCoverage)*recoveryCoverage=1; return true; }
     if(patchSupport) {
         const int gx=int(std::round(x/spacing)),gy=int(std::round(y/spacing));
-        cv::Vec3f selected(0,0,0);double best=1e30;
+        cv::Vec3d sum(0,0,0);double total=0,coverage=0;
         cv::Vec3f candidates[9];int candidateCount=0;
+        auto window=[](double d){const double t=std::clamp((140.-std::abs(d))/16.,0.,1.);return t*t*(3.-2.*t);};
         for(int yy=std::max(0,gy-1);yy<=std::min(field.rows-1,gy+1);++yy)
             for(int xx=std::max(0,gx-1);xx<=std::min(field.cols-1,gx+1);++xx) {
-                const auto p=field.at<cv::Vec3f>(yy,xx);
-                if(p[2]<=0)continue;
+                const auto p=field.at<cv::Vec3f>(yy,xx);if(p[2]<=0)continue;
                 const double dx=x-std::min(xx*spacing,domain.width-1),dy=y-std::min(yy*spacing,domain.height-1);
                 if(std::abs(dx)>140||std::abs(dy)>140)continue;
                 for(int i=0;i<candidateCount;++i)
                     if(std::hypot(p[0]-candidates[i][0],p[1]-candidates[i][1])>1.5)return false;
                 candidates[candidateCount++]=p;
-                const double distance=dx*dx+dy*dy;
-                if(distance<best){best=distance;selected=p;}
+                const double taper=window(dx)*window(dy),w=std::max(taper,1e-6);
+                sum+=cv::Vec3d(p[0],p[1],p[2])*w;total+=w;coverage+=taper;
             }
-        if(selected[2]<=0)return false;
-        delta={selected[0],selected[1]};confidence=selected[2];return true;
+        if(total<=0)return false;
+        delta={sum[0]/total,sum[1]/total};confidence=float(sum[2]/total);
+        if(recoveryCoverage) {
+            *recoveryCoverage=float(std::min(1.,coverage));
+            if(!this->coverage.empty()) {
+                const double sx=x-coverageBounds.x,sy=y-coverageBounds.y;
+                if(sx<0||sy<0||sx>this->coverage.cols-1||sy>this->coverage.rows-1)*recoveryCoverage=0;
+                else *recoveryCoverage=graySample(this->coverage,sx,sy)/255.f;
+            }
+        }
+        return true;
     }
     const double gx = std::clamp(x / spacing, 0.0, double(field.cols - 1));
     const double gy = std::clamp(y / spacing, 0.0, double(field.rows - 1));
@@ -247,8 +257,26 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     const cv::Mat activeNodes=requestedPixels.empty() ? cv::Mat() : highlightFitNodes(requestedPixels,model.spacing);
     const int activeCount=activeNodes.empty() ? nx*ny : cv::countNonZero(activeNodes);
     if(!activeCount) {model.gate=cv::Mat::zeros(reference.size(),CV_8U);return model;}
+    cv::Rect workRegion({},reference.size());
+#ifndef HACHICAM_DISABLE_SPARSE_PREPARATION
+    if(!activeNodes.empty()) {
+        cv::Rect bounds;
+        for(int gy=0;gy<ny;++gy)for(int gx=0;gx<nx;++gx)if(activeNodes.at<uchar>(gy,gx)) {
+            const int cx=std::min(gx*model.spacing,reference.cols-1),cy=std::min(gy*model.spacing,reference.rows-1);
+            const auto r=cv::Rect(cx-176,cy-176,353,353)&workRegion;
+            bounds=bounds.empty() ? r : bounds|r;
+        }
+        if(!bounds.empty() && double(bounds.area())<reference.total()*.70)workRegion=bounds;
+    }
+#endif
+    auto preparedSource=[&](double sigma,bool band) {
+        cv::Mat part;if(band)part=highPass(warped(workRegion));else cv::GaussianBlur(warped(workRegion),part,cv::Size(0,0),sigma);
+        if(workRegion==cv::Rect({},reference.size()))return part;
+        cv::Mat plane=cv::Mat::zeros(reference.size(),part.type());part.copyTo(plane(workRegion));return plane;
+    };
+    __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","local preparation v2 highlight=%d pixels=%d/%zu region=%d,%d,%d,%d",int(highlight),workRegion.area(),reference.total(),workRegion.x,workRegion.y,workRegion.width,workRegion.height);
     const bool cached=!singlePatch && prepared && prepared->identity==reference.data && prepared->domain==reference.size() && prepared->noise.size()==model.field.size();
-    const cv::Mat refHP = cached ? prepared->highPass : highPass(reference), srcHP = highPass(warped);
+    const cv::Mat refHP = cached ? prepared->highPass : highPass(reference), srcHP = preparedSource(0,true);
     cv::Mat refAlign,srcAlign;
     if(cached)refAlign=prepared->align;else cv::GaussianBlur(reference,refAlign,cv::Size(0,0),1.2);
     cv::GaussianBlur(warped,srcAlign,cv::Size(0,0),1.2);
@@ -377,7 +405,13 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
             }
         }
         if(fittedNodes[index][3]>=1){pending[index]=fittedNodes[index];fitCorrelation[index]=pending[index][2];}
-        else rejection[index]=fitCpu(roi,pending[index],fitCorrelation[index]);
+        else {
+#ifndef HACHICAM_DISABLE_DETAIL_BOUND
+            if(node.srcVariance<node.refVariance*.8 && cannotRetainDetail(reference,refHP,srcHP,geometryValidity,roi,
+                {noiseGain*node.refNoise*node.refNoise,noiseGain*node.srcNoise*node.srcNoise})) {rejection[index]=9;continue;}
+#endif
+            rejection[index]=fitCpu(roi,pending[index],fitCorrelation[index]);
+        }
     }
     std::vector<PhysicalPatch> checks;std::vector<int> checkedIndices;
     for(int index=0;index<nx*ny;++index)if(pending[index][3]) {
@@ -422,15 +456,15 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     }
     physicalStats.cpuPatches+=cpuRetryChecks;
     physicalStats.ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-physicalStarted).count();
-    int counts[9]{};for(int code:rejection)++counts[code];
+    int counts[10]{};for(int code:rejection)++counts[code];
     char evidence[512];std::snprintf(evidence,sizeof(evidence),
-        "local-validation-v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d reason=%s",
-        int(highlight),physicalStats.patches,physicalStats.cpuPatches,proposalMs,physicalStats.ms,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],physicalReason.c_str());
+        "local-validation-v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d detailBound=%d reason=%s",
+        int(highlight),physicalStats.patches,physicalStats.cpuPatches,proposalMs,physicalStats.ms,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],physicalReason.c_str());
     recordFusionDiagnostic(evidence);
     __android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf",
-        "local physical v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f reason=%s; nodes lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d",
+        "local physical v1 highlight=%d gpuChecks=%d cpuChecks=%d proposalMs=%.3f verifyPhaseMs=%.3f reason=%s; nodes lowSignal=%d identity=%d mask=%d ecc=%d transform=%d correlation=%d detail=%d admitted=%d detailBound=%d",
         int(highlight),physicalStats.patches,physicalStats.cpuPatches,proposalMs,physicalStats.ms,physicalReason.c_str(),
-        counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8]);
+        counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9]);
     if(gpuPhysicalFallbacks)__android_log_print(ANDROID_LOG_INFO,"HachiCam-Perf","GPU physical-check CPU completions=%d",gpuPhysicalFallbacks);
     int detailNodes = 0,denoiseOnlyNodes=0;
     for (int y = 0; y < ny; ++y) for (int x = 0; x < nx; ++x) {
@@ -454,17 +488,32 @@ LocalRegistration registerLocal(const cv::Mat& reference, const cv::Mat& warped,
     }
     cv::Mat refSmooth, srcSmooth;
     if(cached)refSmooth=prepared->smooth;else cv::GaussianBlur(reference, refSmooth, cv::Size(0, 0), .6);
-    cv::GaussianBlur(warped, srcSmooth, cv::Size(0, 0), .6);
+    cv::GaussianBlur(warped,srcSmooth,cv::Size(0,0),.6);
     std::string backendReason=highlight ? "HDR patch support remains CPU" : "";
     const bool gateReady=!singlePatch && gpuLocalSupport(refSmooth,srcSmooth,model,model.gate,backendReason,geometryValidity);
     model.gpuSupportMap=gateReady && backendReason=="validated packed-byte support kernel";
     if(!gateReady) {
-        model.gate.create(reference.size(),CV_8U);
+        model.gate=cv::Mat::zeros(reference.size(),CV_8U);
+        const auto region=supportRegion(model,reference.size());
         #pragma omp parallel for schedule(static)
-        for (int y=0;y<reference.rows;++y) {
+        for (int y=region.y;y<region.br().y;++y) {
             auto* row=model.gate.ptr<uchar>(y);
-            for(int x=0;x<reference.cols;++x)
+            for(int x=region.x;x<region.br().x;++x)
                 row[x]=supportPixel(refSmooth,srcSmooth,model,x,y,highlight,referenceValidity);
+        }
+    }
+    if(highlight) {
+        model.coverageBounds=supportRegion(model,reference.size());
+        if(!model.coverageBounds.empty()) {
+            cv::Mat padded,distance;
+            cv::copyMakeBorder(geometricSupport(model,model.coverageBounds),padded,1,1,1,1,cv::BORDER_CONSTANT,cv::Scalar(0));
+            cv::distanceTransform(padded,distance,cv::DIST_L2,cv::DIST_MASK_PRECISE);
+            model.coverage.create(model.coverageBounds.size(),CV_8U);
+            #pragma omp parallel for schedule(static)
+            for(int y=0;y<model.coverage.rows;++y)for(int x=0;x<model.coverage.cols;++x) {
+                const float t=std::clamp((distance.at<float>(y+1,x+1)-1.f)/64.f,0.f,1.f);
+                model.coverage.at<uchar>(y,x)=cv::saturate_cast<uchar>(255.f*t*t*(3.f-2.f*t));
+            }
         }
     }
     const auto finished=std::chrono::steady_clock::now();

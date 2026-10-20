@@ -47,6 +47,13 @@ inline bool compatibleHighlight(const Color& base,const Color& shorter,float gai
     return true;
 }
 
+inline float highlightCompatibilityWeight(const Color& base,const Color& shorter,float gain) {
+    float residual=0;
+    for(int c=0;c<3;++c)if(base[c]<247)
+        residual=std::max(residual,std::abs(encoded(std::min(1.f,linear(shorter[c])*gain))-base[c]));
+    const float t=std::clamp((24.f-residual)/8.f,0.f,1.f);return t*t*(3.f-2.f*t);
+}
+
 inline Color recoverHighlight(const Color& base, const Color& shorter, float gain, bool observedDark = false) {
     const float peak = *std::max_element(base.begin(), base.end());
     const float shortPeak = *std::max_element(shorter.begin(), shorter.end());
@@ -66,8 +73,11 @@ inline Color recoverHighlight(const Color& base, const Color& shorter, float gai
     const float weight = u * u * (3.0f - 2.0f * u);
     Color out;
     for (int c = 0; c < 3; ++c)
-        out[c] = base[c] < 247.f ? base[c] :
-            base[c] * (1.0f - weight) + encoded(radiance[c] * scale) * weight;
+    {
+        const float t=std::clamp((base[c]-247.f)/6.f,0.f,1.f);
+        const float channelWeight=weight*t*t*(3.f-2.f*t);
+        out[c]=base[c]*(1.f-channelWeight)+encoded(radiance[c]*scale)*channelWeight;
+    }
     return out;
 }
 } // namespace fusion

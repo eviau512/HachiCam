@@ -88,6 +88,15 @@ ignored exposure, occlusion and all-clipped/flat input. Grayscale match validity
 excludes any clipped reference color channel. These known-truth fixtures do not
 model every vendor JPEG response, flicker or rolling shutter.
 
+The rc23 suite checks continuous highlight overlap, unchanged displacement
+conflict rejection, geometric support-union equivalence, bounded CPU support and
+a conservative detail-energy upper bound against independently sampled subpixel
+translations. Channel recovery enters continuously at clipping; observed
+channels remain protected. Full CPU/GPU image suites retain ring-hole recovery,
+white-field/text, blur/occlusion/noise and streaming checks. Frozen full versus
+bounded preparation replays remain private local evidence; host timing and
+OpenCV 5 parity do not certify Android performance or complete lamp contours.
+
 Verified official package checksums used for this workspace:
 
 | Package | SHA256 |

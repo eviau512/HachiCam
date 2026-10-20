@@ -202,8 +202,8 @@ cv::Mat BurstFusionEngine::fuseBurstStream(size_t count,const std::function<cv::
         for(int y=0;y<output.rows;++y)for(int x=0;x<output.cols;++x) {
             if(recovered.at<uchar>(y,x))continue;
             auto& pixel=output.at<cv::Vec3b>(y,x);if(std::max({pixel[0],pixel[1],pixel[2]})<247)continue;
-            const int rx=crop.x+x,ry=crop.y+y;cv::Point2d d;float confidence;
-            if(!plate.local.offset(rx,ry,d,confidence))continue;
+            const int rx=crop.x+x,ry=crop.y+y;cv::Point2d d;float confidence,coverage;
+            if(!plate.local.offset(rx,ry,d,confidence,&coverage)||coverage<=0)continue;
             const auto sourcePoint=project(plate.inverse,rx+d.x,ry+d.y);
             fusion::Color shortColor;if(!sample(source,sourcePoint,shortColor))continue;
             const float peak=*std::max_element(shortColor.begin(),shortColor.end());
@@ -213,7 +213,8 @@ cv::Mat BurstFusionEngine::fuseBurstStream(size_t count,const std::function<cv::
                     std::clamp(int(std::round(sourcePoint.x)),0,source.cols-1));
             if(peak>=246||(!observedDark&&(peak<3||fusion::linear(peak)*plate.gain<.60f))||
                 !fusion::compatibleHighlight(baseline,shortColor,plate.gain))continue;
-            const auto color=fusion::recoverHighlight(baseline,shortColor,plate.gain,observedDark);
+            auto color=fusion::recoverHighlight(baseline,shortColor,plate.gain,observedDark);
+            for(int c=0;c<3;++c)color[c]=baseline[c]+(color[c]-baseline[c])*coverage;
             float change=0;for(int c=0;c<3;++c)change=std::max(change,std::abs(color[c]-pixel[c]));
             if(change<.5f)continue;
             for(int c=0;c<3;++c)pixel[c]=cv::saturate_cast<uchar>(color[c]);recovered.at<uchar>(y,x)=255;++used;

@@ -6,6 +6,46 @@
 #include <opencv2/imgproc.hpp>
 
 namespace fusion {
+inline cv::Rect supportRegion(const LocalRegistration& model,cv::Size domain) {
+    const cv::Rect whole({},domain);if(!model.patchSupport || model.field.empty())return whole;
+    cv::Rect bounds;
+    for(int y=0;y<model.field.rows;++y)for(int x=0;x<model.field.cols;++x)if(model.field.at<cv::Vec3f>(y,x)[2]>0) {
+        const int cx=std::min(x*model.spacing,domain.width-1),cy=std::min(y*model.spacing,domain.height-1);
+        const auto r=cv::Rect(cx-140,cy-140,281,281)&whole;
+        bounds=bounds.empty() ? r : bounds|r;
+    }
+    return bounds;
+}
+inline cv::Mat geometricSupport(const LocalRegistration& model,const cv::Rect& bounds) {
+    cv::Mat mask=cv::Mat::zeros(bounds.size(),CV_8U);
+    std::vector<cv::Rect> footprints;std::vector<cv::Vec3f> nodes;
+    for(int y=0;y<model.field.rows;++y)for(int x=0;x<model.field.cols;++x)if(model.field.at<cv::Vec3f>(y,x)[2]>0) {
+        const int cx=std::min(x*model.spacing,model.domain.width-1),cy=std::min(y*model.spacing,model.domain.height-1);
+        const auto r=cv::Rect(cx-140,cy-140,281,281)&bounds;
+        if(r.empty())continue;footprints.push_back(r);nodes.push_back(model.field.at<cv::Vec3f>(y,x));
+        mask(cv::Rect(r.tl()-bounds.tl(),r.size())).setTo(255);
+    }
+    for(size_t i=0;i<nodes.size();++i)for(size_t j=0;j<i;++j) {
+        const auto r=footprints[i]&footprints[j];if(r.empty())continue;
+        if(std::hypot(nodes[i][0]-nodes[j][0],nodes[i][1]-nodes[j][1])>1.5)
+            mask(cv::Rect(r.tl()-bounds.tl(),r.size())).setTo(0);
+    }
+    return mask;
+}
+inline bool cannotRetainDetail(const cv::Mat& reference,const cv::Mat& refHP,const cv::Mat& srcHP,
+    const cv::Mat& validity,const cv::Rect& roi,cv::Vec2d noise) {
+    cv::Mat mask=(reference(roi)>8)&(reference(roi)<247);if(!validity.empty())mask &= validity(roi);
+    mask.rowRange(0,10).setTo(0);mask.rowRange(mask.rows-10,mask.rows).setTo(0);
+    mask.colRange(0,10).setTo(0);mask.colRange(mask.cols-10,mask.cols).setTo(0);
+    const int n=cv::countNonZero(mask);if(n<256)return true;
+    cv::Scalar mean,sd;cv::meanStdDev(refHP(roi),mean,sd,mask);
+    const double va=std::max(0.,sd[0]*sd[0]-noise[0]);
+    // A bilinear translate of the 10px interior by <=8px samples only this
+    // patch. Convexity bounds its masked squared energy by full-patch energy.
+    const double energy=cv::norm(srcHP(roi),cv::NORM_L2SQR)/n;
+    const double upper=std::max(0.,energy*1.0001+1e-4-noise[1]);
+    return std::isfinite(upper) && upper<(.68-.002)*(.68-.002)*std::max(va,.01);
+}
 struct PhysicalPatch {cv::Rect roi;cv::Point2f shift;cv::Vec2d noise;};
 inline cv::Vec2d physicalMetrics(double count,double va,double vb,double covariance,cv::Vec2d noise) {
     if(count<256)return {-1,0};

@@ -408,7 +408,7 @@ unconditional signal-to-noise or sharpness guarantee.
 
 ### Spatially continuous highlight recovery (2026-10-18 research contract)
 
-**Required / not implemented.** The rc21 near/far lamp captures expose visible
+**Full lamp recovery required / not implemented.** The rc21 near/far lamp captures expose visible
 rectangular HDR transitions, despite useful lamp contours in their original
 deep-short observations. Current 256-pixel local nodes, <=140-pixel rectangular
 patch interiors, nearest-node selection and binary recovery gates can imprint
@@ -463,6 +463,86 @@ multiplying ECC work. Preserve the shared admission/failure/crop contracts and
 public-camera fallback. OEM RAW/HDR extension access is only a capability-gated
 research option, not evidence that HachiCam can invoke MotoCam's private path.
 
+### rc23 continuous support and bounded preparation (contract revised before implementation, 2026-10-20)
+
+This slice fixes support/selection discontinuities within already verified
+observations. It does not qualify a rejected deep-short frame or claim complete
+lamp contours. Full HDR-SEAM-22 acceptance above remains separate.
+
+Status: implemented / experimental in rc23. CPU and actual-host-GPU regression
+checks pass; four frozen lamp/screen outputs are byte-identical with the full
+preparation and unscreened-fitting comparison. These are host checks, not Android
+filter parity, phone performance acceptance or independent lamp-quality proof.
+Native support-edge jumps improved on the two tuning captures while retaining
+more than 90% of previously changed pixels; the near lamp still has a broad
+color patch and incomplete contour. Full HDR-SEAM-22 remains required / not
+implemented. Next priority is reliable cross-bracket geometry/response and
+protected ROI blending, not uniformly smaller tiles or weaker admission.
+
+1. Keep each verified <=140-pixel-per-axis footprint and reject every overlapping
+   displacement conflict >1.5 px. Replace nearest-patch displacement selection
+   with normalized continuous overlap weights. A smoothstep window tapers over
+   the last 16 source pixels of each measured axis; zero radiometric weight at a
+   footprint boundary does not extend support outside it. Geometry confidence
+   and radiometric coverage are separate outputs. CPU and GPU gates agree.
+   For the normal path, use distance inside the complete validated support
+   union for radiometric coverage (smoothstep over 64 pixels, zero at its outer
+   pixel), rather than fading every grid cell independently. This avoids dark/
+   bright stripes between valid adjacent cells. Store the bounded coverage ROI
+   as bytes and release temporary float distances immediately. Streaming uses
+   the analytical 16-pixel per-patch coverage without a full-resolution float map.
+   Build that union from measured geometric footprints minus conflicting
+   overlaps, independently of the pixel photometric gate. A thin residual
+   rejection ring around clipped ISP bloom must not attenuate a geometrically
+   verified lamp interior; pixel residual/source checks still reject those exact
+   pixels. Test the bounded ring's dark hole as a positive control.
+2. In the normal native path, compose all compatible short observations with normalized SNR/exposure weights,
+   fading an observation from peak 230 to 246 instead of abruptly switching the
+   first usable bracket. Blend toward the reference as verified coverage tends
+   to zero. Independently ramp each clipped channel from zero correction at 247
+   to full correction at 253; channels <247 remain exactly protected. Never
+   blur the finished image. Preserve current source/compatibility/observed-dark
+   checks and keep short observations out of SR phase credit.
+   Native-high-resolution streaming retains its sequential bounded-memory
+   bracket policy in this slice, with per-plate coverage and the same channel
+   ramp; full cross-bracket accumulation there remains unimplemented.
+   The unchanged 24-level measured-channel compatibility rejection also gets a
+   continuous response-confidence ramp over residual 16..24 in the normal path;
+   this may reduce a questionable sample's weight, never admit a rejected sample.
+3. For demanded highlight registration only, bound source floating high-pass
+   preparation to the union bounding box of all fitted 321-pixel patches,
+   expanded by a 16-pixel filter halo and clipped to the original image. Select
+   this path only below 70% image area; otherwise retain full preparation. Keep
+   original node centres, noise samples, mask, physical thresholds and crop.
+   Keep byte alignment/smooth planes on the full-image path if a cropped filter
+   changes ECC inputs; matching nominal filter halos is not sufficient evidence
+   of OpenCV implementation parity.
+   Evaluate CPU support only in the union bounds of qualified footprints;
+   initialize everything outside to zero. Cost calibration must use the same
+   bounded CPU authority, not a slower exhaustive baseline. No precision or
+   geometry admission may change as a performance shortcut.
+4. Before a weak CPU ECC fit, permit a conservative impossibility test for the
+   existing detail ratio, not a new qualification. For the fixed physical mask,
+   let n be its sample count and va its reference noise-subtracted variance.
+   An <=8-pixel translation with bilinear interpolation cannot have source
+   variance greater than the entire 321-patch high-pass squared energy /n,
+   minus the unchanged source noise variance. The ten-pixel physical interior
+   keeps every such sample inside the patch. If this upper bound (with upward
+   numerical slack) is below (0.68-0.002)^2*max(va,0.01), skip a fit which cannot
+   meet the original 0.68 detail threshold. Preserve all original low-signal
+   denoise and verified identity paths. Require exact full-path final images
+   and independently sampled translations/occlusions/noise/blur before accepting
+   this optimization; count these rejections separately.
+5. Tests required before delivery: exact full-versus-bounded preparation/gate
+   results on used pixels, borders/empty/disjoint demands, continuous overlap and
+   conflict rejection, actual GPU gate parity, no single-frame or all-clipped
+   invention, moving/occluded/blurred negatives, PPT white/colored ink/text and
+   streaming regressions. Freeze near/far lamp pre/post HDR and final outputs;
+   measure original node+141 seam jumps, actual retained recovery and contour
+   limits. Reduced seam energy by simply disabling HDR does not pass. Record
+   cold/warm full/local cost with phone acceptance pending, not inferred from
+   shader counts or host timing.
+
 ## 6. Capture quality versus preview steadiness
 
 The [rc7 correction](research/CAMERA_HDR_REVISION_2026-10-13.md) requires short
@@ -478,8 +558,9 @@ vendor tone mapping, and dense motion/rolling-shutter correction remains absent.
 Normalized short patches must also retain at least 0.68 of reference band detail
 (experimental), so exposure normalization cannot admit a blurred short merely
 because its broad shapes correlate.
-For highlights only, use the closest validated patch within its measured
-interior (at most 140 source pixels per axis from its center; experimental).
+For highlights only, rc23 specifies continuous normalized overlap of validated
+patches within their measured interiors (at most 140 source pixels per axis from
+each center; experimental); rc22 used the closest patch.
 Do not require four neighboring nodes when only one patch observes useful
 structure. Reject overlapping patches with displacement disagreement >1.5 px;
 retain pixel residual gates. This bounded patch support is separate from base

@@ -831,9 +831,10 @@ bool gpuLocalSupport(const cv::Mat& ref,const cv::Mat& src,const LocalRegistrati
 #if !defined(HACHICAM_GPU_TEST_CONTROL) || defined(HACHICAM_GPU_BENCH_AUTO)
             if(policy.needsProbe()) {
                 const auto gpuEnd=std::chrono::steady_clock::now();
-                cv::Mat baseline(ref.size(),CV_8U);
+                cv::Mat baseline=cv::Mat::zeros(ref.size(),CV_8U);
+                const auto region=supportRegion(m,ref.size());
                 #pragma omp parallel for schedule(static)
-                for(int y=0;y<ref.rows;++y)for(int x=0;x<ref.cols;++x)
+                for(int y=region.y;y<region.br().y;++y)for(int x=region.x;x<region.br().x;++x)
                     baseline.at<uchar>(y,x)=supportPixel(ref,src,m,x,y,m.patchSupport,validity);
                 const auto cpuEnd=std::chrono::steady_clock::now();
                 const double gpuMs=std::chrono::duration<double,std::milli>(gpuEnd-start).count();

@@ -1,4 +1,5 @@
 #include "local_registration.h"
+#include "local_support.h"
 #include "burst_fusion.h"
 #include "perspective_corrector.h"
 #include "edge_detector.h"
@@ -62,7 +63,38 @@ static void runHighlightDemandTests() {
         cv::norm(exhaustive.gate,fallback.gate,cv::NORM_INF)==0,"Small supported demand must retain exhaustive plate admission");
     const auto none=fusion::registerLocal(gray,gray,true,false,cv::Mat(),nullptr,cv::Mat::zeros(gray.size(),CV_8U));
     check(cv::countNonZero(none.gate)==0,"Empty highlight demand cannot perform or invent recovery");
-    std::cout<<"HDR demand footprint/border/conflict/admission/empty checks PASS\n";
+    fusion::LocalRegistration overlap;overlap.patchSupport=true;overlap.domain={777,533};
+    overlap.field=cv::Mat::zeros(4,5,CV_32FC3);overlap.field.at<cv::Vec3f>(1,1)={0,0,1};overlap.field.at<cv::Vec3f>(1,2)={1,0,1};
+    cv::Point2d left,right;float c,coverage;
+    check(overlap.offset(384-.001,256,left,c,&coverage)&&coverage==1 && overlap.offset(384+.001,256,right,c),"Overlap must retain full observed coverage");
+    check(cv::norm(left-right)<.001 && std::abs(left.x-.5)<.001,"Displacement must be continuous across the old nearest-node switch");
+    overlap.field.at<cv::Vec3f>(1,2)={1.5001f,0,1};
+    check(!overlap.offset(384,256,left,c),"Continuous overlap cannot bridge a displacement conflict");
+    overlap.field.at<cv::Vec3f>(1,2)={0,0,0};
+    check(overlap.offset(396,256,left,c,&coverage)&&coverage==0 && !overlap.offset(396.001,256,left,c),"Coverage must vanish inside the measured boundary without extending support");
+    const auto bounds=fusion::supportRegion(overlap,overlap.domain);
+    cv::Mat a(overlap.domain,CV_8U,cv::Scalar(128)),b=a.clone();b(cv::Rect(0,0,111,333)).setTo(199);
+    cv::Mat valid(overlap.domain,CV_8U,cv::Scalar(255));valid(cv::Rect(125,125,50,50)).setTo(0);
+    for(int y=0;y<a.rows;++y)for(int x=0;x<a.cols;++x)if(!bounds.contains(cv::Point(x,y)))
+        check(fusion::supportPixel(a,b,overlap,x,y,true,valid)==0,"Bounded gate must not omit any supported pixel");
+    auto geometry=fusion::geometricSupport(overlap,bounds);
+    for(int y=bounds.y;y<bounds.br().y;++y)for(int x=bounds.x;x<bounds.br().x;++x) {
+        cv::Point2d d;float conf;
+        check(bool(geometry.at<uchar>(y-bounds.y,x-bounds.x))==overlap.offset(x,y,d,conf),"Geometric coverage must equal the validated footprint union");
+    }
+    cv::RNG random(927411);cv::Mat signal(97,113,CV_32F),other(signal.size(),CV_32F),pixels(signal.size(),CV_8U,cv::Scalar(128));
+    random.fill(signal,cv::RNG::NORMAL,0,8);random.fill(other,cv::RNG::NORMAL,0,8);
+    const cv::Rect patch({},signal.size());
+    for(float scale:{0.f,.05f,.3f,.5f,.68f,1.f,2.f})for(float noise:{0.f,5.f,30.f}) {
+        cv::Mat candidate=other*scale;
+        if(!fusion::cannotRetainDetail(pixels,signal,candidate,{},patch,{noise,noise}))continue;
+        for(float dx:{-7.99f,-.25f,0.f,.125f,7.99f})for(float dy:{-0.5f,0.f,.5f}) {
+            if(std::hypot(dx,dy)>8)continue;
+            const auto measured=fusion::cpuPhysicalCheck(pixels,signal,candidate,{}, {patch,{dx,dy},{noise,noise}});
+            check(measured[1]<.68,"Energy-bound rejection discarded an admissible subpixel observation");
+        }
+    }
+    std::cout<<"HDR demand/continuous overlap/geometric union and conservative detail bound PASS\n";
 }
 int runTests() {
     std::cout << std::unitbuf;

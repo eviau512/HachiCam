@@ -1,6 +1,6 @@
 # HachiCam Specifications
 
-> Revised 2026-10-18. Authoritative specifications are written in English.
+> Revised 2026-10-20. Authoritative specifications are written in English.
 > Chinese reports explain the changes and do not override the English contracts.
 
 ## 1. Required workflow and status
@@ -20,7 +20,8 @@ authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
 
-Latest implementation/delivery: [rc22 GPU physical verification and rejection diagnostics](reports/RC22_GPU_PHYSICAL_VALIDATION_2026-10-18.zh-CN.md) (device acceptance pending).
+Latest implementation: [rc23 continuous HDR support and bounded registration](reports/RC23_CONTINUOUS_HDR_AND_BOUNDED_REGISTRATION_2026-10-20.zh-CN.md) (full lamp recovery and phone performance acceptance pending).
+Previous delivery: [rc22 GPU physical verification and rejection diagnostics](reports/RC22_GPU_PHYSICAL_VALIDATION_2026-10-18.zh-CN.md).
 Current research: [lamp HDR seams, algorithm options and MotoCam evidence limits](reports/LAMP_HDR_ALGORITHM_RESEARCH_2026-10-18.zh-CN.md).
 Previous delivered build: [rc21 50 ms load sampling](reports/RC21_50MS_LOAD_SAMPLING_2026-10-18.zh-CN.md).
 Previous work/device evidence: [rc20 sampled CPU/GPU load and local ECC return parity](reports/RC20_COMPUTE_LOAD_AND_LOCAL_ECC_2026-10-18.zh-CN.md).
