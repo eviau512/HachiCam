@@ -11,8 +11,9 @@
 
 **A vibe-coded, fully local Android document scanner.**
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Code: GPL v3](https://img.shields.io/badge/Code-GPLv3-blue.svg)](LICENSE)
 [![Specs: CC0 1.0](https://img.shields.io/badge/Specs-CC0%201.0-lightgrey.svg)](specs/LICENSE)
+[![Artwork: CC BY-NC-SA 4.0](https://img.shields.io/badge/Artwork-CC%20BY--NC--SA%204.0-orange.svg)](artwork/LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android%2010%2B-green.svg)](https://developer.android.com)
 [![Engine](https://img.shields.io/badge/Engine-OpenCV%204.10%20%2B%20C%2B%2B17-orange.svg)](app/src/main/cpp)
 [![UI](https://img.shields.io/badge/UI-Jetpack%20Compose-purple.svg)](https://developer.android.com/jetpack/compose)
@@ -61,3 +62,6 @@ The [English authoritative index](specs/README.md) links SPEC_00 through SPEC_06
 
 - Source: [GNU GPLv3](LICENSE).
 - Specifications: [CC0 1.0](specs/LICENSE).
+- All published artwork in [`artwork/`](artwork/README.md), including the settings banner and photography-test illustrations: [CC BY-NC-SA 4.0](artwork/LICENSE) (Attribution-NonCommercial-ShareAlike 4.0 International). The identical settings-banner copy bundled in the app retains this license.
+
+Original artwork and character-design sources: **上善无形** ([original publication](https://www.bilibili.com/opus/1231977657712771073)) and **ZipZipPipe** ([DeepSeek Whale-chan source repository](https://github.com/Neko3000/deepseek-whalechan)). Original copyrights remain with their respective creators. HachiCam's adaptations include AI-generated scenes and poses, super-resolution, resizing and WebP conversion. When sharing the artwork, retain attribution and source/license links, indicate changes, use it only for non-commercial purposes and share adaptations under the same license. See the [artwork attribution](artwork/README.md) and [detailed rights and provenance notice](ARTWORK_NOTICE.md).

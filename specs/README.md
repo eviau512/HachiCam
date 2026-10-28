@@ -1,6 +1,6 @@
 # HachiCam Specifications
 
-> Revised 2026-10-20. Authoritative specifications are written in English.
+> Revised 2026-10-28. Authoritative specifications are written in English.
 > Chinese reports explain the changes and do not override the English contracts.
 
 ## 1. Required workflow and status
@@ -19,6 +19,8 @@ next-device checks and remaining implementation work. It does not override the
 authoritative contracts or certify physical-device quality.
 
 ## 2. Authoritative index
+
+Latest documentation: [artwork licensing and attribution contract](SPEC_05_HACHIMI_DESIGN_SYSTEM.md#44-artwork-licensing-and-attribution-2026-10-28), [included CC BY-NC-SA 4.0 license](../artwork/LICENSE) and [original-creator credits](../artwork/README.md). This copyright-only task does not change the application version or require an APK build.
 
 Latest implementation: [rc25 residual local ECC](reports/RC25_RESIDUAL_LOCAL_ECC_2026-10-20.zh-CN.md) (rc25-2157 universal verified; delivery retry cancelled at the user's request, no successful acknowledgment; qualitative lamp improvement reported, complete phone quality/performance acceptance pending).
 Previous delivered build: [rc24 regional GPU mapping and solver](reports/RC24_REGIONAL_GPU_MAPPING_AND_SOLVER_2026-10-20.zh-CN.md) (rc24-2004 universal sent to Hyper-obs; phone acceptance pending).

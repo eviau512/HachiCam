@@ -1,6 +1,6 @@
 # Specification 05: Hachimi Design System and User Experience
 
-> Status: Authoritative. Revised 2026-10-14.
+> Status: Authoritative. Revised 2026-10-28.
 > Language: English.
 >
 > Quality revision contract: [2026-10-12 follow-up](research/QUALITY_REVISION_2026-10-12.md). Experimental implementation; numerical tuning and physical-device acceptance remain unverified.
@@ -204,6 +204,42 @@ with Real-ESRGAN's anime illustration model. The native 6688 x 3764 intermediate
 is retained locally. The original master checksum remains unchanged. The mobile
 runtime now uses its 6688 x 3764 native derivative as WebP; the previous PNG is
 not packaged alongside the replacement.
+
+### 4.4 Artwork licensing and attribution (2026-10-28)
+
+**Implemented; license text, attribution, links and ignore rules checked. The
+contract was revised before implementation:** all published
+artwork under `artwork/`, including the settings-banner masters, WebP derivative
+and full-body photography-test illustrations, uses **CC BY-NC-SA 4.0**. Credit
+the original character/artwork sources **上善无形** and **ZipZipPipe**, as
+identified by the maintainer, with the supplied source links:
+
+- https://www.bilibili.com/opus/1231977657712771073
+- https://github.com/Neko3000/deepseek-whalechan
+
+Keep the complete, unmodified Creative Commons license text inside `artwork/`
+and a tracked attribution notice there. Both repository READMEs and
+`ARTWORK_NOTICE.md` must state this artwork license, name both original creators,
+link the sources and local license, and describe the project's adaptations.
+The identical banner copy packaged under `app/src/hachimi/res/` retains the same
+license and attribution. Copyright in the original designs remains with the
+respective original creators; crediting both does not assert that they jointly
+created every individual image.
+
+Separate this artwork scope from GPLv3 source code, CC0 technical specifications
+and unrelated legacy app icons. External research references keep their own
+rights and are not relicensed by being saved locally. Do not claim that an
+upstream repository's documentation license automatically licenses its reference
+images; record the upstream scope and the maintainer's provenance confirmation
+separately. Retain the AI-generation, changed composition/pose, super-resolution
+and format-conversion history without claiming new rights in original designs
+or official endorsement.
+
+Acceptance: the complete license and attribution survive the artwork ignore
+rules; English/Chinese README credits and local links agree; the former
+unverified-license wording does not describe the current published artwork;
+existing image bytes, source-code license, specification dedication and signing
+keys remain unchanged. This documentation task needs no APK rebuild.
 
 ## 5. Acceptance
 

@@ -95,13 +95,15 @@ paimon_app_icon.png
 mihomo_icon.png
 logo_handoff/
 
-# Artwork deliverables only; provenance notes and working files stay local.
+# Artwork deliverables and required licensing; working files stay local.
 /artwork/**/*
 !/artwork/**/
 !/artwork/**/*.png
 !/artwork/**/*.webp
 !/artwork/**/*.jpg
 !/artwork/**/*.jpeg
+!/artwork/LICENSE
+!/artwork/README.md
 /artwork/**/references/
 /artwork/**/native/
 /artwork/**/previews/

@@ -11,8 +11,9 @@
 
 **纯 Vibe Coding 打造的纯本地离线 Android 文档扫描仪。**
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Code: GPL v3](https://img.shields.io/badge/Code-GPLv3-blue.svg)](LICENSE)
 [![Specs: CC0 1.0](https://img.shields.io/badge/Specs-CC0%201.0-lightgrey.svg)](specs/LICENSE)
+[![Artwork: CC BY-NC-SA 4.0](https://img.shields.io/badge/Artwork-CC%20BY--NC--SA%204.0-orange.svg)](artwork/LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android%2010%2B-green.svg)](https://developer.android.com)
 [![Engine](https://img.shields.io/badge/Engine-OpenCV%204.10%20%2B%20C%2B%2B17-orange.svg)](app/src/main/cpp)
 [![UI](https://img.shields.io/badge/UI-Jetpack%20Compose-purple.svg)](https://developer.android.com/jetpack/compose)
@@ -61,3 +62,6 @@ CPU 图像检查使用 `scripts/test-quality-native.ps1`；实际宿主 Vulkan �
 
 - 源代码：[GNU GPLv3](LICENSE)。
 - 规格：[CC0 1.0](specs/LICENSE)。
+- [`artwork/`](artwork/README.md) 中发布的全部美术作品，包括设置 Banner 与摄影测试插图：[CC BY-NC-SA 4.0](artwork/LICENSE)（知识共享「署名—非商业性使用—相同方式共享 4.0 国际」）。应用内相同的设置 Banner 副本沿用此许可证。
+
+美术与角色设计原始来源：**上善无形**（[原作发布页](https://www.bilibili.com/opus/1231977657712771073)）与 **ZipZipPipe**（[DeepSeek Whale-chan 来源仓库](https://github.com/Neko3000/deepseek-whalechan)）。原始版权归各自原作者所有；HachiCam 的改编包括 AI 生成场景与姿势、超分、尺寸调整及 WebP 转换。分享这些作品时须保留署名、来源及许可证链接，注明修改，仅作非商业用途，并以相同许可证分享改编作品。详见 [美术署名](artwork/README.md) 与 [完整来源及权利说明](ARTWORK_NOTICE.md)。
